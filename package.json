@@ -1,0 +1,21 @@
+{
+  "name": "rotterdam-digital-twin",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "A 3D digital twin of Rotterdam — v1: traffic light optimization on a fictional grid.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "lil-gui": "^0.19.2",
+    "three": "^0.166.1"
+  },
+  "devDependencies": {
+    "@types/three": "^0.166.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2"
+  }
+}

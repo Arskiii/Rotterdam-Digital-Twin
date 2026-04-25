@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Rotterdam Digital Twin — Traffic Sim v0.1</title>
+    <style>
+      :root { color-scheme: dark; }
+      html, body { margin: 0; height: 100%; background: #0b0d12; color: #e6e9ef; font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
+      #app { position: fixed; inset: 0; }
+      #hud {
+        position: fixed; top: 12px; left: 12px; padding: 10px 14px;
+        background: rgba(15, 18, 25, 0.78); border: 1px solid #232838; border-radius: 8px;
+        font-size: 13px; line-height: 1.5; min-width: 220px; backdrop-filter: blur(6px);
+        pointer-events: none;
+      }
+      #hud h1 { font-size: 13px; margin: 0 0 6px 0; font-weight: 600; letter-spacing: 0.02em; color: #9aa3b8; text-transform: uppercase; }
+      #hud .row { display: flex; justify-content: space-between; gap: 16px; }
+      #hud .row span:first-child { color: #9aa3b8; }
+      #hud .row span:last-child { font-variant-numeric: tabular-nums; color: #e6e9ef; }
+      #hint { position: fixed; bottom: 12px; left: 12px; font-size: 12px; color: #6b7388; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="hud">
+      <h1>Live metrics</h1>
+      <div class="row"><span>Sim time</span><span id="m-time">0.0 s</span></div>
+      <div class="row"><span>Cars active</span><span id="m-active">0</span></div>
+      <div class="row"><span>Cars completed</span><span id="m-done">0</span></div>
+      <div class="row"><span>Throughput</span><span id="m-thru">0 /min</span></div>
+      <div class="row"><span>Avg wait</span><span id="m-wait">0.0 s</span></div>
+      <div class="row"><span>Avg queue</span><span id="m-queue">0.0</span></div>
+      <div class="row"><span>FPS</span><span id="m-fps">0</span></div>
+    </div>
+    <div id="hint">drag to orbit · scroll to zoom · right-drag to pan</div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
