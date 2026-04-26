@@ -17,7 +17,8 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  # Per-ref so a dev-branch build can't cancel an in-flight main deploy.
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
