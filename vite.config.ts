@@ -1,9 +1,10 @@
 import { defineConfig } from "vite";
 
-// `base` must match the GitHub Pages subpath (https://<user>.github.io/<repo>/).
-// Override with VITE_BASE=/ for local builds if needed.
+// Relative base ("./") makes asset URLs work no matter the repo-name casing
+// or subpath GitHub Pages serves us under. Override with VITE_BASE=/ if you
+// ever host this at the domain root.
 export default defineConfig({
-  base: process.env.VITE_BASE ?? "/Rotterdam-Digital-Twin/",
+  base: process.env.VITE_BASE ?? "./",
   build: {
     target: "es2022",
     sourcemap: true,

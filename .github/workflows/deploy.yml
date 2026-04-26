@@ -1,5 +1,9 @@
 name: Deploy to GitHub Pages
 
+# Build on every push to main or the active dev branch so we always know
+# the build is healthy. Only publish to Pages from `main` — the dev branch
+# can't deploy unless its branch is added under
+#   Settings -> Environments -> github-pages -> Deployment branches.
 on:
   push:
     branches:
@@ -28,11 +32,14 @@ jobs:
       - run: npm ci
       - run: npm run build
       - uses: actions/configure-pages@v5
+        if: github.ref == 'refs/heads/main'
       - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main'
         with:
           path: dist
 
   deploy:
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:
