@@ -7,3 +7,6 @@ dist-ssr
 .env
 .env.*
 !.env.example
+
+# raw OSM downloads (large, regenerate with npm run fetch-data)
+data/raw
