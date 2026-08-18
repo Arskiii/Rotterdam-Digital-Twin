@@ -144,6 +144,19 @@ async function main() {
     );
   }
 
+  // ---- cycle & foot paths: 4x4 tiles (bike/pedestrian networks) -------------
+  if (!only || only === "paths") {
+    console.log("Cycle & foot paths (16 tiles)…");
+    const jobs = tileBoxes(4, 4).map((b) => () =>
+      fetchToFile(
+        `paths-${b.id}.json`,
+        `[out:json][timeout:240];way["highway"~"^(cycleway|footway|path)$"](${bboxStr(b)});out geom qt;`,
+        `paths ${b.id}`
+      )
+    );
+    await runQueue(jobs, 2);
+  }
+
   // ---- rail (visual layer: rail / metro / tram) -----------------------------
   if (!only || only === "rail") {
     console.log("Rail…");

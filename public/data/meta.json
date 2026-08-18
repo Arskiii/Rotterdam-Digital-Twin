@@ -5,21 +5,22 @@
   "lon": 4.48
  },
  "extent": {
-  "minX": -10141.382470114395,
-  "minY": -9890.888529600446,
+  "minX": -11111.044161437681,
+  "minY": -10766.070682199987,
   "maxX": 10545.056303347485,
-  "maxY": 9641.555216999997
+  "maxY": 10501.411813199576
  },
  "counts": {
-  "roadWays": 51234,
+  "roadWays": 96781,
   "roadKm": 5093,
-  "graphNodes": 40349,
-  "graphEdges": 50769,
+  "pathKm": 3597,
+  "graphNodes": 145239,
+  "graphEdges": 201356,
   "signalsInventory": 4349,
-  "signalsOnNetwork": 2421,
-  "signalClusters": 584,
-  "junctions": 556,
-  "crossings": 28,
+  "signalsOnNetwork": 4331,
+  "signalClusters": 480,
+  "junctions": 472,
+  "crossings": 8,
   "waterPolys": 7032,
   "railWays": 1889,
   "buildings": 264642

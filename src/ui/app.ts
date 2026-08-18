@@ -290,11 +290,14 @@ export class App {
       case "roads":
         this.meshes.roads.visible = on;
         this.meshes.roadLines.visible = on;
+        this.meshes.junctions.visible = on;
         break;
       case "water": this.meshes.water.visible = on; break;
       case "rail": this.meshes.rail.visible = on; break;
       case "signals": this.layers.signals.points.visible = on; break;
-      case "vehicles": this.layers.vehicles.mesh.visible = on; break;
+      case "vehicles": this.layers.vehicles.cars.mesh.visible = on; break;
+      case "bikes": this.layers.vehicles.bikes.mesh.visible = on; break;
+      case "pedestrians": this.layers.vehicles.peds.mesh.visible = on; break;
       case "congestion":
         this.layers.congestion.lines.visible = on;
         this.worker.postMessage({ type: "params", congestionFeed: on });
@@ -309,7 +312,7 @@ export class App {
   private onWorker(msg: WorkerToMain) {
     switch (msg.type) {
       case "frame": {
-        this.layers.vehicles.update(new Float32Array(msg.vehicles), msg.count);
+        this.layers.vehicles.update(new Float32Array(msg.vehicles), msg.count, this.scene.distance / 950);
         this.layers.signals.update(new Uint8Array(msg.signals));
         break;
       }
@@ -459,6 +462,8 @@ export class App {
     if (!m || !this.ui.statsRow.isConnected) return;
     const cards: [string, string, string?][] = [
       ["Active tracks", fmtInt(m.active), `PEAK TARGET ${fmtInt(this.density)}`],
+      ["Bike tracks", fmtInt(m.bikes)],
+      ["Pedestrians", fmtInt(m.walkers)],
       ["Flow rate", `${fmtInt(m.throughputMin)}<span class="u"> TRIPS/MIN</span>`],
       ["Mean speed", `${m.avgSpeedKmh.toFixed(1)}<span class="u"> KM/H</span>`],
       ["Queued", fmtInt(m.queued), `${((m.queued / Math.max(1, m.active)) * 100).toFixed(0)}% OF TRACKS`],
@@ -505,7 +510,7 @@ export class App {
       <div class="ov-col">
         <div class="ov-title">Coverage — Rotterdam, NL</div>
         ${line("Roadway mapped", `${fmtInt(c.roadKm)} km`)}
-        ${line("Road segments", fmtInt(c.roadWays))}
+        ${line("Cycle & foot paths", `${fmtInt(c.pathKm ?? 0)} km`)}
         ${line("Routable edges", fmtInt(c.graphEdges))}
         ${line("Graph nodes", fmtInt(c.graphNodes))}
       </div>
@@ -533,9 +538,9 @@ export class App {
       <div class="ov-col">
         <div class="ov-title">Engine</div>
         ${line("Model", "IDM + FIFO lanes")}
+        ${line("Modes", "Car · bike · foot")}
         ${line("Signal control", "Fixed-time 2-phase")}
         ${line("Routing", "A* time-cost")}
-        ${line("Tick", "30 Hz worker")}
       </div>`;
   }
 

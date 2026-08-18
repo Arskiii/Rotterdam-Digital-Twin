@@ -38,9 +38,33 @@ const CLASS = {
   residential: 5, unclassified: 5, living_street: 5, busway: 5,
   service: 6,
   pedestrian: 7,
+  cycleway: 8,
+  footway: 9, path: 9,
 };
-const DEFAULT_SPEED = [90, 80, 50, 50, 50, 30, 15, 8];
-const SIM_MAX_CLASS = 5; // classes 0..5 form the routable network
+const DEFAULT_SPEED = [90, 80, 50, 50, 50, 30, 15, 8, 20, 5];
+
+// travel-mode mask bits: 1 car, 2 bike, 4 walk
+const MODE_CAR = 1, MODE_BIKE = 2, MODE_WALK = 4;
+function modeMaskOf(cls, tags) {
+  let m = 0;
+  if (cls <= 5) {
+    const access = tags?.access;
+    const noMotor = access === "no" || access === "private" || tags?.motor_vehicle === "no";
+    if (!noMotor) m |= MODE_CAR;
+  }
+  // bikes: everything from secondary down + dedicated cycleways; NL bans them
+  // from motorway/trunk/primary. Paths only when tagged for bicycles.
+  if (cls >= 3 && cls <= 8) {
+    if (tags?.bicycle !== "no" && !(cls === 7 && tags?.bicycle === undefined)) m |= MODE_BIKE;
+  } else if (cls === 9 && (tags?.bicycle === "yes" || tags?.bicycle === "designated")) {
+    m |= MODE_BIKE;
+  }
+  // walking: everything from secondary down — urban collectors carry sidewalks
+  // implicitly, and cycle paths double as footpaths where no sidewalk exists.
+  // Only motorway/trunk/primary are out.
+  if (cls >= 3 && tags?.foot !== "no") m |= MODE_WALK;
+  return m;
+}
 
 const DISTRICTS = [
   { key: "centrum", name: "Centrum", lat: 51.9204, lon: 4.4794 },
@@ -180,12 +204,12 @@ const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
 console.log("── roads & graph ──");
 
 const roadWays = new Map();
-for (const f of readdirSync(RAW).filter((f) => /^roads-\d+-\d+\.json$/.test(f))) {
+for (const f of readdirSync(RAW).filter((f) => /^(roads|paths)-\d+-\d+\.json$/.test(f))) {
   for (const el of loadJSON(f).elements) {
     if (el.type === "way" && el.geometry?.length >= 2 && !roadWays.has(el.id)) roadWays.set(el.id, el);
   }
 }
-console.log(`road ways: ${roadWays.size}`);
+console.log(`road + path ways: ${roadWays.size}`);
 
 // Signals: OSM node id -> tags
 const signalNodes = new Map();
@@ -199,6 +223,7 @@ const roadsW = new Writer();
 roadsW.u32(0x524d5452); // 'RTMR'
 let displayCount = 0;
 let totalKm = 0;
+let pathKm = 0;
 const roadsBody = new Writer();
 for (const way of roadWays.values()) {
   const cls = CLASS[way.tags?.highway];
@@ -215,22 +240,23 @@ for (const way of roadWays.values()) {
   roadsBody.u16(Math.min(65535, pts.length));
   for (const [x, y] of pts.slice(0, 65535)) { roadsBody.f32(x); roadsBody.f32(y); }
   displayCount++;
-  for (let i = 1; i < pts.length; i++) totalKm += dist(...pts[i - 1], ...pts[i]) / 1000;
+  for (let i = 1; i < pts.length; i++) {
+    const d = dist(...pts[i - 1], ...pts[i]) / 1000;
+    if (cls >= 8) pathKm += d;
+    else totalKm += d;
+  }
 }
 roadsW.u32(displayCount);
 const roadsBin = Buffer.concat([roadsW.done(), roadsBody.done()]);
 writeFileSync(join(OUT, "roads.bin"), roadsBin);
-console.log(`roads.bin: ${displayCount} polylines, ${totalKm.toFixed(0)} km, ${(roadsBin.length / 1e6).toFixed(1)} MB`);
+console.log(`roads.bin: ${displayCount} polylines, ${totalKm.toFixed(0)} road km + ${pathKm.toFixed(0)} path km, ${(roadsBin.length / 1e6).toFixed(1)} MB`);
 
-// --- routable graph (classes 0..SIM_MAX_CLASS) ---
+// --- routable multimodal graph ---
 const simWays = [...roadWays.values()].filter((w) => {
   const c = CLASS[w.tags?.highway];
-  if (c === undefined || c > SIM_MAX_CLASS) return false;
+  if (c === undefined) return false;
   if (w.tags?.area === "yes") return false;
-  const access = w.tags?.access;
-  if (access === "no" || access === "private") return false;
-  if (w.tags?.motor_vehicle === "no") return false;
-  return true;
+  return modeMaskOf(c, w.tags) !== 0;
 });
 
 // count node usage to find junctions
@@ -264,12 +290,13 @@ function parseSpeed(tags, cls) {
   return DEFAULT_SPEED[cls];
 }
 
-const edges = []; // {a,b,cls,oneway,speed,len,pts:[[x,y]..],district,tunnel,bridge}
+const edges = []; // {a,b,cls,modeMask,oneway,speed,len,pts:[[x,y]..],district,tunnel,bridge}
 for (const w of simWays) {
   const ids = w.nodes;
   const geo = w.geometry;
   if (!ids || ids.length !== geo.length) continue;
   const cls = CLASS[w.tags.highway];
+  const modeMask = modeMaskOf(cls, w.tags);
   const rounded = w.tags.junction === "roundabout" || w.tags.junction === "circular";
   let oneway = w.tags.oneway === "yes" || w.tags.oneway === "1" || w.tags.oneway === "true" || rounded;
   const reversed = w.tags.oneway === "-1";
@@ -297,7 +324,7 @@ for (const w of simWays) {
         const b = ensureNode(bId, pts[pts.length - 1][0], pts[pts.length - 1][1]);
         if (a !== b) {
           const mid = pts[Math.floor(pts.length / 2)];
-          edges.push({ a, b, cls, oneway, speed, len, pts, district: nearestDistrict(mid[0], mid[1]), tunnel, bridge });
+          edges.push({ a, b, cls, modeMask, oneway, speed, len, pts, district: nearestDistrict(mid[0], mid[1]), tunnel, bridge });
         }
       }
       segIds = [ids[i]];
@@ -306,52 +333,79 @@ for (const w of simWays) {
   }
 }
 console.log(`graph: ${nodesXY.length / 2} nodes, ${edges.length} edges`);
+console.log(
+  `edges by mode: car ${edges.filter((e) => e.modeMask & MODE_CAR).length}, bike ${edges.filter((e) => e.modeMask & MODE_BIKE).length}, walk ${edges.filter((e) => e.modeMask & MODE_WALK).length}`
+);
 
-// --- largest strongly connected component (so every route is reachable) ---
+// --- per-mode reachable cores ---
+// cars: largest strongly connected component (oneways matter);
+// bikes/pedestrians: largest weakly connected component of their subgraph.
+var inCore = new Uint8Array(nodesXY.length / 2); // bit0 car, bit1 bike, bit2 walk
 {
   const N = nodesXY.length / 2;
-  const outAdj = Array.from({ length: N }, () => []);
-  const inAdj = Array.from({ length: N }, () => []);
-  edges.forEach((e) => {
-    outAdj[e.a].push(e.b);
-    inAdj[e.b].push(e.a);
-    if (!e.oneway) { outAdj[e.b].push(e.a); inAdj[e.a].push(e.b); }
-  });
-  // Kosaraju (iterative)
-  const order = [];
-  const seen = new Uint8Array(N);
-  for (let s = 0; s < N; s++) {
-    if (seen[s]) continue;
-    const stack = [[s, 0]];
-    seen[s] = 1;
-    while (stack.length) {
-      const top = stack[stack.length - 1];
-      if (top[1] < outAdj[top[0]].length) {
-        const nx = outAdj[top[0]][top[1]++];
-        if (!seen[nx]) { seen[nx] = 1; stack.push([nx, 0]); }
-      } else { order.push(top[0]); stack.pop(); }
+  {
+    const outAdj = Array.from({ length: N }, () => []);
+    const inAdj = Array.from({ length: N }, () => []);
+    edges.forEach((e) => {
+      if (!(e.modeMask & MODE_CAR)) return;
+      outAdj[e.a].push(e.b);
+      inAdj[e.b].push(e.a);
+      if (!e.oneway) { outAdj[e.b].push(e.a); inAdj[e.a].push(e.b); }
+    });
+    // Kosaraju (iterative)
+    const order = [];
+    const seen = new Uint8Array(N);
+    for (let s = 0; s < N; s++) {
+      if (seen[s]) continue;
+      const stack = [[s, 0]];
+      seen[s] = 1;
+      while (stack.length) {
+        const top = stack[stack.length - 1];
+        if (top[1] < outAdj[top[0]].length) {
+          const nx = outAdj[top[0]][top[1]++];
+          if (!seen[nx]) { seen[nx] = 1; stack.push([nx, 0]); }
+        } else { order.push(top[0]); stack.pop(); }
+      }
     }
-  }
-  const comp = new Int32Array(N).fill(-1);
-  let nComp = 0;
-  for (let i = order.length - 1; i >= 0; i--) {
-    const s = order[i];
-    if (comp[s] !== -1) continue;
-    const stack = [s];
-    comp[s] = nComp;
-    while (stack.length) {
-      const v = stack.pop();
-      for (const nx of inAdj[v]) if (comp[nx] === -1) { comp[nx] = nComp; stack.push(nx); }
+    const comp = new Int32Array(N).fill(-1);
+    let nComp = 0;
+    for (let i = order.length - 1; i >= 0; i--) {
+      const s = order[i];
+      if (comp[s] !== -1) continue;
+      const stack = [s];
+      comp[s] = nComp;
+      while (stack.length) {
+        const v = stack.pop();
+        for (const nx of inAdj[v]) if (comp[nx] === -1) { comp[nx] = nComp; stack.push(nx); }
+      }
+      nComp++;
     }
-    nComp++;
+    const sizes = new Uint32Array(nComp);
+    for (let i = 0; i < N; i++) sizes[comp[i]]++;
+    let bigComp = 0;
+    for (let c = 1; c < nComp; c++) if (sizes[c] > sizes[bigComp]) bigComp = c;
+    for (let i = 0; i < N; i++) if (comp[i] === bigComp) inCore[i] |= MODE_CAR;
+    console.log(`car SCC: ${sizes[bigComp]} / ${N} nodes`);
   }
-  const sizes = new Uint32Array(nComp);
-  for (let i = 0; i < N; i++) sizes[comp[i]]++;
-  let bigComp = 0;
-  for (let c = 1; c < nComp; c++) if (sizes[c] > sizes[bigComp]) bigComp = c;
-  var inCore = new Uint8Array(N);
-  for (let i = 0; i < N; i++) inCore[i] = comp[i] === bigComp ? 1 : 0;
-  console.log(`largest SCC: ${sizes[bigComp]} / ${N} nodes`);
+  for (const [modeBit, label] of [[MODE_BIKE, "bike"], [MODE_WALK, "walk"]]) {
+    const parent = new Int32Array(N);
+    for (let i = 0; i < N; i++) parent[i] = i;
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    edges.forEach((e) => {
+      if (!(e.modeMask & modeBit)) return;
+      const ra = find(e.a), rb = find(e.b);
+      if (ra !== rb) parent[ra] = rb;
+    });
+    const sizes = new Map();
+    for (let i = 0; i < N; i++) {
+      const r = find(i);
+      sizes.set(r, (sizes.get(r) ?? 0) + 1);
+    }
+    let bigRoot = -1, bigSize = 0;
+    for (const [r, s] of sizes) if (s > bigSize) { bigSize = s; bigRoot = r; }
+    for (let i = 0; i < N; i++) if (find(i) === bigRoot) inCore[i] |= modeBit;
+    console.log(`${label} LCC: ${bigSize} / ${N} nodes`);
+  }
 }
 
 // --- signals on network + clustering ---
@@ -500,7 +554,7 @@ const auxSignals = [];
 {
   const w = new Writer();
   w.u32(0x474d5452); // 'RTMG'
-  w.u32(2); // version
+  w.u32(3); // version 3: multimodal (edge modeMask, per-mode node cores)
   const N = nodesXY.length / 2;
   w.u32(N);
   for (let i = 0; i < N; i++) { w.f32(nodesXY[i * 2]); w.f32(nodesXY[i * 2 + 1]); w.u8(inCore[i]); }
@@ -538,7 +592,7 @@ const auxSignals = [];
     w.u32(geoCount);
     w.u16(e.pts.length);
     w.u8(e.district);
-    w.u8(0);
+    w.u8(e.modeMask);
     e.pts.forEach(([x, y]) => { geo.f32(x); geo.f32(y); });
     geoCount += e.pts.length;
   });
@@ -744,6 +798,7 @@ let buildingCount = 0;
     counts: {
       roadWays: displayCount,
       roadKm: Math.round(totalKm),
+      pathKm: Math.round(pathKm),
       graphNodes: nodesXY.length / 2,
       graphEdges: edges.length,
       signalsInventory: signalNodes.size,

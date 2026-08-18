@@ -8,19 +8,22 @@ traffic simulation — wrapped in a dark tactical operations UI.
 
 **Real city data** (OpenStreetMap, ODbL):
 
-- ~5,100 km of roadway across greater Rotterdam (Hoogvliet → Nesselande, Overschie →
-  IJsselmonde, plus Schiedam and Capelle for network continuity and the full
-  A4/A15/A16/A20 motorway ring)
-- **4,349 traffic-signal heads** — 2,421 bound to the drivable network, clustered into
-  **556 signalized junctions** and 28 standalone crossings, each running a fixed-time
-  two-phase controller
+- ~5,100 km of roadway plus ~3,600 km of cycleways and footpaths across greater
+  Rotterdam (Hoogvliet → Nesselande, Overschie → IJsselmonde, plus Schiedam and
+  Capelle for network continuity and the full A4/A15/A16/A20 motorway ring)
+- **4,349 traffic-signal heads — 4,331 bound to the multimodal network**, clustered
+  into **472 signalized junctions** and standalone crossings, each running a
+  fixed-time two-phase controller
 - 264k building footprints extruded to their mapped heights, 7k water polygons
   (the Maas, harbours, the Rotte, lakes), rail/metro/tram lines
 
-**Live traffic simulation** (dedicated web worker):
+**Live multimodal simulation** (dedicated web worker):
 
-- Thousands of concurrent vehicles with IDM car-following on per-lane FIFO queues
-- A\* time-cost routing over the strongly-connected core; reroutes around incidents
+- Cars, **bikes and pedestrians** on one graph with per-edge mode masks and
+  per-mode reachable cores
+- IDM car-following on per-lane FIFO queues (separate car and bike lanes);
+  pedestrians free-flow and cross with the signals (walk when cars are held)
+- A\* time-cost routing per mode; cars reroute around incidents
 - Signals: green/amber/red phases per junction cluster, signal faults, cycle-scale control
 - Time-of-day demand curve (morning/evening peaks, 72× day compression)
 - Per-district telemetry: tracks, mean speed, queues, congestion index

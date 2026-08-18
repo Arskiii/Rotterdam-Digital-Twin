@@ -110,6 +110,16 @@ export class SceneCtx {
     this.fog.near = d * 1.15;
     this.fog.far = d * 4.6;
 
+    // adaptive clip planes keep depth precision high at every zoom (kills
+    // z-shimmer between flat layers while the camera moves)
+    const near = THREE.MathUtils.clamp(d * 0.04, 2, 420);
+    const far = d * 9 + 6000;
+    if (Math.abs(near - this.camera.near) / this.camera.near > 0.08 || Math.abs(far - this.camera.far) / this.camera.far > 0.08) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+
     const s = this.scaleForDistance();
     if (s !== this.lastScale) {
       this.lastScale = s;

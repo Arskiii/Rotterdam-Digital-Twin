@@ -4,14 +4,17 @@
 import * as THREE from "three";
 import type { CityData, PolylineSet, BuildingTile } from "../data/loader";
 
-// class: motorway, trunk, primary, secondary, tertiary, residential, service, pedestrian
-const ROAD_WIDTH = [21, 17, 13.5, 11, 9, 6.4, 3.4, 3.2];
-const ROAD_SHADE = [0.68, 0.63, 0.57, 0.5, 0.44, 0.36, 0.2, 0.18];
-const ROAD_Y = [1.15, 1.05, 0.95, 0.85, 0.75, 0.65, 0.5, 0.45];
-const LINE_SHADE = [0.8, 0.74, 0.66, 0.58, 0.5, 0.4, 0.23, 0.2];
+// class: motorway, trunk, primary, secondary, tertiary, residential, service,
+// pedestrian, cycleway, footpath
+const ROAD_WIDTH = [21, 17, 13.5, 11, 9, 6.4, 3.4, 3.2, 2.3, 1.7];
+const ROAD_SHADE = [0.6, 0.55, 0.5, 0.43, 0.37, 0.3, 0.18, 0.16, 0.14, 0.115];
+const LINE_SHADE = [0.8, 0.74, 0.66, 0.58, 0.5, 0.4, 0.23, 0.2, 0, 0];
+export const ROAD_Y = 0.55;
 
+// All flat road surfaces share one plane and never write depth: draw order
+// (minor → major, tunnels first, bridges last) resolves overlaps stably, so
+// nothing z-fights while the camera moves.
 export function buildRoads(roads: PolylineSet): THREE.Mesh {
-  // count verts/tris
   let totalPts = 0;
   for (let i = 0; i < roads.count; i++) totalPts += roads.ptCount[i];
   const maxVerts = totalPts * 2;
@@ -22,9 +25,9 @@ export function buildRoads(roads: PolylineSet): THREE.Mesh {
   let ii = 0;
 
   const c = roads.coords;
-  for (let i = 0; i < roads.count; i++) {
+  const emit = (i: number) => {
     const n = roads.ptCount[i];
-    if (n < 2) continue;
+    if (n < 2) return;
     const off = roads.ptOffset[i];
     const cls = roads.cls[i];
     const flags = roads.flags[i];
@@ -33,23 +36,20 @@ export function buildRoads(roads: PolylineSet): THREE.Mesh {
     const hw = ROAD_WIDTH[cls] / 2;
     let shade = ROAD_SHADE[cls];
     if (tunnel) shade *= 0.42;
-    const y = tunnel ? 0.18 : ROAD_Y[cls] + (bridge ? 2.6 : 0);
+    const y = ROAD_Y + (bridge && !tunnel ? 2.6 : 0);
     const g = Math.round(shade * 255);
     const vStart = v;
 
     for (let k = 0; k < n; k++) {
       const x = c[(off + k) * 2];
       const z = -c[(off + k) * 2 + 1];
-      // averaged normal (miter, clamped)
       let dx1 = 0, dz1 = 0, dx2 = 0, dz2 = 0;
       if (k > 0) { dx1 = x - c[(off + k - 1) * 2]; dz1 = z - -c[(off + k - 1) * 2 + 1]; }
       if (k < n - 1) { dx2 = c[(off + k + 1) * 2] - x; dz2 = -c[(off + k + 1) * 2 + 1] - z; }
       let tx = dx1 + dx2, tz = dz1 + dz2;
       const tl = Math.hypot(tx, tz) || 1;
       tx /= tl; tz /= tl;
-      // normal in XZ plane
-      let nx = -tz, nz = tx;
-      // miter scale
+      const nx = -tz, nz = tx;
       let scale = 1;
       if (k > 0 && k < n - 1) {
         const l1 = Math.hypot(dx1, dz1) || 1;
@@ -68,19 +68,87 @@ export function buildRoads(roads: PolylineSet): THREE.Mesh {
     }
     for (let k = 0; k < n - 1; k++) {
       const a = vStart + k * 2;
-      idx[ii++] = a; idx[ii++] = a + 1; idx[ii++] = a + 2;
-      idx[ii++] = a + 1; idx[ii++] = a + 3; idx[ii++] = a + 2;
+      idx[ii++] = a; idx[ii++] = a + 2; idx[ii++] = a + 1;
+      idx[ii++] = a + 1; idx[ii++] = a + 2; idx[ii++] = a + 3;
     }
+  };
+
+  // painter's order: tunnels, then paths/minor → major, bridges very last
+  const buckets: number[][] = [[], [], [], []]; // tunnel, path(8-9), surface by class desc, bridge
+  for (let i = 0; i < roads.count; i++) {
+    const flags = roads.flags[i];
+    if (flags & 2) buckets[0].push(i);
+    else if (flags & 1) buckets[3].push(i);
+    else if (roads.cls[i] >= 8) buckets[1].push(i);
+    else buckets[2].push(i);
   }
+  buckets[2].sort((a, b) => roads.cls[b] - roads.cls[a]);
+  for (const b of buckets) for (const i of b) emit(i);
 
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos.subarray(0, v * 3), 3));
   geo.setAttribute("color", new THREE.BufferAttribute(col.subarray(0, v * 3), 3, true));
   geo.setIndex(new THREE.BufferAttribute(idx.subarray(0, ii), 1));
-  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: true });
+  const mat = new THREE.MeshBasicMaterial({ vertexColors: true, fog: true, depthWrite: false, side: THREE.DoubleSide });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = 3;
+  return mesh;
+}
+
+/** Filled discs over junction nodes so crossing carriageways read as one solid surface. */
+export function buildJunctionPlates(graph: import("../data/loader").Graph): THREE.Mesh {
+  const deg = new Uint8Array(graph.nodeCount);
+  const wid = new Float32Array(graph.nodeCount);
+  const shade = new Float32Array(graph.nodeCount);
+  for (let e = 0; e < graph.edges.count; e++) {
+    const cls = graph.edges.cls[e];
+    if (cls > 6) continue;
+    for (const ni of [graph.edges.a[e], graph.edges.b[e]]) {
+      deg[ni] = Math.min(250, deg[ni] + 1);
+      if (ROAD_WIDTH[cls] > wid[ni]) wid[ni] = ROAD_WIDTH[cls];
+      if (ROAD_SHADE[cls] > shade[ni]) shade[ni] = ROAD_SHADE[cls];
+    }
+  }
+  const SEG = 12;
+  let count = 0;
+  for (let i = 0; i < graph.nodeCount; i++) if (deg[i] >= 3) count++;
+  const pos = new Float32Array(count * (SEG + 1) * 3);
+  const col = new Uint8Array(count * (SEG + 1) * 3);
+  const idx = new Uint32Array(count * SEG * 3);
+  let v = 0;
+  let ii = 0;
+  for (let i = 0; i < graph.nodeCount; i++) {
+    if (deg[i] < 3) continue;
+    const x = graph.nodesXY[i * 2];
+    const z = -graph.nodesXY[i * 2 + 1];
+    const r = wid[i] * 0.58 + 1.4;
+    const g = Math.round(shade[i] * 255);
+    const center = v;
+    pos[v * 3] = x; pos[v * 3 + 1] = ROAD_Y; pos[v * 3 + 2] = z;
+    col[v * 3] = g; col[v * 3 + 1] = g; col[v * 3 + 2] = g;
+    v++;
+    for (let s = 0; s < SEG; s++) {
+      const a = (s / SEG) * Math.PI * 2;
+      pos[v * 3] = x + Math.cos(a) * r;
+      pos[v * 3 + 1] = ROAD_Y;
+      pos[v * 3 + 2] = z + Math.sin(a) * r;
+      col[v * 3] = g; col[v * 3 + 1] = g; col[v * 3 + 2] = g;
+      v++;
+      idx[ii++] = center;
+      idx[ii++] = center + 1 + ((s + 1) % SEG);
+      idx[ii++] = center + 1 + s;
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.BufferAttribute(col, 3, true));
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, fog: true, depthWrite: false, side: THREE.DoubleSide }));
+  mesh.frustumCulled = false;
+  mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = 4;
   return mesh;
 }
 
@@ -93,6 +161,7 @@ export function buildRoadLines(roads: PolylineSet): THREE.LineSegments {
   let v = 0;
   const c = roads.coords;
   for (let i = 0; i < roads.count; i++) {
+    if (roads.cls[i] >= 8) continue; // paths: ribbons only, no far-view lines
     const n = roads.ptCount[i];
     const off = roads.ptOffset[i];
     let shade = LINE_SHADE[roads.cls[i]];
@@ -116,10 +185,11 @@ export function buildRoadLines(roads: PolylineSet): THREE.LineSegments {
   geo.setAttribute("color", new THREE.BufferAttribute(col.subarray(0, v * 3), 3, true));
   const mesh = new THREE.LineSegments(
     geo,
-    new THREE.LineBasicMaterial({ vertexColors: true, fog: true, transparent: true, opacity: 0.62 })
+    new THREE.LineBasicMaterial({ vertexColors: true, fog: true, transparent: true, opacity: 0.62, depthWrite: false })
   );
   mesh.frustumCulled = false;
   mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = 5;
   return mesh;
 }
 
@@ -139,7 +209,7 @@ export function buildRail(rail: PolylineSet): THREE.LineSegments {
     for (let k = 0; k < n - 1; k++) {
       for (const kk of [k, k + 1]) {
         pos[v * 3] = c[(off + kk) * 2];
-        pos[v * 3 + 1] = 0.35;
+        pos[v * 3 + 1] = 0.85;
         pos[v * 3 + 2] = -c[(off + kk) * 2 + 1];
         col[v * 3] = g; col[v * 3 + 1] = g; col[v * 3 + 2] = Math.round(g * 1.12);
         v++;
@@ -149,9 +219,13 @@ export function buildRail(rail: PolylineSet): THREE.LineSegments {
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos.subarray(0, v * 3), 3));
   geo.setAttribute("color", new THREE.BufferAttribute(col.subarray(0, v * 3), 3, true));
-  const mesh = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ vertexColors: true, fog: true, transparent: true, opacity: 0.85 }));
+  const mesh = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({ vertexColors: true, fog: true, transparent: true, opacity: 0.85, depthWrite: false })
+  );
   mesh.frustumCulled = false;
   mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = 5;
   return mesh;
 }
 
@@ -168,6 +242,7 @@ export function buildWater(water: { verts: Float32Array; tris: Uint32Array }): T
   geo.setIndex(new THREE.BufferAttribute(water.tris, 1));
 
   const mat = new THREE.ShaderMaterial({
+    side: THREE.DoubleSide,
     uniforms: {
       uTime: { value: 0 },
       fogColor: { value: new THREE.Color(0x0a0a0b) },
@@ -210,11 +285,13 @@ export function buildWater(water: { verts: Float32Array; tris: Uint32Array }): T
         gl_FragColor = vec4(mix(col, fogColor, fogF), 1.0);
       }`,
   });
+  mat.depthWrite = false;
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.y = -0.35;
   mesh.frustumCulled = false;
   mesh.matrixAutoUpdate = false;
   mesh.updateMatrix();
+  mesh.renderOrder = 1;
   return mesh;
 }
 
@@ -331,6 +408,7 @@ function buildTileMesh(tile: BuildingTile): THREE.Mesh {
   mat.uniforms.fogFar = buildingMat.uniforms.fogFar;
   const mesh = new THREE.Mesh(geo, mat);
   mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = 2;
   return mesh;
 }
 
@@ -363,6 +441,7 @@ export interface CityMeshes {
   ground: THREE.Mesh;
   water: THREE.Mesh;
   roads: THREE.Mesh;
+  junctions: THREE.Mesh;
   roadLines: THREE.LineSegments;
   rail: THREE.LineSegments;
   buildings: THREE.Group;
@@ -376,10 +455,11 @@ export async function buildCity(
   const ground = buildGround(data.meta.extent);
   const water = buildWater(data.water);
   const roads = buildRoads(data.roads);
+  const junctions = buildJunctionPlates(data.graph);
   const roadLines = buildRoadLines(data.roads);
   const rail = buildRail(data.rail);
-  scene.add(ground, water, roads, roadLines, rail);
+  scene.add(ground, water, roads, junctions, roadLines, rail);
   const buildings = await buildBuildings(data.buildings, onStructures);
   scene.add(buildings);
-  return { ground, water, roads, roadLines, rail, buildings };
+  return { ground, water, roads, junctions, roadLines, rail, buildings };
 }

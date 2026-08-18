@@ -83,51 +83,97 @@ export class SignalsLayer {
   }
 }
 
-export class VehiclesLayer {
+class AgentMesh {
   mesh: THREE.InstancedMesh;
   capacity: number;
-  private dummy = new THREE.Object3D();
-  private color = new THREE.Color();
+  cursor = 0;
 
-  constructor(capacity = 14000) {
+  constructor(capacity: number, w: number, h: number, dpt: number) {
     this.capacity = capacity;
-    const geo = new THREE.BoxGeometry(4.5, 1.7, 2.0);
-    geo.translate(0, 0.95, 0);
+    const geo = new THREE.BoxGeometry(w, h, dpt);
+    geo.translate(0, h / 2 + 0.25, 0);
     const mat = new THREE.MeshBasicMaterial({ fog: true });
     this.mesh = new THREE.InstancedMesh(geo, mat, capacity);
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
     this.mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
     this.mesh.count = 0;
-    this.mesh.frustumCulled = false;
+    this.mesh.frustumCulled = false; // instances span the whole city
+    this.mesh.renderOrder = 7;
+  }
+}
+
+export class VehiclesLayer {
+  cars: AgentMesh;
+  bikes: AgentMesh;
+  peds: AgentMesh;
+  private dummy = new THREE.Object3D();
+  private color = new THREE.Color();
+
+  constructor() {
+    this.cars = new AgentMesh(15000, 4.5, 1.7, 2.0);
+    this.bikes = new AgentMesh(8000, 1.9, 1.15, 0.5);
+    this.peds = new AgentMesh(8000, 0.46, 1.1, 0.46);
   }
 
-  /** data: Float32Array [x, y(north), heading, k] per vehicle; k = speed01 + (tunnel?2:0) */
-  update(data: Float32Array, count: number) {
-    const n = Math.min(count, this.capacity);
-    for (let i = 0; i < n; i++) {
-      const x = data[i * 4];
-      const z = -data[i * 4 + 1];
-      const heading = data[i * 4 + 2];
+  get meshes(): THREE.InstancedMesh[] {
+    return [this.cars.mesh, this.bikes.mesh, this.peds.mesh];
+  }
+
+  /**
+   * data: [x, y(north), heading, k]; k = speed01 + (tunnel?2:0) + mode*4.
+   * viewScale inflates instances at far zoom so tracks stay readable.
+   */
+  update(data: Float32Array, count: number, viewScale = 1) {
+    this.cars.cursor = 0;
+    this.bikes.cursor = 0;
+    this.peds.cursor = 0;
+    const carScale = Math.min(6, Math.max(1.45, viewScale));
+    const softScale = Math.min(3, Math.max(1.2, viewScale * 0.75));
+    for (let i = 0; i < count; i++) {
       let k = data[i * 4 + 3];
+      const mode = k >= 8 ? 2 : k >= 4 ? 1 : 0;
+      k -= mode * 4;
       const tunnel = k >= 2;
       if (tunnel) k -= 2;
-      this.dummy.position.set(x, 0.9, z);
-      this.dummy.rotation.set(0, heading, 0);
+      const target = mode === 0 ? this.cars : mode === 1 ? this.bikes : this.peds;
+      if (target.cursor >= target.capacity) continue;
+      const x = data[i * 4];
+      const z = -data[i * 4 + 1];
+      this.dummy.position.set(x, 0.55, z);
+      this.dummy.rotation.set(0, data[i * 4 + 2], 0);
+      const s = mode === 0 ? carScale : softScale;
+      this.dummy.scale.set(s, 1, s);
       this.dummy.updateMatrix();
-      this.mesh.setMatrixAt(i, this.dummy.matrix);
-      // fast: white-ish · crawling: warm red tint · tunnel: dimmed
+      const idx = target.cursor++;
+      target.mesh.setMatrixAt(idx, this.dummy.matrix);
       const slow = 1 - k;
-      let r = 0.82 + slow * 0.1;
-      let g = 0.84 - slow * 0.45;
-      let b = 0.86 - slow * 0.55;
+      let r: number, g: number, b: number;
+      if (mode === 0) {
+        // headlight amber-white · crawling: brake red
+        r = 1.0;
+        g = 0.88 - slow * 0.5;
+        b = 0.6 - slow * 0.42;
+      } else if (mode === 1) {
+        // bikes: cool mint
+        r = 0.5 - slow * 0.12;
+        g = 0.92 - slow * 0.25;
+        b = 0.8 - slow * 0.22;
+      } else {
+        // pedestrians: warm amber-gray
+        r = 0.78 - slow * 0.2;
+        g = 0.7 - slow * 0.2;
+        b = 0.56 - slow * 0.16;
+      }
       if (tunnel) { r *= 0.3; g *= 0.3; b *= 0.32; }
       this.color.setRGB(r, g, b);
-      this.mesh.setColorAt(i, this.color);
+      target.mesh.setColorAt(idx, this.color);
     }
-    this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.mesh.instanceColor!.needsUpdate = true;
+    for (const t of [this.cars, this.bikes, this.peds]) {
+      t.mesh.count = t.cursor;
+      t.mesh.instanceMatrix.needsUpdate = true;
+      t.mesh.instanceColor!.needsUpdate = true;
+    }
   }
 }
 
@@ -153,7 +199,7 @@ export class CongestionLayer {
       for (let k = 0; k < n - 1; k++) {
         for (const kk of [k, k + 1]) {
           pos[v * 3] = graph.geo[(off + kk) * 2];
-          pos[v * 3 + 1] = 1.9;
+          pos[v * 3 + 1] = 1.1;
           pos[v * 3 + 2] = -graph.geo[(off + kk) * 2 + 1];
           v++;
         }
@@ -166,11 +212,11 @@ export class CongestionLayer {
     geo.setAttribute("color", this.colAttr);
     this.lines = new THREE.LineSegments(
       geo,
-      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8, fog: true })
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.8, fog: true, depthWrite: false })
     );
     this.lines.frustumCulled = false;
     this.lines.visible = false;
-    this.lines.renderOrder = 4;
+    this.lines.renderOrder = 6;
   }
 
   /** congestion: Float32Array per edge, 0 free … 1 jammed */

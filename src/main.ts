@@ -31,9 +31,9 @@ async function boot() {
   paintBoot("structures", 1);
 
   const signals = new SignalsLayer(data.graph);
-  const vehicles = new VehiclesLayer(14000);
+  const vehicles = new VehiclesLayer();
   const congestion = new CongestionLayer(data.graph);
-  scene.scene.add(signals.points, vehicles.mesh, congestion.lines);
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines);
 
   paintBoot("sim", 0.2);
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -70,6 +70,7 @@ async function boot() {
   setTimeout(() => ui.boot.remove(), 1200);
 
   const fpsBox = { frames: 0, t0: performance.now() };
+  const lineMat = meshes.roadLines.material as THREE.LineBasicMaterial;
   function loop(now: number) {
     requestAnimationFrame(loop);
     scene.update();
@@ -78,6 +79,12 @@ async function boot() {
     waterMat.uTime.value = now / 1000;
     waterMat.fogNear.value = scene.fog.near;
     waterMat.fogFar.value = scene.fog.far;
+    // 1px line overlay exists for far readability; drop it to a whisper up
+    // close where ribbons + junction plates carry the picture (kills junction
+    // spaghetti while keeping street definition)
+    const t = THREE.MathUtils.clamp((scene.distance - 1500) / 2300, 0, 1);
+    lineMat.opacity = 0.13 + 0.49 * t;
+    meshes.roadLines.visible = meshes.roads.visible;
     app.frame(now);
     scene.renderer.render(scene.scene, scene.camera);
     fpsBox.frames++;
@@ -94,6 +101,9 @@ async function boot() {
   }
   requestAnimationFrame(loop);
 
+  (window as unknown as { __meshes: unknown }).__meshes = meshes;
+  (window as unknown as { __layers: unknown }).__layers = { signals, vehicles, congestion };
+  (window as unknown as { __scene: unknown }).__scene = scene;
   // headless perf probe: window.__bench(n) → avg ms per full render
   (window as unknown as { __bench: (n?: number) => string }).__bench = (n = 30) => {
     const t0 = performance.now();

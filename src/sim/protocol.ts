@@ -33,7 +33,9 @@ export interface ReadyMsg {
 
 export interface FrameMsg {
   type: "frame";
-  vehicles: ArrayBuffer; // Float32Array [x, y, heading, k] — k = speed01 + (tunnel ? 2 : 0)
+  // Float32Array [x, y, heading, k] — k = speed01 + (tunnel ? 2 : 0) + mode * 4
+  // mode: 0 car, 1 bike, 2 pedestrian
+  vehicles: ArrayBuffer;
   count: number;
   signals: ArrayBuffer; // Uint8Array per signal head: 0 red, 1 amber, 2 green, 3 off
   clockMin: number; // time of day, minutes
@@ -50,7 +52,9 @@ export interface MetricsMsg {
   type: "metrics";
   simTime: number;
   clockMin: number;
-  active: number;
+  active: number; // cars
+  bikes: number;
+  walkers: number;
   completed: number;
   throughputMin: number; // completed per minute (rolling)
   avgSpeedKmh: number;

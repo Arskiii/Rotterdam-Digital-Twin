@@ -102,6 +102,8 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="roads" checked /><span class="box"></span>Road network</label>
           <label><input type="checkbox" data-layer="signals" checked /><span class="box"></span>Signal units</label>
           <label><input type="checkbox" data-layer="vehicles" checked /><span class="box"></span>Vehicle tracks</label>
+          <label><input type="checkbox" data-layer="bikes" checked /><span class="box"></span>Bike tracks</label>
+          <label><input type="checkbox" data-layer="pedestrians" checked /><span class="box"></span>Pedestrians</label>
           <label><input type="checkbox" data-layer="congestion" /><span class="box"></span>Congestion flux</label>
           <label><input type="checkbox" data-layer="water" checked /><span class="box"></span>Hydro surface</label>
           <label><input type="checkbox" data-layer="rail" checked /><span class="box"></span>Rail grid</label>

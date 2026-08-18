@@ -7,6 +7,7 @@ export interface Meta {
   counts: {
     roadWays: number;
     roadKm: number;
+    pathKm: number;
     graphNodes: number;
     graphEdges: number;
     signalsInventory: number;
@@ -30,10 +31,15 @@ export interface PolylineSet {
   coords: Float32Array; // x,y pairs
 }
 
+// mode mask bits (edges.modeMask / inCore): 1 car, 2 bike, 4 walk
+export const MODE_CAR = 1;
+export const MODE_BIKE = 2;
+export const MODE_WALK = 4;
+
 export interface Graph {
   nodeCount: number;
   nodesXY: Float32Array;
-  inCore: Uint8Array;
+  inCore: Uint8Array; // per-node reachable-core bits per mode
   signals: { count: number; nodeIdx: Uint32Array; cluster: Uint16Array; phase: Uint8Array; crossingOnly: Uint8Array };
   aux: { count: number; xy: Float32Array; cluster: Int16Array; phase: Uint8Array };
   clusters: { count: number; xy: Float32Array; crossing: Uint8Array; cycle: Uint8Array; offset: Uint16Array };
@@ -48,6 +54,7 @@ export interface Graph {
     geoOff: Uint32Array;
     geoCount: Uint16Array;
     district: Uint8Array;
+    modeMask: Uint8Array;
   };
   geo: Float32Array;
 }
@@ -148,7 +155,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
   const r = new Reader(buf);
   if (r.u32() !== 0x474d5452) throw new Error("bad graph magic");
   const version = r.u32();
-  if (version !== 2) throw new Error("graph version mismatch");
+  if (version !== 3) throw new Error("graph version mismatch — rerun: npm run build-data");
   const nodeCount = r.u32();
   const nodesXY = new Float32Array(nodeCount * 2);
   const inCore = new Uint8Array(nodeCount);
@@ -212,6 +219,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     geoOff: new Uint32Array(eCount),
     geoCount: new Uint16Array(eCount),
     district: new Uint8Array(eCount),
+    modeMask: new Uint8Array(eCount),
   };
   for (let i = 0; i < eCount; i++) {
     edges.a[i] = r.u32();
@@ -223,7 +231,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     edges.geoOff[i] = r.u32();
     edges.geoCount[i] = r.u16();
     edges.district[i] = r.u8();
-    r.u8();
+    edges.modeMask[i] = r.u8();
   }
   const geoCount = r.u32();
   const geo = new Float32Array(buf.slice(r.pos, r.pos + geoCount * 8));
