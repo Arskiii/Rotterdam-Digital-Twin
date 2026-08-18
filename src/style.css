@@ -346,6 +346,26 @@ svg {
   border-color: var(--line-bright);
 }
 
+/* ---------- street intel readout --------------------------- */
+
+#street-chip {
+  position: absolute;
+  left: 16px;
+  bottom: 168px;
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.92);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 14;
+  max-width: 46%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ---------- incident markers ------------------------------- */
 
 .incident-marker {
@@ -973,6 +993,12 @@ svg {
   font-size: 9.5px;
   color: var(--text-dim);
   white-space: nowrap;
+}
+.stat-card .stat-spark {
+  width: 100%;
+  height: 18px;
+  display: block;
+  margin-top: 5px;
 }
 .stat-card .s.up { color: var(--green); }
 .stat-card .s.down { color: var(--red); }

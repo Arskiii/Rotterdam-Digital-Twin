@@ -311,6 +311,7 @@ export function buildGround(extent: { minX: number; minY: number; maxX: number; 
 const buildingMat = new THREE.ShaderMaterial({
   uniforms: {
     uOrigin: { value: new THREE.Vector2() },
+    uAmbient: { value: 1 },
     fogColor: { value: new THREE.Color(0x0a0a0b) },
     fogNear: { value: 8000 },
     fogFar: { value: 30000 },
@@ -336,6 +337,7 @@ const buildingMat = new THREE.ShaderMaterial({
     uniform vec3 fogColor;
     uniform float fogNear;
     uniform float fogFar;
+    uniform float uAmbient;
     void main() {
       vec3 fdx = dFdx(vW);
       vec3 fdy = dFdy(vW);
@@ -350,6 +352,7 @@ const buildingMat = new THREE.ShaderMaterial({
         + vec3(0.052) * top;             // roof
       col += vec3(0.07) * clamp(vH / 150.0, 0.0, 1.0);   // towers read lighter
       col *= 0.66 + 0.34 * clamp(vW.y / 8.0, 0.0, 1.0);  // grounded AO
+      col *= uAmbient;                                    // sim-clock daylight
       float fogF = smoothstep(fogNear, fogFar, vFogDepth);
       gl_FragColor = vec4(mix(col, fogColor, fogF), 1.0);
     }`,
@@ -358,6 +361,10 @@ const buildingMat = new THREE.ShaderMaterial({
 export function syncFog(fog: THREE.Fog) {
   buildingMat.uniforms.fogNear.value = fog.near;
   buildingMat.uniforms.fogFar.value = fog.far;
+}
+
+export function setAmbient(v: number) {
+  buildingMat.uniforms.uAmbient.value = v;
 }
 
 function buildTileMesh(tile: BuildingTile): THREE.Mesh {
@@ -406,6 +413,7 @@ function buildTileMesh(tile: BuildingTile): THREE.Mesh {
   mat.uniforms.fogColor = buildingMat.uniforms.fogColor;
   mat.uniforms.fogNear = buildingMat.uniforms.fogNear;
   mat.uniforms.fogFar = buildingMat.uniforms.fogFar;
+  mat.uniforms.uAmbient = buildingMat.uniforms.uAmbient;
   const mesh = new THREE.Mesh(geo, mat);
   mesh.matrixAutoUpdate = false;
   mesh.renderOrder = 2;

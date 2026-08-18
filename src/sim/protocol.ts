@@ -12,6 +12,7 @@ export interface ParamsMsg {
   density?: number; // target active vehicles at demand peak
   simSpeed?: number; // physics multiplier
   cycleScale?: number; // signal cycle length multiplier 0.6..1.6
+  signalProgram?: "actuated" | "fixed";
   running?: boolean;
   congestionFeed?: boolean;
   autoIncidents?: boolean;

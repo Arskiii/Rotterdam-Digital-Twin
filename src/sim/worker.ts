@@ -48,6 +48,11 @@ let edgeVN: Uint16Array;
 
 let sigState: Uint8Array;
 let clusterFault: Float32Array;
+// actuated controller state per cluster
+let ctlPhase: Uint8Array; // 0 greenA · 1 greenB · 2 amber→B · 3 amber→A · 4 allRed→B · 5 allRed→A
+let ctlTimer: Float32Array;
+let ctlGap: Float32Array; // seconds since last demand on the green phase
+let phaseDemand: Float32Array; // [cluster*2 + phase] accumulated waiting
 
 // agents (SoA)
 const MAXV = 22000;
@@ -75,6 +80,7 @@ const activeByMode = [0, 0, 0];
 let targetDensity = 5200;
 let simSpeed = 1;
 let cycleScale = 1;
+let signalProgram: "actuated" | "fixed" = "actuated";
 let running = true;
 let congestionFeed = false;
 let autoIncidents = true;
@@ -149,6 +155,11 @@ function init(buf: ArrayBuffer) {
 
   sigState = new Uint8Array(G.signals.count + G.aux.count).fill(3);
   clusterFault = new Float32Array(G.clusters.count);
+  ctlPhase = new Uint8Array(G.clusters.count);
+  ctlTimer = new Float32Array(G.clusters.count);
+  ctlGap = new Float32Array(G.clusters.count);
+  phaseDemand = new Float32Array(G.clusters.count * 2);
+  for (let c = 0; c < G.clusters.count; c++) ctlPhase[c] = hashPhase(c);
 
   vAlive = new Uint8Array(MAXV);
   vMode = new Uint8Array(MAXV);
@@ -405,22 +416,77 @@ function signalAt(d: number): number {
   return sigState[sig];
 }
 
-function updateSignals() {
+function hashPhase(c: number): number {
+  return (c * 2654435761) % 2 === 0 ? 0 : 1;
+}
+
+// Dutch-style vehicle actuation: hold green while the served phase has demand
+// (up to maxGreen); switch when the cross phase is waiting and the green phase
+// has gapped out. Rest alternating slowly when the junction is empty.
+function stepActuated(c: number, dt: number) {
+  const AMBER = 3.2;
+  const ALLRED = 1.4;
+  const MIN_GREEN = 6;
+  const MAX_GREEN = 36 * cycleScale;
+  const GAP_OUT = 2.6;
+  const IDLE_SWAP = 24;
+
+  const dA = phaseDemand[c * 2];
+  const dB = phaseDemand[c * 2 + 1];
+  ctlTimer[c] += dt;
+  const ph = ctlPhase[c];
+  if (ph === 0 || ph === 1) {
+    const own = ph === 0 ? dA : dB;
+    const cross = ph === 0 ? dB : dA;
+    if (own > 0.05) ctlGap[c] = 0;
+    else ctlGap[c] += dt;
+    const gapped = ctlGap[c] > GAP_OUT;
+    const wants =
+      (cross > 0.05 && ctlTimer[c] > MIN_GREEN && (gapped || ctlTimer[c] > MAX_GREEN)) ||
+      (cross <= 0.05 && own <= 0.05 && ctlTimer[c] > IDLE_SWAP);
+    if (wants) {
+      ctlPhase[c] = ph === 0 ? 2 : 3;
+      ctlTimer[c] = 0;
+    }
+  } else if (ph === 2 || ph === 3) {
+    if (ctlTimer[c] > AMBER) {
+      ctlPhase[c] = ph === 2 ? 4 : 5;
+      ctlTimer[c] = 0;
+    }
+  } else {
+    if (ctlTimer[c] > ALLRED) {
+      const next = ph === 4 ? 1 : 0;
+      ctlPhase[c] = next;
+      ctlTimer[c] = 0;
+      ctlGap[c] = 0;
+      phaseDemand[c * 2 + next] = 0; // queue will discharge
+    }
+  }
+}
+
+function updateSignals(dt: number) {
   const C = G.clusters;
   const cacheHolder = C as unknown as { _a?: number[] };
   cacheHolder._a ??= [];
   const cache = cacheHolder._a;
   for (let c = 0; c < C.count; c++) {
-    const cyc = Math.max(24, C.cycle[c] * cycleScale);
-    const t = (simTime + C.offset[c]) % cyc;
     const faulted = clusterFault[c] > simTime;
     let stateA: number, stateB: number;
     if (faulted) {
       stateA = stateB = 0;
     } else if (C.crossing[c]) {
+      const cyc = Math.max(24, C.cycle[c] * cycleScale);
+      const t = (simTime + C.offset[c]) % cyc;
       const red = t < 11;
       stateA = stateB = red ? 0 : t < 13 ? 1 : 2;
+    } else if (signalProgram === "actuated") {
+      stepActuated(c, dt);
+      const ph = ctlPhase[c];
+      stateA = ph === 0 ? 2 : ph === 2 ? 1 : 0;
+      stateB = ph === 1 ? 2 : ph === 3 ? 1 : 0;
     } else {
+      const cyc = Math.max(24, C.cycle[c] * cycleScale);
+      const t = (simTime + C.offset[c]) % cyc;
       const amber = 3.2;
       const allRed = 1.4;
       const half = cyc / 2;
@@ -433,6 +499,8 @@ function updateSignals() {
     cache[c * 2] = stateA;
     cache[c * 2 + 1] = stateB;
   }
+  // demand cools off slowly so stale pressure doesn't stick
+  for (let i = 0; i < phaseDemand.length; i++) phaseDemand[i] *= 0.995;
   for (let s = 0; s < G.signals.count; s++) {
     sigState[s] = cache[G.signals.cluster[s] * 2 + G.signals.phase[s]];
   }
@@ -528,7 +596,15 @@ function stepVehicles(dt: number) {
           }
         }
       }
-      if (mustStop) { gap = Math.min(gap, stopGap); dv = v; }
+      if (mustStop) {
+        gap = Math.min(gap, stopGap);
+        dv = v;
+        // register demand with the actuated controller (cars near the stop line)
+        if (mode === 0 && sig === 0 && remain < 40 && v < 3) {
+          const si = nodeSignal[dTarget[d]];
+          if (si >= 0) phaseDemand[G.signals.cluster[si] * 2 + G.signals.phase[si]] += dt;
+        }
+      }
     }
 
     let a = idmAccel(mode, v, v0, gap, dv);
@@ -725,7 +801,7 @@ function tick() {
   while (dt > 0) {
     const h = Math.min(0.055, dt);
     simTime += h;
-    updateSignals();
+    updateSignals(h);
     stepVehicles(h);
     dt -= h;
   }
@@ -832,6 +908,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     if (msg.density !== undefined) targetDensity = msg.density;
     if (msg.simSpeed !== undefined) simSpeed = msg.simSpeed;
     if (msg.cycleScale !== undefined) cycleScale = msg.cycleScale;
+    if (msg.signalProgram !== undefined) signalProgram = msg.signalProgram;
     if (msg.running !== undefined) { running = msg.running; lastTick = performance.now(); }
     if (msg.congestionFeed !== undefined) congestionFeed = msg.congestionFeed;
     if (msg.autoIncidents !== undefined) autoIncidents = msg.autoIncidents;

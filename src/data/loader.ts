@@ -56,7 +56,9 @@ export interface Graph {
     geoCount: Uint16Array;
     district: Uint8Array;
     modeMask: Uint8Array;
+    nameIdx: Uint16Array;
   };
+  names: string[];
   geo: Float32Array;
 }
 
@@ -165,7 +167,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
   const r = new Reader(buf);
   if (r.u32() !== 0x474d5452) throw new Error("bad graph magic");
   const version = r.u32();
-  if (version !== 3) throw new Error("graph version mismatch — rerun: npm run build-data");
+  if (version !== 4) throw new Error("graph version mismatch — rerun: npm run build-data");
   const nodeCount = r.u32();
   const nodesXY = new Float32Array(nodeCount * 2);
   const inCore = new Uint8Array(nodeCount);
@@ -230,6 +232,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     geoCount: new Uint16Array(eCount),
     district: new Uint8Array(eCount),
     modeMask: new Uint8Array(eCount),
+    nameIdx: new Uint16Array(eCount),
   };
   for (let i = 0; i < eCount; i++) {
     edges.a[i] = r.u32();
@@ -242,10 +245,19 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     edges.geoCount[i] = r.u16();
     edges.district[i] = r.u8();
     edges.modeMask[i] = r.u8();
+    edges.nameIdx[i] = r.u16();
+  }
+  const nameCount = r.u16();
+  const names: string[] = [];
+  const dec = new TextDecoder();
+  for (let i = 0; i < nameCount; i++) {
+    const len = r.u8();
+    names.push(dec.decode(new Uint8Array(buf, r.pos, len)));
+    r.pos += len;
   }
   const geoCount = r.u32();
   const geo = new Float32Array(buf.slice(r.pos, r.pos + geoCount * 8));
-  return { nodeCount, nodesXY, inCore, signals, aux, clusters, edges, geo };
+  return { nodeCount, nodesXY, inCore, signals, aux, clusters, edges, names, geo };
 }
 
 function parseWater(buf: ArrayBuffer) {

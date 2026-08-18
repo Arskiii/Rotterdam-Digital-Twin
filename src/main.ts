@@ -2,7 +2,7 @@ import "./style.css";
 import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
-import { buildCity, syncFog } from "./render/city";
+import { buildCity, syncFog, setAmbient } from "./render/city";
 import { SignalsLayer, VehiclesLayer, CongestionLayer } from "./render/dynamic";
 import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
@@ -97,6 +97,14 @@ async function boot() {
     transit.update(app.paused ? 0 : realDt * app.simSpeed);
     scene.update();
     syncFog(scene.fog);
+    // sim-clock daylight: dawn ~06:00, dusk ~21:30 (subtle, keeps the night-ops look)
+    const hh = app.clockMin / 60;
+    const sstep = (a: number, b: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    const daylight = sstep(5.4, 7.6, hh) * (1 - sstep(20.4, 22.6, hh));
+    setAmbient(0.78 + 0.5 * daylight);
     const waterMat = (meshes.water.material as THREE.ShaderMaterial).uniforms;
     waterMat.uTime.value = now / 1000;
     waterMat.fogNear.value = scene.fog.near;
