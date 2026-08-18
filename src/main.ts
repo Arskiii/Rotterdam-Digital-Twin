@@ -20,10 +20,26 @@ function paintBoot(stage: string, frac: number) {
   }
 }
 
+// Data binaries live in-repo (public/data). Deployments that ship only source
+// (e.g. Vercel file deploys) fall back to the pinned GitHub mirror via jsDelivr.
+const DATA_FALLBACK =
+  "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@0a7938a36fa52f76393f5aef0509a27b6e4ddcc8/public/data/";
+
+async function resolveDataBase(): Promise<string> {
+  const local = `${import.meta.env.BASE_URL}data/`;
+  try {
+    const res = await fetch(`${local}meta.json`, { method: "HEAD" });
+    if (res.ok) return local;
+  } catch {
+    /* fall through */
+  }
+  return DATA_FALLBACK;
+}
+
 async function boot() {
   const scene = new SceneCtx(ui.sceneCanvas);
 
-  const data = await loadCity(`${import.meta.env.BASE_URL}data/`, paintBoot);
+  const data = await loadCity(await resolveDataBase(), paintBoot);
   paintBoot("grid", 1);
   paintBoot("signals", 1);
 
