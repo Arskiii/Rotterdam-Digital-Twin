@@ -24,9 +24,13 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - IDM car-following on per-lane FIFO queues (separate car and bike lanes);
   pedestrians free-flow and cross with the signals (walk when cars are held)
 - A\* time-cost routing per mode; cars reroute around incidents
+- **RET public transport**: trams and metros on their real OSM route relations,
+  braking into stops, dwelling, and continuing (~280 vehicles on 39 routes)
 - Signals: green/amber/red phases per junction cluster, signal faults, cycle-scale control
 - Time-of-day demand curve (morning/evening peaks, 72× day compression)
 - Per-district telemetry: tracks, mean speed, queues, congestion index
+- **Target tracking**: click any car, bike, pedestrian, tram or metro to lock the
+  camera on it (live speed + zone readout); incidents appear as blinking map markers
 
 **Platform UI** (the SurveilTrack look):
 

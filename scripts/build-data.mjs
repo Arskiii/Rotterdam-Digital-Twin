@@ -783,6 +783,97 @@ let buildingCount = 0;
 }
 
 // ============================================================
+// 4b. TRANSIT ROUTES (RET tram + metro service patterns)
+// ============================================================
+console.log("── transit ──");
+let transitRoutes = 0;
+{
+  const w = new Writer();
+  w.u32(0x544d5452); // 'RTMT'
+  const body = new Writer();
+  const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 45;
+
+  if (existsSync(join(RAW, "transit.json"))) {
+    for (const rel of loadJSON("transit.json").elements) {
+      if (rel.type !== "relation") continue;
+      const kind = rel.tags?.route === "tram" ? 0 : 1; // subway/light_rail → metro
+      const ref = String(rel.tags?.ref ?? "?").slice(0, 12);
+
+      // stitch member ways (PTv2 relations are ordered) into one chain
+      let chain = []; // [x, y, tunnel]
+      let best = [];
+      const flush = () => {
+        if (chain.length > best.length) best = chain;
+        chain = [];
+      };
+      for (const m of rel.members ?? []) {
+        if (m.type !== "way" || !m.geometry || m.geometry.length < 2) continue;
+        if (/platform/.test(m.role ?? "")) continue;
+        const tags = m.tags ?? {};
+        const tun = (tags.tunnel && tags.tunnel !== "no") || tags.covered === "yes" ? 1 : 0;
+        let pts = simplify(m.geometry.map((g) => [px(g.lon), py(g.lat)]), 0.8);
+        if (pts.length < 2) continue;
+        if (chain.length === 0) {
+          chain = pts.map(([x, y]) => [x, y, tun]);
+          continue;
+        }
+        const end = chain[chain.length - 1];
+        if (near(end, pts[0])) {
+          for (let i = 1; i < pts.length; i++) chain.push([pts[i][0], pts[i][1], tun]);
+        } else if (near(end, pts[pts.length - 1])) {
+          for (let i = pts.length - 2; i >= 0; i--) chain.push([pts[i][0], pts[i][1], tun]);
+        } else {
+          flush();
+          chain = pts.map(([x, y]) => [x, y, tun]);
+        }
+      }
+      flush();
+      // route length
+      let len = 0;
+      for (let i = 1; i < best.length; i++) len += dist(best[i - 1][0], best[i - 1][1], best[i][0], best[i][1]);
+      if (len < 2500 || best.length < 8) continue;
+
+      // cumulative arc length for stop projection
+      const cum = new Float64Array(best.length);
+      for (let i = 1; i < best.length; i++)
+        cum[i] = cum[i - 1] + dist(best[i - 1][0], best[i - 1][1], best[i][0], best[i][1]);
+
+      const stops = [];
+      for (const m of rel.members ?? []) {
+        if (m.type !== "node" || !/stop/.test(m.role ?? "") || m.lat === undefined) continue;
+        const sx = px(m.lon), sy = py(m.lat);
+        let bi = 0, bd = Infinity;
+        for (let i = 0; i < best.length; i++) {
+          const d = (best[i][0] - sx) ** 2 + (best[i][1] - sy) ** 2;
+          if (d < bd) { bd = d; bi = i; }
+        }
+        if (bd < 120 * 120) stops.push(cum[bi]);
+      }
+      stops.sort((a, b) => a - b);
+      const dedup = [];
+      for (const s of stops) if (!dedup.length || s - dedup[dedup.length - 1] > 60) dedup.push(s);
+
+      body.u8(kind);
+      const refBytes = Buffer.from(ref, "utf8");
+      body.u8(refBytes.length);
+      for (const b of refBytes) body.u8(b);
+      body.u16(Math.min(65535, best.length));
+      body.u16(dedup.length);
+      for (const [x, y] of best.slice(0, 65535)) { body.f32(x); body.f32(y); }
+      for (const p of best.slice(0, 65535)) body.u8(p[2]);
+      for (const s of dedup) body.f32(s);
+      transitRoutes++;
+    }
+  } else {
+    console.warn("transit.json missing — run: node scripts/fetch-osm.mjs transit");
+  }
+  w.u32(transitRoutes);
+  const bin = Buffer.concat([w.done(), body.done()]);
+  writeFileSync(join(OUT, "transit.bin"), bin);
+  console.log(`transit.bin: ${transitRoutes} routes, ${(bin.length / 1e6).toFixed(2)} MB`);
+}
+
+// ============================================================
 // 5. META
 // ============================================================
 {
@@ -809,6 +900,7 @@ let buildingCount = 0;
       waterPolys: waterPolyCount,
       railWays: railCount,
       buildings: buildingCount,
+      transitRoutes,
     },
     districts: DISTRICTS.map((d) => ({ key: d.key, name: d.name, x: +d.x.toFixed(1), y: +d.y.toFixed(1) })),
   };

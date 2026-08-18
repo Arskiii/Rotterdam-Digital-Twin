@@ -23,7 +23,8 @@
   "crossings": 8,
   "waterPolys": 7032,
   "railWays": 1889,
-  "buildings": 264642
+  "buildings": 264642,
+  "transitRoutes": 39
  },
  "districts": [
   {
