@@ -305,6 +305,8 @@ for (const w of simWays) {
   const tunnel = (w.tags.tunnel && w.tags.tunnel !== "no") || w.tags.covered === "yes";
   const bridge = w.tags.bridge && w.tags.bridge !== "no";
 
+  const wayName = w.tags.name ?? null;
+
   // walk the way, splitting at junctions & signal nodes
   let segIds = [ids[0]];
   let segPts = [[px(geo[0].lon), py(geo[0].lat)]];
@@ -324,7 +326,7 @@ for (const w of simWays) {
         const b = ensureNode(bId, pts[pts.length - 1][0], pts[pts.length - 1][1]);
         if (a !== b) {
           const mid = pts[Math.floor(pts.length / 2)];
-          edges.push({ a, b, cls, modeMask, oneway, speed, len, pts, district: nearestDistrict(mid[0], mid[1]), tunnel, bridge });
+          edges.push({ a, b, cls, modeMask, oneway, speed, len, pts, district: nearestDistrict(mid[0], mid[1]), tunnel, bridge, name: wayName });
         }
       }
       segIds = [ids[i]];
@@ -550,11 +552,29 @@ const auxSignals = [];
   console.log(`aux signals (off-network heads): ${auxSignals.length}`);
 }
 
+// --- street-name table (dedup) ---
+const FALLBACK_NAMES = ["MOTORWAY SEGMENT", "TRUNK ROAD", "PRIMARY ROAD", "SECONDARY ROAD", "TERTIARY ROAD", "LOCAL STREET", "SERVICE ROAD", "PEDESTRIAN ZONE", "CYCLE TRACK", "FOOTPATH"];
+const nameIdxOf = new Map();
+const nameTable = [];
+for (const e of edges) {
+  const n = e.name ?? FALLBACK_NAMES[e.cls];
+  let idx = nameIdxOf.get(n);
+  if (idx === undefined) {
+    idx = nameTable.length;
+    if (idx < 65534) {
+      nameIdxOf.set(n, idx);
+      nameTable.push(n);
+    } else idx = 0;
+  }
+  e.nameIdx = idx;
+}
+console.log(`street-name table: ${nameTable.length} unique names`);
+
 // --- write graph.bin ---
 {
   const w = new Writer();
   w.u32(0x474d5452); // 'RTMG'
-  w.u32(3); // version 3: multimodal (edge modeMask, per-mode node cores)
+  w.u32(4); // version 4: + per-edge street-name index & name table
   const N = nodesXY.length / 2;
   w.u32(N);
   for (let i = 0; i < N; i++) { w.f32(nodesXY[i * 2]); w.f32(nodesXY[i * 2 + 1]); w.u8(inCore[i]); }
@@ -593,9 +613,17 @@ const auxSignals = [];
     w.u16(e.pts.length);
     w.u8(e.district);
     w.u8(e.modeMask);
+    w.u16(e.nameIdx);
     e.pts.forEach(([x, y]) => { geo.f32(x); geo.f32(y); });
     geoCount += e.pts.length;
   });
+  // name table
+  w.u16(nameTable.length);
+  for (const n of nameTable) {
+    const bytes = Buffer.from(String(n).slice(0, 80), "utf8");
+    w.u8(bytes.length);
+    for (const b of bytes) w.u8(b);
+  }
   w.u32(geoCount);
   const bin = Buffer.concat([w.done(), geo.done()]);
   writeFileSync(join(OUT, "graph.bin"), bin);

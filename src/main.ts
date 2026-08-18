@@ -2,7 +2,7 @@ import "./style.css";
 import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
-import { buildCity, syncFog } from "./render/city";
+import { buildCity, syncFog, setAmbient } from "./render/city";
 import { SignalsLayer, VehiclesLayer, CongestionLayer } from "./render/dynamic";
 import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
@@ -24,7 +24,7 @@ function paintBoot(stage: string, frac: number) {
 // Data binaries live in-repo (public/data). Deployments that ship only source
 // (e.g. Vercel file deploys) fall back to the pinned GitHub mirror via jsDelivr.
 const DATA_FALLBACK =
-  "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@89d8395a8704e56b73e597b1e34c4c3afc261112/public/data/";
+  "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@1b7751ef7d5dd7e70815fbbde774e01c5a1f46f3/public/data/";
 
 async function resolveDataBase(): Promise<string> {
   const local = `${import.meta.env.BASE_URL}data/`;
@@ -97,6 +97,14 @@ async function boot() {
     transit.update(app.paused ? 0 : realDt * app.simSpeed);
     scene.update();
     syncFog(scene.fog);
+    // sim-clock daylight: dawn ~06:00, dusk ~21:30 (subtle, keeps the night-ops look)
+    const hh = app.clockMin / 60;
+    const sstep = (a: number, b: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    const daylight = sstep(5.4, 7.6, hh) * (1 - sstep(20.4, 22.6, hh));
+    setAmbient(0.78 + 0.5 * daylight);
     const waterMat = (meshes.water.material as THREE.ShaderMaterial).uniforms;
     waterMat.uTime.value = now / 1000;
     waterMat.fogNear.value = scene.fog.near;
