@@ -167,6 +167,16 @@ async function main() {
     );
   }
 
+  // ---- transit routes (RET tram + metro service patterns) -------------------
+  if (!only || only === "transit") {
+    console.log("Transit routes…");
+    await fetchToFile(
+      "transit.json",
+      `[out:json][timeout:300];relation["type"="route"]["route"~"^(tram|subway|light_rail)$"](${bboxStr(BBOX)});out geom qt;`,
+      "transit routes"
+    );
+  }
+
   // ---- buildings: 6x6 tiles, ways + multipolygon relations ------------------
   if (!only || only === "buildings") {
     console.log("Buildings (36 tiles + relations)…");

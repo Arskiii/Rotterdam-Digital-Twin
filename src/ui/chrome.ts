@@ -54,6 +54,12 @@ export function buildChrome(root: HTMLElement) {
           <button data-scale="street">Street</button>
         </div>
 
+        <div id="track-chip" class="brk">${TICKS}
+          <span class="dot red"></span>
+          <span id="track-label">TRACKING</span>
+          <button id="track-release">Release</button>
+        </div>
+
         <div id="unit-card" class="brk">${TICKS}
           <div class="uc-image">
             <canvas id="drone-canvas"></canvas>
@@ -107,6 +113,7 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="congestion" /><span class="box"></span>Congestion flux</label>
           <label><input type="checkbox" data-layer="water" checked /><span class="box"></span>Hydro surface</label>
           <label><input type="checkbox" data-layer="rail" checked /><span class="box"></span>Rail grid</label>
+          <label><input type="checkbox" data-layer="transit" checked /><span class="box"></span>Transit fleet</label>
           <label><input type="checkbox" data-layer="labels" checked /><span class="box"></span>Unit labels</label>
         </div>
 
@@ -190,6 +197,9 @@ export function buildChrome(root: HTMLElement) {
     markers: $("#markers"),
     tether: $("#tether") as unknown as SVGSVGElement,
     scaleBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#scale-switch button")),
+    trackChip: $("#track-chip"),
+    trackLabel: $("#track-label"),
+    trackRelease: $("#track-release"),
     unitCard: $("#unit-card"),
     droneCanvas: $<HTMLCanvasElement>("#drone-canvas"),
     ucDetails: $("#uc-details"),

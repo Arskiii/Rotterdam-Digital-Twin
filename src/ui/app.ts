@@ -7,6 +7,7 @@ import { setMeter, barGlyphHTML } from "./chrome";
 import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
 import type { SignalsLayer, VehiclesLayer, CongestionLayer } from "../render/dynamic";
+import type { TransitLayer } from "../render/transit";
 import { DroneViewer } from "../render/drone";
 import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
@@ -43,13 +44,17 @@ export class App {
   paused = false;
   msgCount = 0;
   density = 5200;
+  track: { kind: "agent" | "transit"; id: number; label: string; missFrames: number } | null = null;
+  lastFrame: { data: Float32Array; ids: Int32Array; speeds: Float32Array; count: number } | null = null;
+  incidentEls: HTMLElement[] = [];
+  incidentPts: { x: number; y: number }[] = [];
 
   constructor(
     public ui: Chrome,
     public scene: SceneCtx,
     public data: CityData,
     public meshes: CityMeshes,
-    public layers: { signals: SignalsLayer; vehicles: VehiclesLayer; congestion: CongestionLayer },
+    public layers: { signals: SignalsLayer; vehicles: VehiclesLayer; congestion: CongestionLayer; transit: TransitLayer },
     public worker: Worker
   ) {
     this.drone = new DroneViewer(ui.droneCanvas);
@@ -245,13 +250,99 @@ export class App {
     // worker messages
     this.worker.onmessage = (ev: MessageEvent<WorkerToMain>) => this.onWorker(ev.data);
 
-    // click empty map: deselect
+    // click empty map: deselect · short click on an agent: acquire track
+    let downX = 0;
+    let downY = 0;
     this.ui.viewport.addEventListener("pointerdown", (e) => {
       if (e.target === this.scene.renderer.domElement) {
         ui.layersPop.classList.remove("open");
         ui.layersBtn.classList.remove("on");
+        downX = e.clientX;
+        downY = e.clientY;
       }
     });
+    this.ui.viewport.addEventListener("pointerup", (e) => {
+      if (e.target !== this.scene.renderer.domElement) return;
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+      this.tryAcquireTrack(e.clientX, e.clientY);
+    });
+    ui.trackRelease.addEventListener("click", () => this.releaseTrack("RELEASED BY OPERATOR"));
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && this.track) this.releaseTrack("RELEASED BY OPERATOR");
+    });
+  }
+
+  // ---------- target tracking ----------
+  /** Screen-space nearest-agent pick: robust for pixel-sized moving targets. */
+  private tryAcquireTrack(clientX: number, clientY: number) {
+    if (this.page !== "map") return;
+    const el = this.scene.renderer.domElement;
+    const rect = el.getBoundingClientRect();
+    const cx = clientX - rect.left;
+    const cy = clientY - rect.top;
+    const RADIUS = 16;
+    let best: { kind: "agent" | "transit"; id: number; label: string } | null = null;
+    let bd = RADIUS * RADIUS;
+
+    const v = this.layers.vehicles;
+    const f = this.lastFrame;
+    if (f && v.cars.mesh.visible) {
+      const MODE_LABEL = ["VEH", "BIKE", "PED"];
+      const visibleByMode = [v.cars.mesh.visible, v.bikes.mesh.visible, v.peds.mesh.visible];
+      for (let i = 0; i < f.count; i++) {
+        const k = f.data[i * 4 + 3];
+        const mode = k >= 8 ? 2 : k >= 4 ? 1 : 0;
+        if (!visibleByMode[mode]) continue;
+        if (!this.scene.project(f.data[i * 4], 1, -f.data[i * 4 + 1], this.tmpPt)) continue;
+        const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
+        if (d < bd) {
+          bd = d;
+          const id = f.ids[i];
+          best = { kind: "agent", id, label: `${MODE_LABEL[mode]}-${String(id).padStart(4, "0")}` };
+        }
+      }
+    }
+    const t = this.layers.transit;
+    if (t.group.visible) {
+      for (let i = 0; i < t.vehicles.length; i++) {
+        const info = t.vehicleInfo(i);
+        if (!info || !this.scene.project(info.x, 2, info.z, this.tmpPt)) continue;
+        const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = { kind: "transit", id: i, label: info.label };
+        }
+      }
+    }
+    if (!best) return;
+    this.track = { ...best, missFrames: 0 };
+    this.ui.trackChip.classList.add("on");
+    this.log("ok", `TARGET ACQUIRED — ${best.label} UNDER CAMERA LOCK`);
+  }
+
+  releaseTrack(reason: string) {
+    if (!this.track) return;
+    this.log("info", `TRACK ${this.track.label} ENDED — ${reason}`);
+    this.track = null;
+    this.ui.trackChip.classList.remove("on");
+  }
+
+  /** Position/speed of the tracked entity in world coords, or null if gone. */
+  private trackState(): { x: number; z: number; speed: number } | null {
+    const tr = this.track;
+    if (!tr) return null;
+    if (tr.kind === "transit") {
+      const info = this.layers.transit.vehicleInfo(tr.id);
+      return info ? { x: info.x, z: info.z, speed: info.speed } : null;
+    }
+    const f = this.lastFrame;
+    if (!f) return null;
+    for (let i = 0; i < f.count; i++) {
+      if (f.ids[i] === tr.id) {
+        return { x: f.data[i * 4], z: -f.data[i * 4 + 1], speed: f.speeds[i] };
+      }
+    }
+    return null;
   }
 
   setUcTab(t: "perf" | "health") {
@@ -294,6 +385,7 @@ export class App {
         break;
       case "water": this.meshes.water.visible = on; break;
       case "rail": this.meshes.rail.visible = on; break;
+      case "transit": this.layers.transit.group.visible = on; break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles": this.layers.vehicles.cars.mesh.visible = on; break;
       case "bikes": this.layers.vehicles.bikes.mesh.visible = on; break;
@@ -312,12 +404,17 @@ export class App {
   private onWorker(msg: WorkerToMain) {
     switch (msg.type) {
       case "frame": {
-        this.layers.vehicles.update(new Float32Array(msg.vehicles), msg.count, this.scene.distance / 950);
+        const data = new Float32Array(msg.vehicles);
+        const ids = new Int32Array(msg.ids);
+        const speeds = new Float32Array(msg.speeds);
+        this.lastFrame = { data, ids, speeds, count: msg.count };
+        this.layers.vehicles.update(data, msg.count, this.scene.distance / 950, ids);
         this.layers.signals.update(new Uint8Array(msg.signals));
         break;
       }
       case "metrics": {
         this.metrics = msg;
+        this.incidentPts = msg.incidentPts ?? [];
         this.cityHistory.push({ active: msg.active, speed: msg.avgSpeedKmh, cong: msg.congestionIndex });
         if (this.cityHistory.length > 900) this.cityHistory.shift();
         msg.districts.forEach((d, i) => {
@@ -344,7 +441,55 @@ export class App {
 
   // ---------- per-frame ----------
   private tmpPt = { x: 0, y: 0 };
+  private trackVec = new THREE.Vector3();
   frame(now: number) {
+    // camera lock on tracked target
+    if (this.track && this.page === "map") {
+      const st = this.trackState();
+      if (!st) {
+        this.track.missFrames++;
+        if (this.track.missFrames > 20) {
+          const label = this.track.label;
+          this.releaseTrack("TARGET LOST");
+          this.toast("warn", `TARGET LOST — <b>${label}</b> LEFT THE GRID`);
+        }
+      } else {
+        this.track.missFrames = 0;
+        this.trackVec.set(st.x, 0, st.z).sub(this.scene.controls.target).multiplyScalar(0.16);
+        this.scene.controls.target.add(this.trackVec);
+        this.scene.camera.position.add(this.trackVec);
+        const zone = this.zoneName(st.x, -st.z);
+        this.ui.trackLabel.textContent = `TRACKING ${this.track.label} · ${(st.speed * 3.6).toFixed(0)} KM/H · ${zone}`;
+      }
+    }
+
+    // incident markers
+    if (this.page === "map") {
+      while (this.incidentEls.length < this.incidentPts.length) {
+        const el = document.createElement("div");
+        el.className = "incident-marker";
+        el.textContent = "✕";
+        el.title = "Traffic incident — segment closed";
+        const idx = this.incidentEls.length;
+        el.addEventListener("click", () => {
+          const p = this.incidentPts[idx];
+          if (p) this.scene.flyTo(new THREE.Vector3(p.x, 0, -p.y), 1600, 900);
+        });
+        this.ui.markers.appendChild(el);
+        this.incidentEls.push(el);
+      }
+      this.incidentEls.forEach((el, i) => {
+        const p = this.incidentPts[i];
+        if (!p) {
+          el.style.display = "none";
+          return;
+        }
+        const vis = this.scene.project(p.x, 6, -p.y, this.tmpPt);
+        el.style.display = vis ? "" : "none";
+        if (vis) el.style.transform = `translate(${this.tmpPt.x.toFixed(1)}px, ${this.tmpPt.y.toFixed(1)}px) translate(-50%, -50%)`;
+      });
+    }
+
     // markers
     if (this.page === "map") {
       for (const u of this.units) {
@@ -444,6 +589,19 @@ export class App {
     }
   }
 
+  private zoneName(x: number, y: number): string {
+    let best = "";
+    let bd = Infinity;
+    for (const d of this.data.meta.districts) {
+      const dd = (d.x - x) ** 2 + (d.y - y) ** 2;
+      if (dd < bd) {
+        bd = dd;
+        best = d.name;
+      }
+    }
+    return best.toUpperCase();
+  }
+
   private healthHistCache = new Map<string, number[]>();
   private healthHist(u: UnitRuntime): number[] {
     let h = this.healthHistCache.get(u.def.id);
@@ -464,6 +622,7 @@ export class App {
       ["Active tracks", fmtInt(m.active), `PEAK TARGET ${fmtInt(this.density)}`],
       ["Bike tracks", fmtInt(m.bikes)],
       ["Pedestrians", fmtInt(m.walkers)],
+      ["Transit units", fmtInt(this.layers.transit.vehicleCount), `${fmtInt(this.data.transit.length)} ROUTES`],
       ["Flow rate", `${fmtInt(m.throughputMin)}<span class="u"> TRIPS/MIN</span>`],
       ["Mean speed", `${m.avgSpeedKmh.toFixed(1)}<span class="u"> KM/H</span>`],
       ["Queued", fmtInt(m.queued), `${((m.queued / Math.max(1, m.active)) * 100).toFixed(0)}% OF TRACKS`],
@@ -525,7 +684,7 @@ export class App {
         <div class="ov-title">Structures & hydro</div>
         ${line("Structures", fmtInt(c.buildings))}
         ${line("Hydro polygons", fmtInt(c.waterPolys))}
-        ${line("Rail segments", fmtInt(c.railWays))}
+        ${line("Transit routes", fmtInt(this.data.transit.length))}
         ${line("Observation districts", fmtInt(this.data.meta.districts.length))}
       </div>
       <div class="ov-col">

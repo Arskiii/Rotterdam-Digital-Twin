@@ -87,8 +87,10 @@ class AgentMesh {
   mesh: THREE.InstancedMesh;
   capacity: number;
   cursor = 0;
+  ids: Int32Array; // instance index → agent id (for picking)
 
   constructor(capacity: number, w: number, h: number, dpt: number) {
+    this.ids = new Int32Array(capacity).fill(-1);
     this.capacity = capacity;
     const geo = new THREE.BoxGeometry(w, h, dpt);
     geo.translate(0, h / 2 + 0.25, 0);
@@ -123,8 +125,9 @@ export class VehiclesLayer {
   /**
    * data: [x, y(north), heading, k]; k = speed01 + (tunnel?2:0) + mode*4.
    * viewScale inflates instances at far zoom so tracks stay readable.
+   * agentIds (optional) map rendered agents to worker ids for picking.
    */
-  update(data: Float32Array, count: number, viewScale = 1) {
+  update(data: Float32Array, count: number, viewScale = 1, agentIds?: Int32Array) {
     this.cars.cursor = 0;
     this.bikes.cursor = 0;
     this.peds.cursor = 0;
@@ -146,6 +149,7 @@ export class VehiclesLayer {
       this.dummy.scale.set(s, 1, s);
       this.dummy.updateMatrix();
       const idx = target.cursor++;
+      target.ids[idx] = agentIds ? agentIds[i] : -1;
       target.mesh.setMatrixAt(idx, this.dummy.matrix);
       const slow = 1 - k;
       let r: number, g: number, b: number;
