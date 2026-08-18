@@ -1,0 +1,119 @@
+{
+ "version": 2,
+ "origin": {
+  "lat": 51.92,
+  "lon": 4.48
+ },
+ "extent": {
+  "minX": -10141.382470114395,
+  "minY": -9890.888529600446,
+  "maxX": 10545.056303347485,
+  "maxY": 9641.555216999997
+ },
+ "counts": {
+  "roadWays": 51234,
+  "roadKm": 5093,
+  "graphNodes": 40349,
+  "graphEdges": 50769,
+  "signalsInventory": 4349,
+  "signalsOnNetwork": 2421,
+  "signalClusters": 584,
+  "junctions": 556,
+  "crossings": 28,
+  "waterPolys": 7032,
+  "railWays": 1889,
+  "buildings": 264642
+ },
+ "districts": [
+  {
+   "key": "centrum",
+   "name": "Centrum",
+   "x": -41.2,
+   "y": 44.2
+  },
+  {
+   "key": "noord",
+   "name": "Noord",
+   "x": -652.2,
+   "y": 1603.3
+  },
+  {
+   "key": "delfshaven",
+   "name": "Delfshaven",
+   "x": -3000.3,
+   "y": -1194.2
+  },
+  {
+   "key": "overschie",
+   "name": "Overschie",
+   "x": -3645.7,
+   "y": 2333.1
+  },
+  {
+   "key": "hillegersberg",
+   "name": "Hillegersberg-Schiebroek",
+   "x": -144.2,
+   "y": 4036
+  },
+  {
+   "key": "kralingen",
+   "name": "Kralingen-Crooswijk",
+   "x": 2437.4,
+   "y": 630.3
+  },
+  {
+   "key": "alexander",
+   "name": "Prins Alexander",
+   "x": 4648.1,
+   "y": 3903.3
+  },
+  {
+   "key": "feijenoord",
+   "name": "Feijenoord",
+   "x": 1730.2,
+   "y": -2344.2
+  },
+  {
+   "key": "ijsselmonde",
+   "name": "IJsselmonde",
+   "x": 4346,
+   "y": -3836.9
+  },
+  {
+   "key": "charlois",
+   "name": "Charlois",
+   "x": -693.4,
+   "y": -4456.1
+  },
+  {
+   "key": "waalhaven",
+   "name": "Waalhaven-Eemhaven",
+   "x": -4263.7,
+   "y": -3339.3
+  },
+  {
+   "key": "pernis",
+   "name": "Pernis",
+   "x": -6282.2,
+   "y": -3704.2
+  },
+  {
+   "key": "hoogvliet",
+   "name": "Hoogvliet",
+   "x": -8081,
+   "y": -6280.6
+  },
+  {
+   "key": "schiedam",
+   "name": "Schiedam",
+   "x": -5554.4,
+   "y": -154.8
+  },
+  {
+   "key": "capelle",
+   "name": "Capelle a/d IJssel",
+   "x": 6701,
+   "y": 1072.6
+  }
+ ]
+}

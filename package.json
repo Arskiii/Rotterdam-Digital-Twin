@@ -1,21 +1,24 @@
 {
-  "name": "rotterdam-digital-twin",
+  "name": "rotterdam-intelligence-platform",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "A 3D digital twin of Rotterdam — v1: traffic light optimization on a fictional grid.",
+  "description": "Rotterdam Intelligence Platform — city-wide 3D traffic simulation on the real OSM street network",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "fetch-data": "node scripts/fetch-osm.mjs",
+    "build-data": "node scripts/build-data.mjs"
   },
   "dependencies": {
-    "lil-gui": "^0.19.2",
+    "earcut": "^3.2.3",
     "three": "^0.166.1"
   },
   "devDependencies": {
+    "@types/earcut": "^2.1.4",
     "@types/three": "^0.166.0",
-    "typescript": "^5.5.4",
-    "vite": "^5.4.2"
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21"
   }
 }
