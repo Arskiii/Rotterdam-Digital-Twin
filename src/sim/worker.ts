@@ -705,6 +705,7 @@ function sendMetrics() {
     congestionIndex: congN ? congSum / congN : 0,
     greensNow: greens,
     incidents: incidents.length,
+    incidentPts: incidents.map((i) => ({ x: i.x, y: i.y })),
     districts: dists,
   };
   post(msg);
@@ -759,6 +760,8 @@ function tick() {
   // frame out
   const total = activeByMode[0] + activeByMode[1] + activeByMode[2];
   const vbuf = new Float32Array(total * 4);
+  const ibuf = new Int32Array(total);
+  const spbuf = new Float32Array(total);
   let vi = 0;
   for (let id = 0; id < MAXV && vi < total; id++) {
     if (!vAlive[id]) continue;
@@ -797,10 +800,15 @@ function tick() {
     vbuf[vi * 4 + 1] = y + oy;
     vbuf[vi * 4 + 2] = Math.atan2(hy, hx);
     vbuf[vi * 4 + 3] = Math.min(1, vV[id] / Math.max(mode === 2 ? 1.6 : 3, modeSpeed(d, mode))) + (tunnel ? 2 : 0) + mode * 4;
+    ibuf[vi] = id;
+    spbuf[vi] = vV[id];
     vi++;
   }
   const sbuf = sigState.slice();
-  post({ type: "frame", vehicles: vbuf.buffer, count: vi, signals: sbuf.buffer, clockMin }, [vbuf.buffer, sbuf.buffer]);
+  post(
+    { type: "frame", vehicles: vbuf.buffer, ids: ibuf.buffer, speeds: spbuf.buffer, count: vi, signals: sbuf.buffer, clockMin },
+    [vbuf.buffer, ibuf.buffer, spbuf.buffer, sbuf.buffer]
+  );
 
   if (now - lastMetrics > 1500) {
     lastMetrics = now;

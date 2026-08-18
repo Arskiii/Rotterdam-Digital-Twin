@@ -18,6 +18,7 @@ export interface Meta {
     waterPolys: number;
     railWays: number;
     buildings: number;
+    transitRoutes?: number;
   };
   districts: { key: string; name: string; x: number; y: number }[];
 }
@@ -75,6 +76,14 @@ export interface BuildingTile {
   totalTris: number;
 }
 
+export interface TransitRoute {
+  kind: number; // 0 tram, 1 metro
+  ref: string;
+  pts: Float32Array; // x,y pairs
+  tunnel: Uint8Array; // per point
+  stops: Float32Array; // arc-length positions
+}
+
 export interface CityData {
   meta: Meta;
   roads: PolylineSet;
@@ -83,6 +92,7 @@ export interface CityData {
   graphBuffer: ArrayBuffer; // raw copy for the sim worker
   water: { verts: Float32Array; tris: Uint32Array };
   buildings: BuildingTile[];
+  transit: TransitRoute[];
 }
 
 async function fetchBuf(url: string, onProgress: (frac: number) => void): Promise<ArrayBuffer> {
@@ -290,6 +300,29 @@ function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
   return tiles;
 }
 
+function parseTransit(buf: ArrayBuffer): TransitRoute[] {
+  const r = new Reader(buf);
+  if (r.u32() !== 0x544d5452) throw new Error("bad transit magic");
+  const count = r.u32();
+  const routes: TransitRoute[] = [];
+  for (let i = 0; i < count; i++) {
+    const kind = r.u8();
+    const refLen = r.u8();
+    let ref = "";
+    for (let k = 0; k < refLen; k++) ref += String.fromCharCode(r.u8());
+    const n = r.u16();
+    const nStops = r.u16();
+    const pts = new Float32Array(n * 2);
+    for (let k = 0; k < n * 2; k++) pts[k] = r.f32();
+    const tunnel = new Uint8Array(n);
+    for (let k = 0; k < n; k++) tunnel[k] = r.u8();
+    const stops = new Float32Array(nStops);
+    for (let k = 0; k < nStops; k++) stops[k] = r.f32();
+    routes.push({ kind, ref, pts, tunnel, stops });
+  }
+  return routes;
+}
+
 export type ProgressFn = (stage: "grid" | "signals" | "structures" | "sim", frac: number) => void;
 
 export async function loadCity(base: string, onProgress: ProgressFn): Promise<CityData> {
@@ -305,6 +338,15 @@ export async function loadCity(base: string, onProgress: ProgressFn): Promise<Ci
     fetchBuf(`${base}buildings.bin`, (f) => onProgress("structures", f * 0.55)),
   ]);
 
+  // transit is optional — older data mirrors may not carry it
+  let transit: TransitRoute[] = [];
+  try {
+    const res = await fetch(`${base}transit.bin`);
+    if (res.ok) transit = parseTransit(await res.arrayBuffer());
+  } catch {
+    /* run without transit */
+  }
+
   const roads = parsePolylines(roadsBuf, 0x524d5452);
   onProgress("grid", 0.9);
   const graph = parseGraph(graphBuf);
@@ -315,5 +357,5 @@ export async function loadCity(base: string, onProgress: ProgressFn): Promise<Ci
   const buildings = parseBuildings(bldBuf);
   onProgress("structures", 0.7);
 
-  return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings };
+  return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings, transit };
 }

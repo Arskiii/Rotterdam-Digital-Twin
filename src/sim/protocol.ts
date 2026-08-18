@@ -36,6 +36,8 @@ export interface FrameMsg {
   // Float32Array [x, y, heading, k] — k = speed01 + (tunnel ? 2 : 0) + mode * 4
   // mode: 0 car, 1 bike, 2 pedestrian
   vehicles: ArrayBuffer;
+  ids: ArrayBuffer; // Int32Array agent id per rendered agent (stable while alive)
+  speeds: ArrayBuffer; // Float32Array m/s per rendered agent
   count: number;
   signals: ArrayBuffer; // Uint8Array per signal head: 0 red, 1 amber, 2 green, 3 off
   clockMin: number; // time of day, minutes
@@ -63,6 +65,7 @@ export interface MetricsMsg {
   congestionIndex: number; // network-wide 0..1
   greensNow: number;
   incidents: number;
+  incidentPts: { x: number; y: number }[];
   districts: DistrictStat[];
 }
 

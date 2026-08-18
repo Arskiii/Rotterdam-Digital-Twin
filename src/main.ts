@@ -4,6 +4,7 @@ import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
 import { buildCity, syncFog } from "./render/city";
 import { SignalsLayer, VehiclesLayer, CongestionLayer } from "./render/dynamic";
+import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
 import { App } from "./ui/app";
 
@@ -49,7 +50,8 @@ async function boot() {
   const signals = new SignalsLayer(data.graph);
   const vehicles = new VehiclesLayer();
   const congestion = new CongestionLayer(data.graph);
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines);
+  const transit = new TransitLayer(data.transit);
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group);
 
   paintBoot("sim", 0.2);
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -75,7 +77,7 @@ async function boot() {
   });
   paintBoot("sim", 1);
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion }, worker);
+  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit }, worker);
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);
@@ -87,8 +89,12 @@ async function boot() {
 
   const fpsBox = { frames: 0, t0: performance.now() };
   const lineMat = meshes.roadLines.material as THREE.LineBasicMaterial;
+  let lastNow = performance.now();
   function loop(now: number) {
     requestAnimationFrame(loop);
+    const realDt = Math.min(0.1, (now - lastNow) / 1000);
+    lastNow = now;
+    transit.update(app.paused ? 0 : realDt * app.simSpeed);
     scene.update();
     syncFog(scene.fog);
     const waterMat = (meshes.water.material as THREE.ShaderMaterial).uniforms;
