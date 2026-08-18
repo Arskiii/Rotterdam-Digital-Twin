@@ -48,6 +48,14 @@ export class App {
   lastFrame: { data: Float32Array; ids: Int32Array; speeds: Float32Array; count: number } | null = null;
   incidentEls: HTMLElement[] = [];
   incidentPts: { x: number; y: number }[] = [];
+  clockMin = 8 * 60;
+  // street-intel spatial index (built lazily from graph geometry)
+  private streetGrid: { cellOff: Int32Array; list: Int32Array; xy: Float32Array; edge: Uint32Array; minX: number; minY: number; nx: number; ny: number } | null = null;
+  private hoverPx = { x: -1, y: -1 };
+  private streetChip: HTMLElement;
+  // tracked-target trail
+  private trail: THREE.Line;
+  private trailPts: number[] = [];
 
   constructor(
     public ui: Chrome,
@@ -58,6 +66,23 @@ export class App {
     public worker: Worker
   ) {
     this.drone = new DroneViewer(ui.droneCanvas);
+
+    this.streetChip = document.createElement("div");
+    this.streetChip.id = "street-chip";
+    ui.hud.appendChild(this.streetChip);
+
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(600 * 3), 3));
+    trailGeo.setAttribute("color", new THREE.BufferAttribute(new Float32Array(600 * 3), 3));
+    trailGeo.setDrawRange(0, 0);
+    this.trail = new THREE.Line(
+      trailGeo,
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })
+    );
+    this.trail.frustumCulled = false;
+    this.trail.renderOrder = 6;
+    scene.scene.add(this.trail);
+
     this.buildUnits();
     this.buildBriefPage();
     this.buildSetupPage();
@@ -266,6 +291,14 @@ export class App {
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
       this.tryAcquireTrack(e.clientX, e.clientY);
     });
+    this.ui.viewport.addEventListener("pointermove", (e) => {
+      const rect = this.scene.renderer.domElement.getBoundingClientRect();
+      this.hoverPx.x = e.clientX - rect.left;
+      this.hoverPx.y = e.clientY - rect.top;
+    });
+    this.ui.viewport.addEventListener("pointerleave", () => {
+      this.hoverPx.x = -1;
+    });
     ui.trackRelease.addEventListener("click", () => this.releaseTrack("RELEASED BY OPERATOR"));
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape" && this.track) this.releaseTrack("RELEASED BY OPERATOR");
@@ -316,6 +349,8 @@ export class App {
     }
     if (!best) return;
     this.track = { ...best, missFrames: 0 };
+    this.trailPts.length = 0;
+    this.trail.geometry.setDrawRange(0, 0);
     this.ui.trackChip.classList.add("on");
     this.log("ok", `TARGET ACQUIRED — ${best.label} UNDER CAMERA LOCK`);
   }
@@ -325,6 +360,8 @@ export class App {
     this.log("info", `TRACK ${this.track.label} ENDED — ${reason}`);
     this.track = null;
     this.ui.trackChip.classList.remove("on");
+    this.trailPts.length = 0;
+    this.trail.geometry.setDrawRange(0, 0);
   }
 
   /** Position/speed of the tracked entity in world coords, or null if gone. */
@@ -408,6 +445,7 @@ export class App {
         const ids = new Int32Array(msg.ids);
         const speeds = new Float32Array(msg.speeds);
         this.lastFrame = { data, ids, speeds, count: msg.count };
+        this.clockMin = msg.clockMin;
         this.layers.vehicles.update(data, msg.count, this.scene.distance / 950, ids);
         this.layers.signals.update(new Uint8Array(msg.signals));
         break;
@@ -460,7 +498,54 @@ export class App {
         this.scene.camera.position.add(this.trackVec);
         const zone = this.zoneName(st.x, -st.z);
         this.ui.trackLabel.textContent = `TRACKING ${this.track.label} · ${(st.speed * 3.6).toFixed(0)} KM/H · ${zone}`;
+
+        // breadcrumb trail
+        const tp = this.trailPts;
+        const n = tp.length / 2;
+        if (n === 0 || Math.hypot(st.x - tp[(n - 1) * 2], st.z - tp[(n - 1) * 2 + 1]) > 2.5) {
+          tp.push(st.x, st.z);
+          if (tp.length > 600 * 2) tp.splice(0, 2);
+          const pos = this.trail.geometry.getAttribute("position") as THREE.BufferAttribute;
+          const col = this.trail.geometry.getAttribute("color") as THREE.BufferAttribute;
+          const m = tp.length / 2;
+          for (let i = 0; i < m; i++) {
+            pos.setXYZ(i, tp[i * 2], 1.6, tp[i * 2 + 1]);
+            const t = Math.pow(i / Math.max(1, m - 1), 1.6);
+            col.setXYZ(i, t, t * 0.72, t * 0.34);
+          }
+          pos.needsUpdate = true;
+          col.needsUpdate = true;
+          this.trail.geometry.setDrawRange(0, m);
+        }
       }
+    }
+
+    // street-intel readout: tracked target's street, else the hovered street
+    if (this.page === "map") {
+      let text = "";
+      if (this.track) {
+        const st = this.trackState();
+        if (st) {
+          const e = this.nearestEdge(st.x, -st.z, 40);
+          if (e >= 0) text = this.streetInfo(e);
+        }
+      } else if (this.hoverPx.x >= 0 && this.scene.distance < 8000) {
+        const el = this.scene.renderer.domElement;
+        const ndcX = (this.hoverPx.x / el.clientWidth) * 2 - 1;
+        const ndcY = -(this.hoverPx.y / el.clientHeight) * 2 + 1;
+        this.trackVec.set(ndcX, ndcY, 0.5).unproject(this.scene.camera).sub(this.scene.camera.position).normalize();
+        if (this.trackVec.y < -0.05) {
+          const t = -this.scene.camera.position.y / this.trackVec.y;
+          const wx = this.scene.camera.position.x + this.trackVec.x * t;
+          const wz = this.scene.camera.position.z + this.trackVec.z * t;
+          const e = this.nearestEdge(wx, -wz, 26);
+          if (e >= 0) text = this.streetInfo(e);
+        }
+      }
+      this.streetChip.textContent = text;
+      this.streetChip.style.display = text ? "" : "none";
+    } else {
+      this.streetChip.style.display = "none";
     }
 
     // incident markers
@@ -589,6 +674,87 @@ export class App {
     }
   }
 
+  // ---------- street intelligence ----------
+  private static CLASS_LABEL = ["MOTORWAY", "TRUNK", "PRIMARY", "SECONDARY", "TERTIARY", "STREET", "SERVICE", "PEDESTRIAN", "CYCLEWAY", "FOOTPATH"];
+
+  private buildStreetGrid() {
+    const g = this.data.graph;
+    const CELL = 72;
+    const ext = this.data.meta.extent;
+    const minX = ext.minX, minY = ext.minY;
+    const nx = Math.ceil((ext.maxX - minX) / CELL) + 1;
+    const ny = Math.ceil((ext.maxY - minY) / CELL) + 1;
+    // sample every 2nd geometry point per edge (plus endpoints)
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const es: number[] = [];
+    for (let e = 0; e < g.edges.count; e++) {
+      const off = g.edges.geoOff[e];
+      const n = g.edges.geoCount[e];
+      for (let k = 0; k < n; k += 2) {
+        xs.push(g.geo[(off + k) * 2]);
+        ys.push(g.geo[(off + k) * 2 + 1]);
+        es.push(e);
+      }
+    }
+    const cellOf = (x: number, y: number) =>
+      Math.min(ny - 1, Math.max(0, Math.floor((y - minY) / CELL))) * nx +
+      Math.min(nx - 1, Math.max(0, Math.floor((x - minX) / CELL)));
+    const counts = new Int32Array(nx * ny + 1);
+    for (let i = 0; i < xs.length; i++) counts[cellOf(xs[i], ys[i]) + 1]++;
+    for (let i = 0; i < nx * ny; i++) counts[i + 1] += counts[i];
+    const list = new Int32Array(xs.length);
+    const cursor = counts.slice(0, nx * ny);
+    for (let i = 0; i < xs.length; i++) list[cursor[cellOf(xs[i], ys[i])]++] = i;
+    this.streetGrid = {
+      cellOff: counts,
+      list,
+      xy: Float32Array.from(xs.flatMap((x, i) => [x, ys[i]])),
+      edge: Uint32Array.from(es),
+      minX,
+      minY,
+      nx,
+      ny,
+    };
+  }
+
+  /** Nearest routable edge to a data-coords point, within maxDist meters. */
+  nearestEdge(x: number, y: number, maxDist = 30): number {
+    if (!this.streetGrid) this.buildStreetGrid();
+    const gr = this.streetGrid!;
+    const CELL = 72;
+    const cx = Math.floor((x - gr.minX) / CELL);
+    const cy = Math.floor((y - gr.minY) / CELL);
+    let best = -1;
+    let bd = maxDist * maxDist;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const gx = cx + dx, gy = cy + dy;
+        if (gx < 0 || gy < 0 || gx >= gr.nx || gy >= gr.ny) continue;
+        const c = gy * gr.nx + gx;
+        for (let i = gr.cellOff[c]; i < gr.cellOff[c + 1]; i++) {
+          const s = gr.list[i];
+          const d = (gr.xy[s * 2] - x) ** 2 + (gr.xy[s * 2 + 1] - y) ** 2;
+          if (d < bd) {
+            bd = d;
+            best = gr.edge[s];
+          }
+        }
+      }
+    }
+    return best;
+  }
+
+  streetInfo(edge: number): string {
+    const g = this.data.graph;
+    const name = g.names[g.edges.nameIdx[edge]] ?? "UNKNOWN";
+    const cls = App.CLASS_LABEL[g.edges.cls[edge]] ?? "";
+    const speed = g.edges.speed[edge];
+    const district = DISTRICTS[g.edges.district[edge]]?.name ?? "";
+    const speedPart = g.edges.cls[edge] <= 6 ? ` · ${speed} KM/H` : "";
+    return `${name.toUpperCase()} · ${cls}${speedPart} · ${district.toUpperCase()}`;
+  }
+
   private zoneName(x: number, y: number): string {
     let best = "";
     let bd = Infinity;
@@ -632,12 +798,23 @@ export class App {
       ["Sim clock", fmtSimClock(m.clockMin), `DAY COMPRESSION 72×`],
       ["Completed trips", fmtInt(m.completed)],
     ];
+    const SPARKS: Record<string, () => number[]> = {
+      "Active tracks": () => this.cityHistory.map((h) => h.active),
+      "Mean speed": () => this.cityHistory.map((h) => h.speed),
+      "Congestion idx": () => this.cityHistory.map((h) => h.cong),
+    };
     this.ui.statsRow.innerHTML = cards
       .map(
         ([k, v, s]) =>
-          `<div class="stat-card"><div class="k">${k}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`
+          `<div class="stat-card"><div class="k">${k}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ""}${
+            SPARKS[k] ? `<canvas class="stat-spark" data-spark="${k}"></canvas>` : ""
+          }</div>`
       )
       .join("");
+    this.ui.statsRow.querySelectorAll<HTMLCanvasElement>("canvas[data-spark]").forEach((cv) => {
+      const series = SPARKS[cv.dataset.spark!]?.().slice(-160) ?? [];
+      if (series.length > 2) drawSparkline(cv, series, { min: 0, grid: false });
+    });
   }
 
   // ---------- dock: district table ----------
@@ -773,7 +950,7 @@ export class App {
     const kpi = (k: string, v: string, s?: string) =>
       `<div class="panel kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s ?? ""}</div></div>`;
     grid.innerHTML = [
-      kpi("Active tracks", m ? fmtInt(m.active) : "—", m ? `${fmtInt(m.completed)} TRIPS COMPLETED` : ""),
+      kpi("Active tracks", m ? fmtInt(m.active) : "—", m ? `${fmtInt(m.bikes)} BIKES · ${fmtInt(m.walkers)} PEDS · ${fmtInt(this.layers.transit.vehicleCount)} TRANSIT` : ""),
       kpi("Network speed", m ? `${m.avgSpeedKmh.toFixed(1)}<span class="u"> KM/H</span>` : "—", m ? `${fmtInt(m.queued)} QUEUED` : ""),
       kpi("Congestion index", m ? `${Math.round(m.congestionIndex * 100)}<span class="u">%</span>` : "—", m && m.congestionIndex > 0.4 ? "ELEVATED" : "NOMINAL"),
       kpi("Signal grid", `${fmtInt(c.signalsInventory)}`, `${fmtInt(c.junctions)} JUNCTIONS · ${m ? fmtInt(m.greensNow) : "—"} GREEN`),
@@ -844,7 +1021,11 @@ export class App {
             <div class="seg" id="su-speed">
               <button data-v="0">Pause</button><button data-v="1" class="on">1×</button><button data-v="2">2×</button><button data-v="4">4×</button><button data-v="8">8×</button>
             </div></div>
-          <div class="field"><div class="f-label"><span>Signal cycle scale</span><b id="su-cycle-v">1.00×</b></div>
+          <div class="field"><div class="f-label"><span>Signal program</span></div>
+            <div class="seg" id="su-signal">
+              <button data-v="actuated" class="on">Actuated</button><button data-v="fixed">Fixed-time</button>
+            </div></div>
+          <div class="field"><div class="f-label"><span>Cycle / max-green scale</span><b id="su-cycle-v">1.00×</b></div>
             <input id="su-cycle" type="range" min="60" max="160" value="100"></div>
           <div class="field"><div class="f-label"><span>Sim time of day</span><b id="su-tod-v">08:12</b></div>
             <input id="su-tod" type="range" min="0" max="1439" value="492"></div>
@@ -891,6 +1072,14 @@ export class App {
         this.simSpeed = Math.max(1, v);
         this.worker.postMessage({ type: "params", running: v > 0, simSpeed: Math.max(1, v) });
         this.log("info", v === 0 ? "SIM CORE PAUSED BY OPERATOR" : `PHYSICS RATE SET TO ${v}×`);
+      })
+    );
+    $("su-signal").querySelectorAll("button").forEach((b) =>
+      b.addEventListener("click", () => {
+        $("su-signal").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+        const program = b.dataset.v as "actuated" | "fixed";
+        this.worker.postMessage({ type: "params", signalProgram: program });
+        this.log("info", `SIGNAL PROGRAM SET TO ${program.toUpperCase()} — ${program === "actuated" ? "DEMAND-RESPONSIVE GREEN EXTENSION" : "FIXED-TIME TWO-PHASE"}`);
       })
     );
     const cyc = $<HTMLInputElement>("su-cycle");
