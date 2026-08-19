@@ -92,8 +92,10 @@ let ndwEdgeFlow: Map<number, number> | null = null;
 let ndwTodMin = 0;
 let ndwCounts: Map<number, number> | null = null; // sim vehicle-passes per matched edge
 let ndwWindowStartSim = 0;
-let ndwSimVehH = 0; // smoothed
+let ndwSimVehH = 0; // smoothed aggregate
 let ndwStations = 0;
+let ndwOrder: Int32Array | null = null; // station index → edge (NdwMsg order)
+let ndwStationFlow: Float32Array | null = null; // smoothed sim veh/h per station
 
 // params
 let targetDensity = 5200;
@@ -986,24 +988,32 @@ function sendMetrics() {
   // NDW calibration: compare simulated flow on measured edges against the
   // real counts, normalized to the current sim time of day via the demand curve
   let calibration: MetricsMsg["calibration"];
-  if (ndwEdgeFlow && ndwCounts) {
+  if (ndwEdgeFlow && ndwCounts && ndwOrder && ndwStationFlow) {
     const elapsed = simTime - ndwWindowStartSim;
     if (elapsed >= 60) {
       let passes = 0;
       for (const v of ndwCounts.values()) passes += v;
       const vehH = (passes * 3600) / elapsed;
       ndwSimVehH = ndwSimVehH === 0 ? vehH : ndwSimVehH * 0.6 + vehH * 0.4;
+      for (let i = 0; i < ndwOrder.length; i++) {
+        const c = ndwCounts.get(ndwOrder[i]) ?? 0;
+        const sVehH = (c * 3600) / elapsed;
+        ndwStationFlow[i] = ndwStationFlow[i] === 0 ? sVehH : ndwStationFlow[i] * 0.6 + sVehH * 0.4;
+      }
       for (const k of ndwCounts.keys()) ndwCounts.set(k, 0);
       ndwWindowStartSim = simTime;
     }
     let realTotal = 0;
     for (const f of ndwEdgeFlow.values()) realTotal += f;
-    const realNow = realTotal * (demand(clockMin) / Math.max(0.05, demand(ndwTodMin)));
+    const demandNorm = demand(clockMin) / Math.max(0.05, demand(ndwTodMin));
+    const realNow = realTotal * demandNorm;
     calibration = {
       stations: ndwStations,
       simVehH: Math.round(ndwSimVehH),
       realVehH: Math.round(realNow),
       ratio: realNow > 0 && ndwSimVehH > 0 ? ndwSimVehH / realNow : 0,
+      demandNorm,
+      stationFlows: Array.from(ndwStationFlow),
     };
   }
 
@@ -1041,8 +1051,10 @@ function tick() {
   let dt = real * simSpeed;
   clockMin = (clockMin + (real * CLOCK_RATE * simSpeed) / 60) % 1440;
 
+  // larger substeps at high physics rates keep 12k+ agents affordable
+  const maxStep = simSpeed >= 4 ? 0.1 : 0.055;
   while (dt > 0) {
-    const h = Math.min(0.055, dt);
+    const h = Math.min(maxStep, dt);
     simTime += h;
     updateSignals(h);
     stepVehicles(h);
@@ -1182,12 +1194,15 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
   } else if (msg.type === "ndw") {
     ndwEdgeFlow = new Map();
     ndwCounts = new Map();
-    for (const s of msg.stations) {
+    ndwOrder = new Int32Array(msg.stations.length).fill(-1);
+    ndwStationFlow = new Float32Array(msg.stations.length);
+    msg.stations.forEach((s, i) => {
       if (s.edge >= 0 && s.edge < G.edges.count) {
-        ndwEdgeFlow.set(s.edge, s.flow);
-        ndwCounts.set(s.edge, 0);
+        ndwEdgeFlow!.set(s.edge, s.flow);
+        ndwCounts!.set(s.edge, 0);
+        ndwOrder![i] = s.edge;
       }
-    }
+    });
     ndwStations = ndwEdgeFlow.size;
     ndwTodMin = msg.todMin;
     ndwWindowStartSim = simTime;

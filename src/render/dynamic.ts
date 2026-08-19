@@ -190,36 +190,75 @@ export class VehiclesLayer {
   }
 }
 
-/** NDW loop-detector stations: small cyan diamonds. */
-export function buildNdwLayer(stations: { x: number; y: number }[]): THREE.Points {
-  const pos = new Float32Array(stations.length * 3);
-  stations.forEach((s, i) => {
-    pos[i * 3] = s.x;
-    pos[i * 3 + 1] = 4;
-    pos[i * 3 + 2] = -s.y;
-  });
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-  const mat = new THREE.ShaderMaterial({
-    transparent: true,
-    depthWrite: false,
-    vertexShader: /* glsl */ `
-      void main() {
-        vec4 mv = modelViewMatrix * vec4(position, 1.0);
-        gl_PointSize = clamp(2200.0 / -mv.z, 2.0, 7.0);
-        gl_Position = projectionMatrix * mv;
-      }`,
-    fragmentShader: /* glsl */ `
-      void main() {
-        vec2 uv = abs(gl_PointCoord - 0.5);
-        if (uv.x + uv.y > 0.5) discard; // diamond
-        gl_FragColor = vec4(0.31, 0.76, 0.91, 0.85);
-      }`,
-  });
-  const pts = new THREE.Points(geo, mat);
-  pts.frustumCulled = false;
-  pts.renderOrder = 5;
-  return pts;
+/**
+ * NDW loop-detector stations as diamonds, colored by how the sim's flow at
+ * each station compares to the network-wide representation ratio:
+ * cyan ≈ proportional · red = locally under-represented · amber = over.
+ */
+export class NdwLayer {
+  points: THREE.Points;
+  private colors: Uint8Array;
+
+  constructor(public stations: { x: number; y: number; flow: number }[]) {
+    const n = stations.length;
+    const pos = new Float32Array(n * 3);
+    this.colors = new Uint8Array(n * 3);
+    stations.forEach((s, i) => {
+      pos[i * 3] = s.x;
+      pos[i * 3 + 1] = 4;
+      pos[i * 3 + 2] = -s.y;
+      this.colors[i * 3] = 79;
+      this.colors[i * 3 + 1] = 194;
+      this.colors[i * 3 + 2] = 232;
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.colors, 3, true));
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 color;
+        varying vec3 vC;
+        void main() {
+          vC = color;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(2200.0 / -mv.z, 2.2, 8.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying vec3 vC;
+        void main() {
+          vec2 uv = abs(gl_PointCoord - 0.5);
+          if (uv.x + uv.y > 0.5) discard; // diamond
+          gl_FragColor = vec4(vC, 0.88);
+        }`,
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 5;
+  }
+
+  /** stationFlows: sim veh/h per station; demandNorm scales capture flows to "now". */
+  update(stationFlows: number[], demandNorm: number, globalRatio: number) {
+    if (globalRatio <= 0) return;
+    const c = this.colors;
+    for (let i = 0; i < this.stations.length && i < stationFlows.length; i++) {
+      const expected = this.stations[i].flow * demandNorm;
+      let r = 79, g = 194, b = 232; // cyan: proportional
+      if (expected < 200) {
+        r = 70; g = 82; b = 88; // too little real signal
+      } else {
+        const rel = stationFlows[i] / expected / globalRatio;
+        if (rel < 0.45) { r = 238; g = 78; b = 74; } // locally starved
+        else if (rel > 1.8) { r = 224; g = 172; b = 60; } // locally flooded
+      }
+      c[i * 3] = r;
+      c[i * 3 + 1] = g;
+      c[i * 3 + 2] = b;
+    }
+    (this.points.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+  }
 }
 
 export class CongestionLayer {

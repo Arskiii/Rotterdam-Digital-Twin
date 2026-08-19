@@ -6,7 +6,7 @@ import type { Chrome } from "./chrome";
 import { setMeter, barGlyphHTML } from "./chrome";
 import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
-import type { SignalsLayer, VehiclesLayer, CongestionLayer } from "../render/dynamic";
+import type { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "../render/dynamic";
 import type { TransitLayer } from "../render/transit";
 import { DroneViewer } from "../render/drone";
 import type { CityData } from "../data/loader";
@@ -60,6 +60,8 @@ export class App {
   private replayRange!: HTMLInputElement;
   private replayTime!: HTMLElement;
   private liveCong: Float32Array | null = null;
+  stationIdx: number | null = null;
+  private stationCard!: HTMLElement;
   // signal-program trial (A/B/C experiment)
   private trial: {
     stage: number;
@@ -86,7 +88,7 @@ export class App {
       congestion: CongestionLayer;
       transit: TransitLayer;
       districtLines: THREE.LineSegments;
-      ndwPoints: THREE.Points;
+      ndwLayer: NdwLayer;
     },
     public worker: Worker
   ) {
@@ -95,6 +97,10 @@ export class App {
     this.streetChip = document.createElement("div");
     this.streetChip.id = "street-chip";
     ui.hud.appendChild(this.streetChip);
+
+    this.stationCard = document.createElement("div");
+    this.stationCard.id = "station-card";
+    ui.hud.appendChild(this.stationCard);
 
     // replay scrubber
     this.replayBar = document.createElement("div");
@@ -146,6 +152,7 @@ export class App {
     this.buildSetupPage();
     this.buildOverview();
     this.wire();
+    this.restoreSettings();
     this.log("info", "UPLINK ESTABLISHED — SURVEILTRACK NODE 04 ONLINE");
     this.log("info", `CITY GRID LOADED — ${fmtInt(this.data.meta.counts.roadKm)} KM ROADWAY / ${fmtInt(this.data.meta.counts.signalsInventory)} SIGNAL UNITS`);
     this.selectUnit(this.units[0], false);
@@ -292,7 +299,10 @@ export class App {
       ui.layersBtn.classList.toggle("on", ui.layersPop.classList.contains("open"));
     });
     ui.layerBoxes.forEach((box) =>
-      box.addEventListener("change", () => this.applyLayer(box.dataset.layer!, box.checked))
+      box.addEventListener("change", () => {
+        this.applyLayer(box.dataset.layer!, box.checked);
+        this.persistLayerStates();
+      })
     );
 
     // unit card tabs & details
@@ -391,6 +401,26 @@ export class App {
     let best: { kind: "agent" | "transit"; id: number; label: string } | null = null;
     let bd = RADIUS * RADIUS;
 
+    // a precise click on a sensor diamond wins over nearby moving agents
+    if (this.layers.ndwLayer.points.visible && this.data.ndw) {
+      let bi = -1;
+      let bd2 = 9 * 9;
+      for (let i = 0; i < this.data.ndw.stations.length; i++) {
+        const s = this.data.ndw.stations[i];
+        if (!this.scene.project(s.x, 4, -s.y, this.tmpPt)) continue;
+        const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
+        if (d < bd2) {
+          bd2 = d;
+          bi = i;
+        }
+      }
+      if (bi >= 0) {
+        this.stationIdx = bi;
+        this.renderStationCard();
+        return;
+      }
+    }
+
     const v = this.layers.vehicles;
     const f = this.lastFrame;
     if (f && v.cars.mesh.visible) {
@@ -421,12 +451,56 @@ export class App {
         }
       }
     }
-    if (!best) return;
+    if (!best) {
+      this.stationIdx = null;
+      this.stationCard.classList.remove("open");
+      return;
+    }
+    this.stationIdx = null;
+    this.stationCard.classList.remove("open");
     this.track = { ...best, missFrames: 0 };
     this.trailPts.length = 0;
     this.trail.geometry.setDrawRange(0, 0);
     this.ui.trackChip.classList.add("on");
     this.log("ok", `TARGET ACQUIRED — ${best.label} UNDER CAMERA LOCK`);
+  }
+
+  renderStationCard() {
+    const idx = this.stationIdx;
+    const ndw = this.data.ndw;
+    if (idx === null || !ndw) return;
+    const s = ndw.stations[idx];
+    const cal = this.metrics?.calibration;
+    const simFlow = cal?.stationFlows[idx] ?? 0;
+    const expected = cal ? s.flow * cal.demandNorm : 0;
+    const rel = cal && cal.ratio > 0 && expected > 0 ? simFlow / expected / cal.ratio : 0;
+    const relTxt =
+      expected < 200
+        ? `<span style="color:var(--text-faint)">LOW SIGNAL</span>`
+        : rel < 0.45
+          ? `<span style="color:var(--red)">${rel.toFixed(2)} — UNDER-REPRESENTED</span>`
+          : rel > 1.8
+            ? `<span style="color:var(--amber)">${rel.toFixed(2)} — OVER-REPRESENTED</span>`
+            : `<span style="color:var(--green)">${rel.toFixed(2)} — PROPORTIONAL</span>`;
+    const row = (k: string, v: string) =>
+      `<div style="display:flex;justify-content:space-between;gap:16px"><span style="color:var(--text-dim)">${k}</span><b>${v}</b></div>`;
+    this.stationCard.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">
+        <span style="font-size:9px;letter-spacing:.16em;color:var(--text-faint)">NDW STATION</span>
+        <button id="station-close" style="color:var(--text-dim);font-size:11px;padding:0 2px">✕</button>
+      </div>
+      <div style="font-weight:700;font-size:11.5px;margin-bottom:8px">${(s.name || "UNNAMED SITE").toUpperCase()}</div>
+      ${row("MEASURED @ CAPTURE", `${fmtInt(s.flow)} VEH/H`)}
+      ${row("EXPECTED NOW", cal ? `${fmtInt(expected)} VEH/H` : "—")}
+      ${row("SIMULATED NOW", cal ? `${fmtInt(simFlow)} VEH/H` : "MEASURING…")}
+      ${row("REL. INDEX", relTxt)}
+      ${row("MEASURED SPEED", s.speed > 0 ? `${s.speed.toFixed(0)} KM/H` : "—")}
+      ${row("LANES · CLASS", `${s.lanes} · ${App.CLASS_LABEL[s.cls] ?? "?"}`)}`;
+    this.stationCard.classList.add("open");
+    (this.stationCard.querySelector("#station-close") as HTMLButtonElement).addEventListener("click", () => {
+      this.stationIdx = null;
+      this.stationCard.classList.remove("open");
+    });
   }
 
   releaseTrack(reason: string) {
@@ -501,7 +575,7 @@ export class App {
         this.layers.districtLines.visible = on;
         this.districtLabels.forEach((l) => (l.style.display = on ? "" : "none"));
         break;
-      case "sensors": this.layers.ndwPoints.visible = on; break;
+      case "sensors": this.layers.ndwLayer.points.visible = on; break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles":
         this.layers.vehicles.cars.mesh.visible = on;
@@ -536,6 +610,10 @@ export class App {
         this.metrics = msg;
         this.incidentPts = msg.incidentPts ?? [];
         this.trialTick(msg);
+        if (msg.calibration && msg.calibration.ratio > 0) {
+          this.layers.ndwLayer.update(msg.calibration.stationFlows, msg.calibration.demandNorm, msg.calibration.ratio);
+          if (this.stationIdx !== null) this.renderStationCard();
+        }
         this.cityHistory.push({ active: msg.active, speed: msg.avgSpeedKmh, cong: msg.congestionIndex });
         if (this.cityHistory.length > 900) this.cityHistory.shift();
         msg.districts.forEach((d, i) => {
@@ -1168,8 +1246,13 @@ export class App {
   // ---------- BRIEF ----------
   private buildBriefPage() {
     this.ui.pageBrief.innerHTML = `
-      <h1>Intelligence Brief</h1>
-      <div class="sub">ROTTERDAM METRO AREA — LIVE TRAFFIC POSTURE &amp; NETWORK INTEGRITY</div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+        <div>
+          <h1>Intelligence Brief</h1>
+          <div class="sub">ROTTERDAM METRO AREA — LIVE TRAFFIC POSTURE &amp; NETWORK INTEGRITY</div>
+        </div>
+        <button class="action-btn" id="brief-sitrep">Copy SITREP</button>
+      </div>
       <div id="brief-grid"></div>
       <div id="brief-cols">
         <div class="panel">
@@ -1189,6 +1272,45 @@ export class App {
         <div class="p-title">District posture</div>
         <div id="brief-districts" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px 22px"></div>
       </div>`;
+    (this.ui.pageBrief.querySelector("#brief-sitrep") as HTMLButtonElement).addEventListener("click", () =>
+      this.copySitrep()
+    );
+  }
+
+  private copySitrep() {
+    const m = this.metrics;
+    if (!m) {
+      this.toast("warn", "SITREP UNAVAILABLE — SIM WARMING UP");
+      return;
+    }
+    const c = this.data.meta.counts;
+    const cal = m.calibration;
+    const topDistricts = m.districts
+      .map((d, i) => ({ name: DISTRICTS[i].name, cong: d.congestion }))
+      .sort((a, b) => b.cong - a.cong)
+      .slice(0, 3)
+      .map((d) => `${d.name} ${(d.cong * 100).toFixed(0)}%`)
+      .join(" · ");
+    const lines = [
+      `SURVEILTRACK SITREP — ROTTERDAM, NL`,
+      `${new Date().toISOString().slice(0, 16).replace("T", " ")}Z · SIM CLOCK ${fmtSimClock(m.clockMin)}`,
+      `─────────────────────────────────────`,
+      `TRACKS    ${fmtInt(m.active)} cars · ${fmtInt(m.trucks)} freight · ${fmtInt(m.bikes)} bikes · ${fmtInt(m.walkers)} pedestrians · ${fmtInt(this.layers.transit.vehicleCount)} transit`,
+      `FLOW      ${fmtInt(m.throughputMin)} trips/min · mean ${m.avgSpeedKmh.toFixed(1)} km/h · ${fmtInt(m.queued)} queued (${((m.queued / Math.max(1, m.active)) * 100).toFixed(0)}%)`,
+      `SIGNALS   ${fmtInt(m.greensNow)}/${fmtInt(c.signalsInventory)} heads green · ${fmtInt(c.junctions)} junctions under control`,
+      cal && cal.ratio > 0
+        ? `CALIB     ${(cal.ratio * 100).toFixed(1)}% of NDW measured flow · scale 1:${(1 / cal.ratio).toFixed(1)} · ${fmtInt(cal.stations)} stations`
+        : `CALIB     no sensor lock`,
+      `CONGEST   index ${(m.congestionIndex * 100).toFixed(0)}% · hottest: ${topDistricts}`,
+      `INCIDENTS ${fmtInt(m.incidents)} active`,
+      `GRID      ${fmtInt(c.roadKm)} km road · ${fmtInt(c.pathKm)} km paths · ${fmtInt(c.buildings)} structures`,
+    ];
+    const text = lines.join("\n");
+    navigator.clipboard
+      ?.writeText(text)
+      .then(() => this.toast("info", "<b>SITREP COPIED</b> TO CLIPBOARD"))
+      .catch(() => this.toast("warn", "CLIPBOARD BLOCKED — SITREP LOGGED TO MESSAGES"));
+    for (const l of lines) this.log("info", l);
   }
 
   private renderBrief() {
@@ -1350,6 +1472,7 @@ export class App {
       $("su-dens-v").textContent = fmtInt(+dens.value);
       this.density = +dens.value;
       this.worker.postMessage({ type: "params", density: +dens.value });
+      this.saveSetting("density", +dens.value);
     });
     $("su-speed").querySelectorAll("button").forEach((b) =>
       b.addEventListener("click", () => {
@@ -1366,6 +1489,7 @@ export class App {
         $("su-signal").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
         const program = b.dataset.v as "actuated" | "coordinated" | "fixed";
         this.worker.postMessage({ type: "params", signalProgram: program });
+        this.saveSetting("program", program);
         const desc =
           program === "actuated"
             ? "DEMAND-RESPONSIVE GREEN EXTENSION"
@@ -1476,6 +1600,59 @@ export class App {
 
   private unitsCountLabel() {
     return `${this.units.length} — ${this.units.filter((u) => u.status === "active").length} ACTIVE`;
+  }
+
+  // ---------- settings persistence ----------
+  saveSetting(key: string, value: unknown) {
+    try {
+      localStorage.setItem(`rtm.${key}`, JSON.stringify(value));
+    } catch {
+      /* private mode */
+    }
+  }
+
+  private loadSetting<T>(key: string): T | null {
+    try {
+      const v = localStorage.getItem(`rtm.${key}`);
+      return v ? (JSON.parse(v) as T) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private restoreSettings() {
+    const density = this.loadSetting<number>("density");
+    if (density && density >= 600 && density <= 12000) {
+      this.density = density;
+      const slider = document.getElementById("su-dens") as HTMLInputElement | null;
+      if (slider) slider.value = String(density);
+      const label = document.getElementById("su-dens-v");
+      if (label) label.textContent = fmtInt(density);
+      this.worker.postMessage({ type: "params", density });
+    }
+    const program = this.loadSetting<string>("program");
+    if (program === "actuated" || program === "coordinated" || program === "fixed") {
+      this.worker.postMessage({ type: "params", signalProgram: program });
+      document.querySelectorAll<HTMLButtonElement>("#su-signal button").forEach((b) =>
+        b.classList.toggle("on", b.dataset.v === program)
+      );
+    }
+    const layers = this.loadSetting<Record<string, boolean>>("layers");
+    if (layers) {
+      for (const box of this.ui.layerBoxes) {
+        const k = box.dataset.layer!;
+        if (k in layers && box.checked !== layers[k]) {
+          box.checked = layers[k];
+          this.applyLayer(k, layers[k]);
+        }
+      }
+    }
+  }
+
+  persistLayerStates() {
+    const map: Record<string, boolean> = {};
+    for (const box of this.ui.layerBoxes) map[box.dataset.layer!] = box.checked;
+    this.saveSetting("layers", map);
   }
 }
 
