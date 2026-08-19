@@ -445,6 +445,39 @@ export async function buildBuildings(
   return group;
 }
 
+export function buildDistrictBounds(bounds: import("../data/loader").DistrictBoundary[]): THREE.LineSegments {
+  let segs = 0;
+  for (const b of bounds) for (const r of b.rings) segs += r.length / 2;
+  const pos = new Float32Array(segs * 2 * 3);
+  let v = 0;
+  for (const b of bounds) {
+    for (const ring of b.rings) {
+      const n = ring.length / 2;
+      for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        pos[v * 3] = ring[i * 2];
+        pos[v * 3 + 1] = 1.0;
+        pos[v * 3 + 2] = -ring[i * 2 + 1];
+        v++;
+        pos[v * 3] = ring[j * 2];
+        pos[v * 3 + 1] = 1.0;
+        pos[v * 3 + 2] = -ring[j * 2 + 1];
+        v++;
+      }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos.subarray(0, v * 3), 3));
+  const mesh = new THREE.LineSegments(
+    geo,
+    new THREE.LineBasicMaterial({ color: 0x3a3d44, transparent: true, opacity: 0.5, fog: true, depthWrite: false })
+  );
+  mesh.frustumCulled = false;
+  mesh.matrixAutoUpdate = false;
+  mesh.renderOrder = 5;
+  return mesh;
+}
+
 export interface CityMeshes {
   ground: THREE.Mesh;
   water: THREE.Mesh;

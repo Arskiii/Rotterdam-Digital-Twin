@@ -80,7 +80,12 @@ const activeByMode = [0, 0, 0];
 let targetDensity = 5200;
 let simSpeed = 1;
 let cycleScale = 1;
-let signalProgram: "actuated" | "fixed" = "actuated";
+let signalProgram: "actuated" | "coordinated" | "fixed" = "actuated";
+// green-wave corridors (built at init from street names)
+let corrId: Int32Array;
+let corrOffset: Float32Array;
+let corrPhase: Uint8Array;
+let corridorCount = 0;
 let running = true;
 let congestionFeed = false;
 let autoIncidents = true;
@@ -176,6 +181,7 @@ function init(buf: ArrayBuffer) {
   for (let i = MAXV - 1; i >= 0; i--) freeList.push(i);
 
   buildSpawnTables();
+  buildCorridors();
 
   let laneKm = 0;
   for (let d = 0; d < M; d++) if (dExists[d] && G.edges.modeMask[d >> 1] & MODE_CAR) laneKm += dLen[d] / 1000;
@@ -420,6 +426,88 @@ function hashPhase(c: number): number {
   return (c * 2654435761) % 2 === 0 ? 0 : 1;
 }
 
+// Group signalized junctions into green-wave corridors: clusters that share a
+// primary/secondary/tertiary street name, ordered along the street's bearing,
+// with offsets timed for ~45 km/h progression.
+function buildCorridors() {
+  const C = G.clusters;
+  const S = G.signals;
+  corrId = new Int32Array(C.count).fill(-1);
+  corrOffset = new Float32Array(C.count);
+  corrPhase = new Uint8Array(C.count);
+
+  const signalNodes = new Map<number, number[]>(); // graph node → signal indices
+  for (let s = 0; s < S.count; s++) {
+    const n = S.nodeIdx[s];
+    if (!signalNodes.has(n)) signalNodes.set(n, []);
+    signalNodes.get(n)!.push(s);
+  }
+
+  // per cluster: name → {len, votes[2], sumX, sumY} over arterial edges at signal nodes
+  const clusterNames = new Map<number, Map<number, { len: number; votes: [number, number] }>>();
+  const nameLen = new Map<number, number>();
+  const nameDir = new Map<number, { dx: number; dy: number; len: number }>();
+  const nameClusters = new Map<number, Set<number>>();
+
+  for (let e = 0; e < G.edges.count; e++) {
+    const cls = G.edges.cls[e];
+    if (cls < 2 || cls > 4) continue;
+    const nameIdx = G.edges.nameIdx[e];
+    const len = G.edges.len[e];
+    nameLen.set(nameIdx, (nameLen.get(nameIdx) ?? 0) + len);
+    // dominant orientation (mod 180°) weighted by length
+    const off = G.edges.geoOff[e];
+    const n = G.edges.geoCount[e];
+    let dx = G.geo[(off + n - 1) * 2] - G.geo[off * 2];
+    let dy = G.geo[(off + n - 1) * 2 + 1] - G.geo[off * 2 + 1];
+    if (dx < 0) { dx = -dx; dy = -dy; }
+    const d = nameDir.get(nameIdx) ?? { dx: 0, dy: 0, len: 0 };
+    d.dx += dx; d.dy += dy; d.len += len;
+    nameDir.set(nameIdx, d);
+
+    for (const node of [G.edges.a[e], G.edges.b[e]]) {
+      const sigs = signalNodes.get(node);
+      if (!sigs) continue;
+      for (const s of sigs) {
+        const cl = S.cluster[s];
+        if (!clusterNames.has(cl)) clusterNames.set(cl, new Map());
+        const m = clusterNames.get(cl)!;
+        if (!m.has(nameIdx)) m.set(nameIdx, { len: 0, votes: [0, 0] });
+        const rec = m.get(nameIdx)!;
+        rec.len += len;
+        rec.votes[S.phase[s]] += len;
+        if (!nameClusters.has(nameIdx)) nameClusters.set(nameIdx, new Set());
+        nameClusters.get(nameIdx)!.add(cl);
+      }
+    }
+  }
+
+  const candidates = [...nameClusters.entries()]
+    .filter(([, set]) => set.size >= 3)
+    .sort((a, b) => (nameLen.get(b[0]) ?? 0) - (nameLen.get(a[0]) ?? 0));
+
+  const PROGRESSION = 12.5; // m/s ≈ 45 km/h
+  for (const [nameIdx, set] of candidates) {
+    const free = [...set].filter((cl) => corrId[cl] === -1 && !C.crossing[cl]);
+    if (free.length < 3) continue;
+    const dir = nameDir.get(nameIdx)!;
+    const dl = Math.hypot(dir.dx, dir.dy) || 1;
+    const ux = dir.dx / dl, uy = dir.dy / dl;
+    const projs = free.map((cl) => C.xy[cl * 2] * ux + C.xy[cl * 2 + 1] * uy);
+    const minP = Math.min(...projs);
+    free.forEach((cl, i) => {
+      corrId[cl] = corridorCount;
+      corrOffset[cl] = (projs[i] - minP) / PROGRESSION;
+      const rec = clusterNames.get(cl)?.get(nameIdx);
+      corrPhase[cl] = rec && rec.votes[1] > rec.votes[0] ? 1 : 0;
+    });
+    corridorCount++;
+  }
+  let inCorridors = 0;
+  for (let c = 0; c < C.count; c++) if (corrId[c] >= 0) inCorridors++;
+  console.log(`green-wave corridors: ${corridorCount} (${inCorridors} junctions coordinated)`);
+}
+
 // Dutch-style vehicle actuation: hold green while the served phase has demand
 // (up to maxGreen); switch when the cross phase is waiting and the green phase
 // has gapped out. Rest alternating slowly when the junction is empty.
@@ -479,7 +567,24 @@ function updateSignals(dt: number) {
       const t = (simTime + C.offset[c]) % cyc;
       const red = t < 11;
       stateA = stateB = red ? 0 : t < 13 ? 1 : 2;
-    } else if (signalProgram === "actuated") {
+    } else if (signalProgram === "coordinated" && corrId[c] >= 0) {
+      // fixed cycle with distance-based offset → platoons ride the green wave
+      const CYC = Math.max(40, 64 * cycleScale);
+      const amber = 3.2;
+      const allRed = 1.4;
+      const t = (((simTime - corrOffset[c]) % CYC) + CYC) % CYC;
+      const gC = CYC * 0.55 - amber - allRed;
+      const gX = CYC * 0.45 - amber - allRed;
+      let stateC: number, stateX: number;
+      if (t < gC) { stateC = 2; stateX = 0; }
+      else if (t < gC + amber) { stateC = 1; stateX = 0; }
+      else if (t < gC + amber + allRed) { stateC = 0; stateX = 0; }
+      else if (t < gC + amber + allRed + gX) { stateC = 0; stateX = 2; }
+      else if (t < gC + amber + allRed + gX + amber) { stateC = 0; stateX = 1; }
+      else { stateC = 0; stateX = 0; }
+      stateA = corrPhase[c] === 0 ? stateC : stateX;
+      stateB = corrPhase[c] === 0 ? stateX : stateC;
+    } else if (signalProgram !== "fixed") {
       stepActuated(c, dt);
       const ph = ctlPhase[c];
       stateA = ph === 0 ? 2 : ph === 2 ? 1 : 0;
@@ -890,7 +995,9 @@ function tick() {
     lastMetrics = now;
     sendMetrics();
   }
-  if (congestionFeed && now - lastCong > 2000) {
+  // fast cadence while the overlay is visible; slow heartbeat always (feeds
+  // the history recorder on the main thread)
+  if (now - lastCong > (congestionFeed ? 2000 : 10000)) {
     lastCong = now;
     const c = edgeCong.slice();
     post({ type: "congestion", perEdge: c.buffer }, [c.buffer]);

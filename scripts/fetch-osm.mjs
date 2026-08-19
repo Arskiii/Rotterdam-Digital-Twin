@@ -167,6 +167,16 @@ async function main() {
     );
   }
 
+  // ---- district boundaries (gebieden / wijken) ------------------------------
+  if (!only || only === "districts") {
+    console.log("District boundaries…");
+    await fetchToFile(
+      "districts.json",
+      `[out:json][timeout:300];relation["boundary"="administrative"]["admin_level"~"^(9|10)$"](${bboxStr(BBOX)});out geom qt;`,
+      "district boundaries"
+    );
+  }
+
   // ---- transit routes (RET tram + metro service patterns) -------------------
   if (!only || only === "transit") {
     console.log("Transit routes…");
