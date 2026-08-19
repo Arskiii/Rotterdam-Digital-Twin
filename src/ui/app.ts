@@ -89,6 +89,8 @@ export class App {
       transit: TransitLayer;
       districtLines: THREE.LineSegments;
       ndwLayer: NdwLayer;
+      airLayer?: import("../render/dynamic").AirLayer;
+      fixesLayer?: import("../render/transit").LiveFixesLayer;
     },
     public worker: Worker
   ) {
@@ -210,7 +212,8 @@ export class App {
     this.selected = u;
     this.units.forEach((x) => x.el.classList.toggle("sel", x === u));
     this.ui.unitChips.forEach((c) => c.classList.toggle("sel", c.dataset.unit === u.def.id));
-    this.ui.unitCard.classList.add("open");
+    // phones: the card covers half the map — only open it on an explicit tap
+    if (fly || !window.matchMedia("(max-width: 780px)").matches) this.ui.unitCard.classList.add("open");
     this.updateUnitCard();
     this.startPerfLoading();
     if (fly) this.scene.flyTo(new THREE.Vector3(u.x, 0, -u.y), Math.max(2600, Math.min(5200, this.scene.distance)), 1100);
@@ -576,6 +579,8 @@ export class App {
         this.districtLabels.forEach((l) => (l.style.display = on ? "" : "none"));
         break;
       case "sensors": this.layers.ndwLayer.points.visible = on; break;
+      case "air": if (this.layers.airLayer) this.layers.airLayer.points.visible = on; break;
+      case "fixes": if (this.layers.fixesLayer) this.layers.fixesLayer.points.visible = on; break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles":
         this.layers.vehicles.cars.mesh.visible = on;

@@ -35,6 +35,7 @@ export function buildChrome(root: HTMLElement) {
         <button class="nav-btn" data-page="setup">Setup</button>
       </nav>
       <div id="topmeta">
+        <span class="meta-item" id="live-chip" title="Live city feeds" style="display:none"><span id="live-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3ddc84;margin-right:6px"></span><span id="live-text">LIVE</span></span>
         <span class="meta-item">${icons.pin()} <span>${LOCATION_LABEL}</span></span>
         <span class="meta-item">${icons.clock()} <span id="clock">--:--</span></span>
       </div>
@@ -116,6 +117,8 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="transit" checked /><span class="box"></span>Transit fleet</label>
           <label><input type="checkbox" data-layer="bounds" checked /><span class="box"></span>District bounds</label>
           <label><input type="checkbox" data-layer="sensors" checked /><span class="box"></span>Sensor net</label>
+          <label><input type="checkbox" data-layer="air" /><span class="box"></span>Air quality</label>
+          <label><input type="checkbox" data-layer="fixes" checked /><span class="box"></span>Transit RT fixes</label>
           <label><input type="checkbox" data-layer="labels" checked /><span class="box"></span>Unit labels</label>
         </div>
 
@@ -192,6 +195,9 @@ export function buildChrome(root: HTMLElement) {
   return {
     rail: $("#rail"),
     clock: $("#clock"),
+    liveChip: $("#live-chip"),
+    liveDot: $("#live-dot"),
+    liveText: $("#live-text"),
     navBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#topnav .nav-btn")),
     sceneCanvas: $<HTMLCanvasElement>("#scene-canvas"),
     viewport: $("#viewport"),

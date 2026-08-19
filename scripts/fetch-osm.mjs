@@ -203,6 +203,17 @@ async function main() {
       )
     );
     await runQueue(jobs, 2);
+    // building:part carries the real tower massing (heights live on parts,
+    // outlines often only describe the podium) — build-data extrudes both.
+    console.log("Building parts (36 tiles)…");
+    const partJobs = tileBoxes(6, 6).map((b) => () =>
+      fetchToFile(
+        `buildings-parts-${b.id}.json`,
+        `[out:json][timeout:300];way["building:part"](${bboxStr(b)});out geom qt;`,
+        `building parts ${b.id}`
+      )
+    );
+    await runQueue(partJobs, 2);
   }
 
   console.log("Done. Raw data in data/raw/");

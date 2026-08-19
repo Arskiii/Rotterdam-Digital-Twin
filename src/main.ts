@@ -2,10 +2,12 @@ import "./style.css";
 import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
-import { buildCity, buildDistrictBounds, syncFog, setAmbient } from "./render/city";
-import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "./render/dynamic";
-import { TransitLayer } from "./render/transit";
+import { buildCity, buildDistrictBounds, syncFog, setAmbient, RoofStreamer } from "./render/city";
+import type { RoofIndex } from "./data/loader";
+import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveIncidentsLayer } from "./render/dynamic";
+import { TransitLayer, LiveFixesLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
+import { LiveFeed, type LiveSnapshot } from "./data/live";
 import { App } from "./ui/app";
 
 const root = document.getElementById("app")!;
@@ -40,12 +42,25 @@ async function resolveDataBase(): Promise<string> {
 async function boot() {
   const scene = new SceneCtx(ui.sceneCanvas);
 
-  const data = await loadCity(await resolveDataBase(), paintBoot);
+  const dataBase = await resolveDataBase();
+  const data = await loadCity(dataBase, paintBoot);
   paintBoot("grid", 1);
   paintBoot("signals", 1);
 
   const meshes = await buildCity(data, scene.scene, (f) => paintBoot("structures", 0.55 + f * 0.45));
   paintBoot("structures", 1);
+
+  // true LoD2.2 roofs stream in around the camera when the data is present
+  let roofs: RoofStreamer | null = null;
+  try {
+    const res = await fetch(`${dataBase}roofs/index.json`);
+    if (res.ok) {
+      const index = (await res.json()) as RoofIndex;
+      roofs = new RoofStreamer(dataBase, index, data.buildings, meshes.buildings);
+    }
+  } catch {
+    /* run with prisms only */
+  }
 
   const signals = new SignalsLayer(data.graph);
   const vehicles = new VehiclesLayer();
@@ -53,7 +68,10 @@ async function boot() {
   const transit = new TransitLayer(data.transit);
   const districtLines = buildDistrictBounds(data.districtBounds);
   const ndwLayer = new NdwLayer(data.ndw?.stations ?? []);
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points);
+  const airLayer = new AirLayer();
+  const fixesLayer = new LiveFixesLayer();
+  const liveIncidentsLayer = new LiveIncidentsLayer();
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.points, liveIncidentsLayer.points);
 
   paintBoot("sim", 0.2);
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -79,7 +97,7 @@ async function boot() {
   });
   paintBoot("sim", 1);
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer }, worker);
+  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer }, worker);
 
   // feed the NDW snapshot into the sim's calibration loop
   if (data.ndw?.stations.length) {
@@ -89,6 +107,52 @@ async function boot() {
       todMin: data.ndw.todMin,
     });
   }
+
+  // ---- live city feeds: NDW traffic + bridges, OVapi transit, water, weather, air ----
+  let liveWater: LiveSnapshot["water"] | null = null;
+  const applyLive = (snap: LiveSnapshot) => {
+    if (snap.traffic?.s.length && data.ndw?.stations.length) {
+      // refresh station flows in place; unmeasured stations keep their snapshot value
+      const flows = data.ndw.stations.map((s) => s.flow);
+      for (const [i, flow] of snap.traffic.s) if (i < flows.length) flows[i] = flow;
+      worker.postMessage({
+        type: "ndw",
+        stations: data.ndw.stations.map((s, i) => ({ edge: s.edge, flow: flows[i] })),
+        todMin: snap.traffic.todMin,
+        live: true,
+      });
+    }
+    worker.postMessage({
+      type: "liveBridges",
+      bridges: (snap.bridges ?? []).map((b) => ({ name: b.name, edges: b.edges })),
+    });
+    // real incidents: markers for all, physics for accidents/obstructions/closures
+    liveIncidentsLayer.set(snap.incidents ?? []);
+    worker.postMessage({
+      type: "liveIncidents",
+      incidents: (snap.incidents ?? []).map((i) => ({ edge: i.edge, kind: i.kind, x: i.x, y: i.y, name: i.name })),
+    });
+    // live congestion: measured station speed vs the matched edge's limit
+    if (snap.traffic?.s.length && data.ndw?.stations.length) {
+      const ratios: (number | null)[] = data.ndw.stations.map(() => null);
+      for (const [i, , speed] of snap.traffic.s) {
+        const st = data.ndw.stations[i];
+        if (!st || !speed) continue;
+        const limit = data.graph.edges.speed[st.edge] || 50;
+        ratios[i] = Math.min(1.5, speed / limit);
+      }
+      ndwLayer.setLive(ratios);
+    }
+    if (snap.vehicles) fixesLayer.set(snap.vehicles.v);
+    if (snap.air) airLayer.set(snap.air.s);
+    if (snap.weather) {
+      // wet roads slow motorized traffic
+      const rain = snap.weather.rain ?? 0;
+      worker.postMessage({ type: "params", speedFactor: rain > 2 ? 0.85 : rain > 0.2 ? 0.93 : 1 });
+    }
+    if (snap.water) liveWater = snap.water;
+  };
+  const live = new LiveFeed(dataBase, applyLive);
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);
@@ -101,6 +165,7 @@ async function boot() {
   const fpsBox = { frames: 0, t0: performance.now() };
   const lineMat = meshes.roadLines.material as THREE.LineBasicMaterial;
   let lastNow = performance.now();
+  let lastLiveChip = 0;
   function loop(now: number) {
     requestAnimationFrame(loop);
     const realDt = Math.min(0.1, (now - lastNow) / 1000);
@@ -128,6 +193,39 @@ async function boot() {
     const t = THREE.MathUtils.clamp((scene.distance - 1500) / 2300, 0, 1);
     lineMat.opacity = 0.13 + 0.49 * t;
     meshes.roadLines.visible = meshes.roads.visible;
+    roofs?.update(scene.controls.target, now);
+    liveIncidentsLayer.update(now / 1000);
+    // real Maas level (Boompjes gauge): the flat world puts quay lips near y 0,
+    // so NAP maps 1:1 onto mesh height, eased, clamped just below flood
+    if (liveWater) {
+      const target = THREE.MathUtils.clamp(-0.45 + liveWater.cm / 100, -1.6, -0.08);
+      const y = meshes.water.position.y;
+      if (Math.abs(target - y) > 0.002) {
+        meshes.water.position.y = y + (target - y) * 0.02;
+        meshes.water.updateMatrix();
+      }
+    }
+    if (now - lastLiveChip > 1000) {
+      lastLiveChip = now;
+      const age = live.ageMin();
+      if (live.snapshot) {
+        ui.liveChip.style.display = "";
+        const fresh = age < 12;
+        ui.liveDot.style.background = fresh ? "#3ddc84" : "#666";
+        const w = live.snapshot.weather;
+        const parts = [`LIVE ${age < 1 ? "<1" : Math.round(age)}M`];
+        if (w?.temp != null) parts.push(`${Math.round(w.temp)}°C`);
+        if (liveWater) parts.push(`MAAS ${liveWater.cm >= 0 ? "+" : ""}${liveWater.cm}CM`);
+        const all = live.snapshot.incidents ?? [];
+        const nWrk = all.filter((i) => i.kind === 4).length;
+        const nInc = all.length - nWrk;
+        const nBridge = live.snapshot.bridges?.length ?? 0;
+        if (nInc) parts.push(`${nInc} INC`);
+        if (nWrk) parts.push(`${nWrk} WRK`);
+        if (nBridge) parts.push(`${nBridge} BRUG`);
+        ui.liveText.textContent = fresh ? parts.join(" · ") : `LIVE STALE (${Math.round(age)}M)`;
+      }
+    }
     app.frame(now);
     scene.renderer.render(scene.scene, scene.camera);
     fpsBox.frames++;

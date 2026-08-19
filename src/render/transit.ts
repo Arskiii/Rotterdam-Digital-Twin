@@ -201,3 +201,78 @@ export class TransitLayer {
     };
   }
 }
+
+// ---------------- live vehicle fixes (OVapi GTFS-RT) ----------------
+// Last-known real positions of trams, metros, buses and trains from the
+// national GTFS-RT feed — rendered as glowing diamonds over the simulated
+// fleet: the sim animates, the fixes are ground truth.
+
+const FIX_COLORS: [number, number, number][] = [
+  [95, 216, 141], // 0 tram
+  [235, 96, 84], // 1 metro
+  [235, 186, 92], // 2 bus
+  [238, 238, 238], // 3 train
+];
+
+export class LiveFixesLayer {
+  points: THREE.Points;
+  count = 0;
+  private cap = 600;
+  private pos: Float32Array;
+  private col: Uint8Array;
+
+  constructor() {
+    this.pos = new Float32Array(this.cap * 3);
+    this.col = new Uint8Array(this.cap * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.col, 3, true));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 color;
+        varying vec3 vC;
+        void main() {
+          vC = color;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(2600.0 / -mv.z, 3.0, 10.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying vec3 vC;
+        void main() {
+          vec2 uv = abs(gl_PointCoord - 0.5);
+          float d = uv.x + uv.y;
+          if (d > 0.5) discard;
+          float ring = smoothstep(0.5, 0.34, d);
+          gl_FragColor = vec4(vC, 0.5 + 0.45 * ring);
+        }`,
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 8;
+    // starts empty (drawRange 0); the layer checkbox controls visibility
+  }
+
+  /** vehicles: [x, y, kind, bearing, line] in projected data coords. */
+  set(vehicles: [number, number, number, number, string][]) {
+    const n = Math.min(this.cap, vehicles.length);
+    for (let i = 0; i < n; i++) {
+      const [x, y, kind] = vehicles[i];
+      this.pos[i * 3] = x;
+      this.pos[i * 3 + 1] = 8;
+      this.pos[i * 3 + 2] = -y;
+      const c = FIX_COLORS[kind] ?? FIX_COLORS[2];
+      this.col[i * 3] = c[0];
+      this.col[i * 3 + 1] = c[1];
+      this.col[i * 3 + 2] = c[2];
+    }
+    this.count = n;
+    const geo = this.points.geometry;
+    geo.setDrawRange(0, n);
+    (geo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    (geo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+  }
+}

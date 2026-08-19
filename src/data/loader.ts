@@ -18,6 +18,7 @@ export interface Meta {
     waterPolys: number;
     railWays: number;
     buildings: number;
+    buildingParts?: number;
     transitRoutes?: number;
   };
   districts: { key: string; name: string; x: number; y: number }[];
@@ -78,6 +79,53 @@ export interface BuildingTile {
   totalTris: number;
 }
 
+// True roof geometry (3D BAG LoD2.2 RoofSurface) for the street view,
+// produced by scripts/fetch-lod2.mjs as public/data/roofs/{tx}_{ty}.bin.
+export interface RoofShell {
+  ordinal: number; // index of the prism this shell replaces within its tile
+  verts: Int16Array; // x,y,z triplets, dm, relative to the tile origin (z above ground)
+  faces: Uint8Array[][]; // faces → rings → vertex indices
+}
+
+export interface RoofIndex {
+  source: string;
+  tile: number;
+  shells: number;
+  tiles: Record<string, number>; // "tx_ty" → shell count
+}
+
+export function parseRoofTile(buf: ArrayBuffer): RoofShell[] {
+  const r = new Reader(buf);
+  if (r.u32() !== 0x46525452) throw new Error("bad roofs magic");
+  const count = r.u16();
+  const shells: RoofShell[] = [];
+  for (let i = 0; i < count; i++) {
+    const ordinal = r.u16();
+    const nV = r.u8();
+    const verts = new Int16Array(nV * 3);
+    for (let k = 0; k < nV; k++) {
+      verts[k * 3] = r.i16();
+      verts[k * 3 + 1] = r.i16();
+      verts[k * 3 + 2] = r.u16();
+    }
+    const nFaces = r.u8();
+    const faces: Uint8Array[][] = [];
+    for (let f = 0; f < nFaces; f++) {
+      const nRings = r.u8();
+      const rings: Uint8Array[] = [];
+      for (let g = 0; g < nRings; g++) {
+        const len = r.u8();
+        const ring = new Uint8Array(len);
+        for (let k = 0; k < len; k++) ring[k] = r.u8();
+        rings.push(ring);
+      }
+      faces.push(rings);
+    }
+    shells.push({ ordinal, verts, faces });
+  }
+  return shells;
+}
+
 export interface NdwStation {
   x: number;
   y: number;
@@ -87,6 +135,7 @@ export interface NdwStation {
   speed: number;
   lanes: number;
   name: string;
+  ids?: string[]; // member measurement-site ids (used by the live feed refresh)
 }
 
 export interface NdwData {

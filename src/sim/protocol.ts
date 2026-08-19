@@ -17,6 +17,7 @@ export interface ParamsMsg {
   congestionFeed?: boolean;
   autoIncidents?: boolean;
   timeOfDayMin?: number; // force sim clock, minutes 0..1440
+  speedFactor?: number; // live-weather speed multiplier for motorized traffic (0.7..1)
 }
 
 export interface IncidentMsg {
@@ -33,9 +34,26 @@ export interface NdwMsg {
   type: "ndw";
   stations: { edge: number; flow: number }[]; // real veh/h per matched edge
   todMin: number; // time of day of the capture (minutes, NL time)
+  live?: boolean; // refresh from the live feed (subdued announcement)
 }
 
-export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg | NdwMsg;
+// Real bascule-bridge openings (NDW situation feed): the listed bridges are
+// open for shipping right now, their car edges are severed until the next
+// update clears them.
+export interface LiveBridgesMsg {
+  type: "liveBridges";
+  bridges: { name: string; edges: number[] }[];
+}
+
+// Real incidents from the NDW situation feed. kind: 0 accident, 1 obstruction,
+// 2 jam (display only), 3 road closure. Accidents/obstructions slow their
+// matched edge, closures sever it; everything clears on the next update.
+export interface LiveIncidentsMsg {
+  type: "liveIncidents";
+  incidents: { edge: number; kind: number; x: number; y: number; name: string }[];
+}
+
+export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg | NdwMsg | LiveBridgesMsg | LiveIncidentsMsg;
 
 export interface ReadyMsg {
   type: "ready";

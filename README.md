@@ -14,8 +14,18 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **4,349 traffic-signal heads — 4,331 bound to the multimodal network**, clustered
   into **472 signalized junctions** and standalone crossings, each running a
   fixed-time two-phase controller
-- 264k building footprints extruded to their mapped heights, 7k water polygons
-  (the Maas, harbours, the Rotte, lakes), rail/metro/tram lines
+- 264k building footprints extruded to sourced heights — **96.8% carry
+  measured 3D BAG (BAG × AHN LiDAR) roof heights**, the rest OSM
+  `height`/`building:levels` tags, `building:part` tower shafts as their own
+  prisms, and published heights anchoring the named skyline towers
+  (Zalmhaventoren 203 m, De Rotterdam, Maastoren, Delftse Poort, …) — plus 7k
+  water polygons (the Maas, harbours, the Rotte, lakes) and rail/metro/tram
+  lines
+- **True roofscape at street zoom**: 216k slanted-roof buildings carry their
+  real LoD2.2 roof geometry (3D BAG's LiDAR-reconstructed ridges, hips,
+  gables and dormers), packed into 354 one-kilometer tiles (28 MB) that
+  stream in around the camera and swap with the block model per tile;
+  flat-roofed buildings keep their prisms, which are already the true shape
 
 **Live multimodal simulation** (dedicated web worker):
 
@@ -53,6 +63,29 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - Dock: unit list, live statistics, district performance table, coverage overview,
   message log
 
+**Live city feeds** (refreshed every 5 minutes by `.github/workflows/live-data.yml`
+onto the `live` branch; the app polls it and falls back to the committed
+snapshot — header chip shows freshness, temperature and Maas level):
+
+- **NDW live traffic** (opendata.ndw.nu, minutely): real flows for the 610
+  matched stations re-feed the calibration loop continuously instead of a
+  one-off snapshot, and the sensor-net layer colors each station by measured
+  speed against its edge's limit — live congestion, green → amber → red
+- **Live incidents** (NDW situation feed): real accidents, obstructions, jams
+  and road closures inside the coverage area render as pulsing markers, and
+  the matched edges slow down (accidents to 35% capacity) or sever (closures)
+  in the sim, with event-log announcements naming the street
+- **Bascule bridge openings** (NDW situation feed): a bridge open for shipping
+  severs its car edges in the sim until it closes — traffic reroutes live
+- **Transit RT fixes** (OVapi GTFS-RT): last-known real positions of every
+  tram, metro and bus in the coverage area as a glowing overlay (~250
+  vehicles), the simulated RET fleet keeps the animation
+- **Maas water level** (Rijkswaterstaat, Boompjes tide gauge): the river
+  surface rides the real tide; **weather** (Buienradar Rotterdam): rain slows
+  motorized traffic; **air quality** (Luchtmeetnet, 9 DCMR stations): NO₂/PM2.5
+  as a toggleable station layer
+- `npm run fetch-live` produces the snapshot on demand
+
 **Calibration & validation against official data:**
 
 - **NDW real traffic counts** (opendata.ndw.nu): `npm run fetch-ndw` ingests the national
@@ -67,6 +100,20 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **NWB road register** (PDOK): 94.3% of 70,367 official road segments (89% of km)
   covered — motorways 98.4% of km; the residual is ferries, rural dike tracks and
   bbox-edge clipping — `node scripts/validate-roads.mjs`.
+- **Building heights**: footprints come from OSM's BAG import (the official
+  Dutch buildings register), so geometry is register-accurate. Heights resolve
+  through a source chain — measured **3D BAG** roof heights (TU Delft,
+  BAG × AHN LiDAR, CC BY 4.0; **96.8% of all footprints** in the committed
+  data; `npm run fetch-heights` + `npm run apply-heights` regenerates) → OSM
+  `height` / `building:levels` tags and `building:part` shafts → published
+  heights for 17 named towers (`scripts/landmark-heights.json`, verified
+  against the skyline literature) → a deterministic 5–11 m low-rise estimate
+  for the remaining unmatched fabric. Podium+tower pands whose area-weighted
+  percentile reads the podium are verified against 3D BAG roof planes before
+  taking the tower height, which also rejects crane/pylon returns in the point
+  cloud. `npm run audit-buildings` reports the distribution and checks every
+  named tower against its published height (currently 17/17 within ±7 m; 28
+  prisms over 100 m vs ~27 such buildings in the literature).
 
 ## Run locally
 
@@ -76,22 +123,38 @@ npm run dev
 ```
 
 Open `http://localhost:5173`. Left-drag pans, right-drag orbits, scroll zooms toward the
-cursor. Everything in the UI is live.
+cursor. Everything in the UI is live. The layout is responsive: on phones the
+console collapses to a full-bleed map with compact chrome, and the canvas takes
+standard touch gestures (one-finger pan, two-finger pinch/rotate).
 
 ## Rebuild the city data
 
 Processed binaries in `public/data/` are committed. To regenerate from OpenStreetMap:
 
 ```bash
-npm run fetch-data   # tiled Overpass downloads → data/raw/ (~280 MB, resumable)
-npm run build-data   # → public/data/*.bin + meta.json (~17 MB)
+npm run fetch-data      # tiled Overpass downloads → data/raw/ (~280 MB, resumable)
+npm run fetch-heights   # 3D BAG measured heights → data/heights-3dbag.json (optional)
+npm run build-data      # → public/data/*.bin + meta.json (~17 MB)
+npm run fetch-roofs     # 3D BAG LoD2.2 roof geometry → public/data/roofs/ (28 MB;
+                        #   downloads ~600 MB of CityJSON, cached + resumable)
 ```
+
+To upgrade heights on the committed binaries without a full rebuild:
+`npm run fetch-heights && npm run apply-heights` (patches
+`public/data/buildings.bin` in place), then `npm run audit-buildings`.
 
 ## Architecture
 
 ```
 scripts/
-  fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings, water, rail)
+  fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings + parts, water, rail)
+  fetch-heights.mjs  3D BAG WFS fetch → measured roof heights per building
+  fetch-lod2.mjs     3D BAG CityJSON fetch → true LoD2.2 roof tiles (public/data/roofs/)
+  fetch-live.mjs     live snapshot: NDW traffic + bridges, OVapi GTFS-RT, RWS water,
+                     Buienradar weather, Luchtmeetnet air → public/data/live/live.json
+  apply-heights.mjs  patch heights into buildings.bin without a rebuild
+  audit-buildings.mjs  height distribution + landmark verification report
+  lib-heights.mjs    shared projection/RD conversion, matching, landmark logic
   build-data.mjs     projection, graph build, signal clustering, SCC, triangulation,
                      quantized binary packing
 src/

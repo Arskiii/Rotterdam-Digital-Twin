@@ -1501,3 +1501,160 @@ table.district td:first-child {
 @keyframes blink {
   to { visibility: hidden; }
 }
+
+/* ============ mobile ======================================== */
+/* MapControls owns every gesture on the canvas (one-finger pan,
+   two-finger pinch/rotate); stop the browser from scrolling/zooming. */
+#scene-canvas {
+  touch-action: none;
+}
+button,
+input,
+label {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 780px) {
+  #app {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: max(6px, env(safe-area-inset-top)) max(6px, env(safe-area-inset-right))
+      max(6px, env(safe-area-inset-bottom)) max(6px, env(safe-area-inset-left));
+  }
+  #rail {
+    display: none;
+  }
+
+  #topbar {
+    height: 44px;
+    padding: 0 10px;
+    gap: 10px;
+  }
+  #brand span {
+    display: none;
+  }
+  #topnav {
+    gap: 4px;
+    margin-left: 0;
+    flex: 1;
+    justify-content: center;
+  }
+  #topnav .nav-btn {
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    padding: 12px 7px;
+  }
+  #topmeta .meta-item {
+    display: none;
+  }
+  #topmeta #live-chip {
+    display: flex;
+    font-size: 9px;
+    white-space: nowrap;
+    max-width: 46vw;
+    overflow: hidden;
+  }
+  #topmeta #live-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  #scale-switch {
+    top: 6px;
+  }
+  #scale-switch button {
+    padding: 8px 11px;
+  }
+  #map-tools .tool-btn {
+    width: 38px;
+    height: 38px;
+  }
+
+  #unit-card {
+    top: 44px;
+    left: 6px;
+    width: 176px;
+  }
+  #unit-card .uc-image {
+    display: none;
+  }
+  #perf-card {
+    display: none !important;
+  }
+
+  #dock-body {
+    max-height: 34vh;
+    overflow-y: auto;
+  }
+  #dock-tabs {
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  #dock-tabs::-webkit-scrollbar {
+    display: none;
+  }
+  #dock-tabs button {
+    padding: 9px 9px;
+    font-size: 10px;
+    white-space: nowrap;
+    flex: none;
+  }
+  .unit-chip {
+    padding: 6px 8px;
+    gap: 7px;
+    font-size: 10px;
+  }
+  .unit-chip .cid {
+    font-size: 11px;
+  }
+
+  #layers-pop {
+    left: auto;
+    right: 6px;
+    max-height: 56vh;
+    overflow-y: auto;
+  }
+  #layers-pop label {
+    padding: 8px 10px;
+  }
+
+  #replay-bar {
+    width: calc(100vw - 24px);
+    bottom: 128px;
+  }
+  #station-card {
+    left: 6px;
+    bottom: 148px;
+    width: min(252px, 76vw);
+  }
+  #street-chip {
+    max-width: 70vw;
+  }
+
+  .page {
+    padding: 14px 12px 20px;
+  }
+  #brief-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  #setup-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* landscape phones: keep the map tall, dock shallow */
+@media (max-height: 500px) and (pointer: coarse) {
+  #topbar {
+    height: 40px;
+  }
+  #dock-body {
+    max-height: 44vh;
+  }
+  #unit-card .uc-image {
+    display: none;
+  }
+  #perf-card {
+    display: none !important;
+  }
+}

@@ -1,0 +1,49 @@
+# Refresh the live city snapshot (NDW traffic + bridges, OVapi transit, RWS
+# water, Buienradar weather, Luchtmeetnet air) and publish it as the single
+# file on the `live` branch. The app polls it via raw.githubusercontent.com
+# and falls back to the committed public/data/live/live.json when absent.
+#
+# The branch is force-pushed as one root commit each run, so its history
+# never grows.
+
+name: live-data
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-data
+  cancel-in-progress: true
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Fetch live snapshot
+        run: node scripts/fetch-live.mjs --out /tmp/live.json
+
+      - name: Publish to the live branch
+        run: |
+          mkdir /tmp/live-branch
+          cp /tmp/live.json /tmp/live-branch/live.json
+          cd /tmp/live-branch
+          git init -b live
+          git config user.name "live-data bot"
+          git config user.email "actions@github.com"
+          git add live.json
+          git commit -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live
