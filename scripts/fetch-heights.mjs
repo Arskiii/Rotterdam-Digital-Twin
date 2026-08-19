@@ -15,7 +15,9 @@
 // scripts/apply-heights.mjs (in-place patch of public/data/buildings.bin).
 //
 // Requires network access to data.3dbag.nl. Runs fine on a normal connection;
-// in restricted environments allowlist data.3dbag.nl first.
+// in restricted environments allowlist data.3dbag.nl first. Behind an HTTPS
+// proxy, run with NODE_USE_ENV_PROXY=1 (the npm script sets it) so Node's
+// fetch honors HTTPS_PROXY.
 
 import { mkdirSync, existsSync, readFileSync, writeFileSync, statSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
@@ -29,9 +31,13 @@ const RAW = join(ROOT, "data", "raw3dbag");
 mkdirSync(RAW, { recursive: true });
 
 // WFS endpoints, newest 3D BAG release first. Layer lod12 carries the same
-// per-pand height attributes as lod22 with far lighter 2D geometry.
+// per-pand height attributes as lod22 with far lighter 2D geometry, and
+// propertyName strips the response to just heights + footprint (~10x smaller).
 const SERVICES = [
-  { base: "https://data.3dbag.nl/api/BAG3D/wfs", typeName: "BAG3D:lod12", version: "2.0.0" },
+  {
+    base: "https://data.3dbag.nl/api/BAG3D/wfs", typeName: "BAG3D:lod12", version: "2.0.0",
+    props: "identificatie,b3_h_70p,b3_h_50p,b3_h_max,b3_h_maaiveld,geom",
+  },
   { base: "https://data.3dbag.nl/api/BAG3D_v2/wfs", typeName: "BAG3D_v2:lod12", version: "2.0.0" },
 ];
 const PAGE = 5000;
@@ -70,6 +76,7 @@ async function fetchPage(svc, box, startIndex) {
     startIndex: String(startIndex),
     bbox: `${box.minX},${box.minY},${box.maxX},${box.maxY},EPSG:28992`,
   });
+  if (svc.props) params.set("propertyName", svc.props);
   const url = `${svc.base}?${params}`;
   for (let attempt = 0; attempt < 5; attempt++) {
     try {
@@ -92,11 +99,14 @@ async function fetchPage(svc, box, startIndex) {
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" ? parseFloat(v) : NaN);
 
-/** Roof-above-ground height from a 3D BAG feature's properties (v3 or v2 names). */
+/** Roof-above-ground height from a 3D BAG feature's properties (current, older v3, or v2 names). */
 function heightOfProps(p) {
   if (!p) return NaN;
-  const roof = [p.b3_h_dak_70p, p.b3_h_dak_50p, p.b3_h_dak_max, p.h_dak_70p, p.h_dak_50p, p.h_dak_max]
-    .map(num).find((v) => Number.isFinite(v));
+  const roof = [
+    p.b3_h_70p, p.b3_h_50p, p.b3_h_max, // current release
+    p.b3_h_dak_70p, p.b3_h_dak_50p, p.b3_h_dak_max, // older v3
+    p.h_dak_70p, p.h_dak_50p, p.h_dak_max, // v2
+  ].map(num).find((v) => Number.isFinite(v));
   const ground = [p.b3_h_maaiveld, p.h_maaiveld].map(num).find((v) => Number.isFinite(v));
   if (!Number.isFinite(roof)) return NaN;
   // Roof percentiles are NAP elevations; subtract ground level when known
