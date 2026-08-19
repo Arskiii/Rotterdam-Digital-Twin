@@ -63,7 +63,7 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - Dock: unit list, live statistics, district performance table, coverage overview,
   message log
 
-**Live city feeds** (refreshed every 5 minutes by `.github/workflows/live-data.yml`
+**Live city feeds** (refreshed every 5 minutes by the scheduled `live` job in `.github/workflows/deploy.yml`
 onto the `live` branch; the app polls it and falls back to the committed
 snapshot — header chip shows freshness, temperature and Maas level):
 
