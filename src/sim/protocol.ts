@@ -29,7 +29,13 @@ export interface ScenarioMsg {
   kind: "bridge" | "stadium" | "roadworks" | "freight" | "clear";
 }
 
-export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg;
+export interface NdwMsg {
+  type: "ndw";
+  stations: { edge: number; flow: number }[]; // real veh/h per matched edge
+  todMin: number; // time of day of the capture (minutes, NL time)
+}
+
+export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg | NdwMsg;
 
 export interface ReadyMsg {
   type: "ready";
@@ -74,6 +80,12 @@ export interface MetricsMsg {
   incidents: number;
   incidentPts: { x: number; y: number }[];
   districts: DistrictStat[];
+  calibration?: {
+    stations: number;
+    simVehH: number; // simulated flow over the matched stations
+    realVehH: number; // NDW flow normalized to the current sim time of day
+    ratio: number; // sim / real (0 when not yet measurable)
+  };
 }
 
 export interface CongestionMsg {

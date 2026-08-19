@@ -87,6 +87,14 @@ interface ScenarioState {
 let scenario: ScenarioState | null = null;
 let burst: { edges: Int32Array; walkEdges: Int32Array; carsLeft: number; walkLeft: number; truckChance: number } | null = null;
 
+// NDW calibration: real veh/h per matched undirected edge
+let ndwEdgeFlow: Map<number, number> | null = null;
+let ndwTodMin = 0;
+let ndwCounts: Map<number, number> | null = null; // sim vehicle-passes per matched edge
+let ndwWindowStartSim = 0;
+let ndwSimVehH = 0; // smoothed
+let ndwStations = 0;
+
 // params
 let targetDensity = 5200;
 let simSpeed = 1;
@@ -748,6 +756,12 @@ function stepVehicles(dt: number) {
       const room = tail < 0 || vS[tail] > V_LEN[mode] + 1.5;
       if (canGo && next >= 0 && !((mode === 0 || mode === 3) && dBlocked[next]) && room) {
         removeFromQueue(id);
+        // NDW calibration counter: motorized vehicles entering a measured edge
+        if (ndwCounts && (mode === 0 || mode === 3)) {
+          const ue = next >> 1;
+          const c = ndwCounts.get(ue);
+          if (c !== undefined) ndwCounts.set(ue, c + 1);
+        }
         vEdge[id] = next;
         vRouteIdx[id] = rIdx + 1;
         ns = Math.max(0, ns - len);
@@ -969,10 +983,35 @@ function sendMetrics() {
   for (let e = 0; e < G.edges.count; e++) {
     if (G.edges.cls[e] <= 4) { congSum += edgeCong[e]; congN++; }
   }
+  // NDW calibration: compare simulated flow on measured edges against the
+  // real counts, normalized to the current sim time of day via the demand curve
+  let calibration: MetricsMsg["calibration"];
+  if (ndwEdgeFlow && ndwCounts) {
+    const elapsed = simTime - ndwWindowStartSim;
+    if (elapsed >= 60) {
+      let passes = 0;
+      for (const v of ndwCounts.values()) passes += v;
+      const vehH = (passes * 3600) / elapsed;
+      ndwSimVehH = ndwSimVehH === 0 ? vehH : ndwSimVehH * 0.6 + vehH * 0.4;
+      for (const k of ndwCounts.keys()) ndwCounts.set(k, 0);
+      ndwWindowStartSim = simTime;
+    }
+    let realTotal = 0;
+    for (const f of ndwEdgeFlow.values()) realTotal += f;
+    const realNow = realTotal * (demand(clockMin) / Math.max(0.05, demand(ndwTodMin)));
+    calibration = {
+      stations: ndwStations,
+      simVehH: Math.round(ndwSimVehH),
+      realVehH: Math.round(realNow),
+      ratio: realNow > 0 && ndwSimVehH > 0 ? ndwSimVehH / realNow : 0,
+    };
+  }
+
   const msg: MetricsMsg = {
     type: "metrics",
     simTime,
     clockMin,
+    calibration,
     active: activeByMode[0],
     trucks: activeByMode[3],
     bikes: activeByMode[1],
@@ -1140,6 +1179,24 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     if (msg.congestionFeed !== undefined) congestionFeed = msg.congestionFeed;
     if (msg.autoIncidents !== undefined) autoIncidents = msg.autoIncidents;
     if (msg.timeOfDayMin !== undefined) clockMin = msg.timeOfDayMin;
+  } else if (msg.type === "ndw") {
+    ndwEdgeFlow = new Map();
+    ndwCounts = new Map();
+    for (const s of msg.stations) {
+      if (s.edge >= 0 && s.edge < G.edges.count) {
+        ndwEdgeFlow.set(s.edge, s.flow);
+        ndwCounts.set(s.edge, 0);
+      }
+    }
+    ndwStations = ndwEdgeFlow.size;
+    ndwTodMin = msg.todMin;
+    ndwWindowStartSim = simTime;
+    ndwSimVehH = 0;
+    post({
+      type: "event",
+      level: "ok",
+      text: `NDW SENSOR NET ONLINE — ${ndwStations} STATIONS FEEDING THE CALIBRATION LOOP`,
+    });
   } else if (msg.type === "scenario") {
     if (msg.kind === "clear") clearScenario(true);
     else startScenario(msg.kind);
