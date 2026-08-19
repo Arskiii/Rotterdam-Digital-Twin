@@ -212,7 +212,14 @@ export function applyLandmarks(items, landmarks, grid /* query() → item indice
       continue;
     }
     const it = items[best.i];
-    const changed = !it.measured && Math.abs(it.h - lm.h) > 15;
+    // Landmarks correct unmeasured heights off by >15 m. For measured (LiDAR)
+    // heights they act as an anchor on the named towers only: percentiles
+    // diluted by a podium (Maastoren), setbacks (World Port Center), scans
+    // predating completion (Zalmhaventoren) or crane returns read wrong, so
+    // published height wins when LiDAR deviates by more than 15%.
+    const changed = it.measured
+      ? it.h < 0.85 * lm.h || it.h > 1.15 * lm.h
+      : Math.abs(it.h - lm.h) > 15;
     report.push({
       name: lm.name, matched: true, dist: best.d, area: Math.round(it.area),
       before: it.h, after: changed ? lm.h : it.h, changed,

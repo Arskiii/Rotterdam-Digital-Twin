@@ -14,12 +14,13 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **4,349 traffic-signal heads — 4,331 bound to the multimodal network**, clustered
   into **472 signalized junctions** and standalone crossings, each running a
   fixed-time two-phase controller
-- 264k building footprints extruded to sourced heights — measured 3D BAG
-  (BAG × AHN LiDAR) heights when fetched, OSM `height`/`building:levels` tags,
-  `building:part` tower shafts rendered as their own prisms, and published
-  heights for the named skyline towers (Zalmhaventoren 203 m, De Rotterdam,
-  Maastoren, Delftse Poort, …) — plus 7k water polygons (the Maas, harbours,
-  the Rotte, lakes) and rail/metro/tram lines
+- 264k building footprints extruded to sourced heights — **96.8% carry
+  measured 3D BAG (BAG × AHN LiDAR) roof heights**, the rest OSM
+  `height`/`building:levels` tags, `building:part` tower shafts as their own
+  prisms, and published heights anchoring the named skyline towers
+  (Zalmhaventoren 203 m, De Rotterdam, Maastoren, Delftse Poort, …) — plus 7k
+  water polygons (the Maas, harbours, the Rotte, lakes) and rail/metro/tram
+  lines
 
 **Live multimodal simulation** (dedicated web worker):
 
@@ -74,14 +75,17 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **Building heights**: footprints come from OSM's BAG import (the official
   Dutch buildings register), so geometry is register-accurate. Heights resolve
   through a source chain — measured **3D BAG** roof heights (TU Delft,
-  BAG × AHN LiDAR, CC BY 4.0; `npm run fetch-heights` then
-  `npm run apply-heights` — needs access to data.3dbag.nl) → OSM
+  BAG × AHN LiDAR, CC BY 4.0; **96.8% of all footprints** in the committed
+  data; `npm run fetch-heights` + `npm run apply-heights` regenerates) → OSM
   `height` / `building:levels` tags and `building:part` shafts → published
-  heights for 16 named towers (`scripts/landmark-heights.json`, verified
+  heights for 17 named towers (`scripts/landmark-heights.json`, verified
   against the skyline literature) → a deterministic 5–11 m low-rise estimate
-  for the untagged fabric until measured data is fetched.
-  `npm run audit-buildings` reports the distribution and checks every named
-  tower against its published height (currently 16/16 within ±5 m).
+  for the remaining unmatched fabric. Podium+tower pands whose area-weighted
+  percentile reads the podium are verified against 3D BAG roof planes before
+  taking the tower height, which also rejects crane/pylon returns in the point
+  cloud. `npm run audit-buildings` reports the distribution and checks every
+  named tower against its published height (currently 17/17 within ±7 m; 28
+  prisms over 100 m vs ~27 such buildings in the literature).
 
 ## Run locally
 

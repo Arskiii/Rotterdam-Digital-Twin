@@ -99,19 +99,65 @@ async function fetchPage(svc, box, startIndex) {
 
 const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : typeof v === "string" ? parseFloat(v) : NaN);
 
-/** Roof-above-ground height from a 3D BAG feature's properties (current, older v3, or v2 names). */
-function heightOfProps(p) {
-  if (!p) return NaN;
-  const roof = [
-    p.b3_h_70p, p.b3_h_50p, p.b3_h_max, // current release
-    p.b3_h_dak_70p, p.b3_h_dak_50p, p.b3_h_dak_max, // older v3
-    p.h_dak_70p, p.h_dak_50p, p.h_dak_max, // v2
-  ].map(num).find((v) => Number.isFinite(v));
-  const ground = [p.b3_h_maaiveld, p.h_maaiveld].map(num).find((v) => Number.isFinite(v));
-  if (!Number.isFinite(roof)) return NaN;
-  // Roof percentiles are NAP elevations; subtract ground level when known
-  // (Rotterdam sits around NAP so a missing maaiveld stays close to truth).
-  return roof - (Number.isFinite(ground) ? ground : 0);
+/** Percentile and max roof heights above ground (current, older v3, or v2 names). */
+function heightsOfProps(p) {
+  if (!p) return { h70: NaN, hMax: NaN };
+  const p70 = [p.b3_h_70p, p.b3_h_dak_70p, p.h_dak_70p, p.b3_h_50p, p.b3_h_dak_50p, p.h_dak_50p]
+    .map(num).find((v) => Number.isFinite(v));
+  const pMax = [p.b3_h_max, p.b3_h_dak_max, p.h_dak_max].map(num).find((v) => Number.isFinite(v));
+  const ground = [p.b3_h_maaiveld, p.h_maaiveld].map(num).find((v) => Number.isFinite(v)) ?? 0;
+  // Heights are NAP elevations; subtract ground level (Rotterdam sits around
+  // NAP so a missing maaiveld stays close to truth).
+  return {
+    h70: Number.isFinite(p70) ? p70 - ground : NaN,
+    hMax: Number.isFinite(pMax) ? pMax - ground : NaN,
+  };
+}
+
+// BAG registers podium + tower as ONE pand: area-weighted percentiles then
+// read the podium (New Orleans: 70p 19 m, max 160 m). Only a ≥40 m max that
+// dwarfs the 70th percentile is that signature — but the raw point-cloud max
+// is also what a construction crane, power pylon or wind turbine over a low
+// pand returns (a greenhouse under a 380 kV line reads 5 m / 240 m). The two
+// cases are numerically identical, so every promotion candidate is verified
+// against the pand's b3_h_dak_max from the 3D BAG OGC API: that statistic
+// comes from fitted roof planes, which cranes and pylons never form.
+const isTowerCandidate = ({ h70, hMax }) =>
+  Number.isFinite(h70) && Number.isFinite(hMax) && hMax >= 40 && h70 < 0.5 * hMax;
+
+async function verifiedRoofMax(id) {
+  const file = join(RAW, `pand-${id.replace(/[^0-9A-Za-z.]/g, "")}.json`);
+  let attrs = null;
+  if (existsSync(file) && statSync(file).size > 20) {
+    attrs = JSON.parse(readFileSync(file, "utf8"));
+  } else {
+    for (let attempt = 0; attempt < 4 && !attrs; attempt++) {
+      try {
+        const res = await fetch(`https://api.3dbag.nl/collections/pand/items/${encodeURIComponent(id)}`, {
+          headers: { "User-Agent": "rotterdam-intelligence-platform/1.0 (research; contact via github)" },
+          signal: AbortSignal.timeout(60_000),
+        });
+        if (res.status === 404) { attrs = {}; break; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const j = await res.json();
+        for (const v of Object.values((j.feature ?? j).CityObjects ?? {})) {
+          if (v.attributes?.b3_h_dak_max !== undefined) {
+            attrs = { dakMax: num(v.attributes.b3_h_dak_max), ground: num(v.attributes.b3_h_maaiveld) };
+            break;
+          }
+        }
+        attrs ??= {};
+      } catch (err) {
+        console.warn(`  ! verify ${id} attempt ${attempt + 1}: ${err.message ?? err}`);
+        await sleep(1500 * (attempt + 1));
+      }
+    }
+    attrs ??= {};
+    writeFileSync(file, JSON.stringify(attrs));
+    await sleep(120);
+  }
+  if (!Number.isFinite(attrs.dakMax)) return NaN;
+  return attrs.dakMax - (Number.isFinite(attrs.ground) ? attrs.ground : 0);
 }
 
 /** Centroid (RD) of the first polygon ring in a GeoJSON geometry. */
@@ -165,7 +211,7 @@ async function main() {
   }
 
   // ---- reduce all cached pages to the compact lookup ----
-  const entries = [];
+  const pands = [];
   const seen = new Set();
   let noHeight = 0;
   for (const f of readdirSync(RAW).filter((f) => /^tile-\d+-\d+-p\d+\.json$/.test(f))) {
@@ -174,12 +220,32 @@ async function main() {
       const id = feat.properties?.identificatie ?? feat.id;
       if (id && seen.has(id)) continue; // tile-edge duplicates
       if (id) seen.add(id);
-      const h = heightOfProps(feat.properties);
+      const hs = heightsOfProps(feat.properties);
       const c = centroidRd(feat.geometry);
-      if (!c || !Number.isFinite(h) || h <= 0 || h > 300) { noHeight++; continue; }
-      const wgs = rdToWgs(c.x, c.y);
-      entries.push([+px(wgs.lon).toFixed(1), +py(wgs.lat).toFixed(1), +h.toFixed(1)]);
+      if (!c || ![hs.h70, hs.hMax].some(Number.isFinite)) { noHeight++; continue; }
+      pands.push({ id, c, ...hs });
     }
+  }
+
+  // verify tower-promotion candidates against roof-plane maxima
+  const candidates = pands.filter((p) => p.id && isTowerCandidate(p));
+  console.log(`verifying ${candidates.length} podium+tower candidates against api.3dbag.nl roof planes…`);
+  let promoted = 0;
+  for (const p of candidates) {
+    const dakMax = await verifiedRoofMax(p.id);
+    if (Number.isFinite(dakMax) && dakMax >= 40 && p.h70 < 0.5 * dakMax) {
+      p.h = dakMax;
+      promoted++;
+    }
+  }
+  console.log(`  ${promoted} promoted to verified tower height, ${candidates.length - promoted} kept their percentile`);
+
+  const entries = [];
+  for (const p of pands) {
+    const h = p.h ?? (Number.isFinite(p.h70) ? p.h70 : p.hMax);
+    if (!Number.isFinite(h) || h <= 0 || h > 300) { noHeight++; continue; }
+    const wgs = rdToWgs(p.c.x, p.c.y);
+    entries.push([+px(wgs.lon).toFixed(1), +py(wgs.lat).toFixed(1), +h.toFixed(1)]);
   }
   if (entries.length < 50_000) {
     throw new Error(`only ${entries.length} measured heights extracted — that cannot cover greater Rotterdam; not writing output`);

@@ -4,10 +4,11 @@
   { "name": "World Port Center", "lat": 51.90471, "lon": 4.48573, "h": 123, "note": "roof; antenna to 138 m" },
   { "name": "Delftse Poort", "lat": 51.9243, "lon": 4.4757, "h": 151.4, "note": "main tower; the 93 m second tower is mapped as building:part" },
   { "name": "Euromast", "lat": 51.9054, "lon": 4.46661, "h": 185, "note": "observation tower incl. Space Tower mast" },
+  { "name": "Baantoren", "lat": 51.91027, "lon": 4.48072, "h": 158, "note": "topped out 2025; scan carries construction cranes" },
 
   { "name": "Maastoren", "lat": 51.9088, "lon": 4.4934, "h": 164.8, "note": "validator — OSM tags 169 m incl. antenna" },
   { "name": "De Rotterdam", "lat": 51.90658, "lon": 4.4881, "h": 151.3, "note": "validator — OMA vertical city" },
-  { "name": "Montevideo", "lat": 51.90407, "lon": 4.48582, "h": 152.3, "note": "validator — incl. mast" },
+  { "name": "Montevideo", "lat": 51.90407, "lon": 4.48582, "h": 139.5, "note": "validator — roof; 152.3 m with mast" },
   { "name": "Toren op Zuid (KPN)", "lat": 51.90713, "lon": 4.48938, "h": 96.5, "note": "validator — leaning facade next to Erasmusbrug" },
   { "name": "Cooltoren", "lat": 51.91443, "lon": 4.48083, "h": 153.7, "note": "validator — OSM tags 150 m roof" },
   { "name": "First Rotterdam", "lat": 51.92218, "lon": 4.46897, "h": 128, "note": "validator" },

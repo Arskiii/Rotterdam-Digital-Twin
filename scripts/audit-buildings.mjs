@@ -59,7 +59,10 @@ for (const { h } of items) {
   buckets.set(b, (buckets.get(b) ?? 0) + 1);
 }
 console.log(`tallest prism: ${maxH} m · >30 m: ${over30} · >100 m: ${over100} · >150 m: ${over150}`);
-console.log(`5.0–10.9 m band (contains the estimation fallback): ${inBand} (${((inBand / items.length) * 100).toFixed(1)}%)`);
+console.log(
+  `5.0–10.9 m band: ${inBand} (${((inBand / items.length) * 100).toFixed(1)}%) — genuine low-rise once measured ` +
+  `heights are applied; a flat 0.1 m histogram here means the estimation fallback instead (see apply-heights output for the source split)`
+);
 console.log("distribution (10 m buckets):");
 for (const k of [...buckets.keys()].sort((a, b) => a - b)) {
   const n = buckets.get(k);
