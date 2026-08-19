@@ -24,7 +24,7 @@ function paintBoot(stage: string, frac: number) {
 // Data binaries live in-repo (public/data). Deployments that ship only source
 // (e.g. Vercel file deploys) fall back to the pinned GitHub mirror via jsDelivr.
 const DATA_FALLBACK =
-  "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@815172ab9a85ba4ace839e6e75918ce8390b0160/public/data/";
+  "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@2ac52386897c1be74a128ca095acd73fc05a8f26/public/data/";
 
 async function resolveDataBase(): Promise<string> {
   const local = `${import.meta.env.BASE_URL}data/`;
