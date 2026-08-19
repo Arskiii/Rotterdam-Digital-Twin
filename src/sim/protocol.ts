@@ -85,6 +85,8 @@ export interface MetricsMsg {
     simVehH: number; // simulated flow over the matched stations
     realVehH: number; // NDW flow normalized to the current sim time of day
     ratio: number; // sim / real (0 when not yet measurable)
+    demandNorm: number; // demand(now) / demand(capture) — scales per-station expectations
+    stationFlows: number[]; // smoothed sim veh/h per station, in NdwMsg order
   };
 }
 

@@ -419,6 +419,27 @@ svg {
   text-overflow: ellipsis;
 }
 
+/* ---------- NDW station card ------------------------------- */
+
+#station-card {
+  position: absolute;
+  left: 16px;
+  bottom: 196px;
+  width: 252px;
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.95);
+  padding: 10px 12px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  z-index: 15;
+}
+#station-card.open {
+  display: flex;
+}
+
 /* ---------- incident markers ------------------------------- */
 
 .incident-marker {
