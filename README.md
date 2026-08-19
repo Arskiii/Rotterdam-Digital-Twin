@@ -21,6 +21,11 @@ traffic simulation — wrapped in a dark tactical operations UI.
   (Zalmhaventoren 203 m, De Rotterdam, Maastoren, Delftse Poort, …) — plus 7k
   water polygons (the Maas, harbours, the Rotte, lakes) and rail/metro/tram
   lines
+- **True roofscape at street zoom**: 216k slanted-roof buildings carry their
+  real LoD2.2 roof geometry (3D BAG's LiDAR-reconstructed ridges, hips,
+  gables and dormers), packed into 354 one-kilometer tiles (28 MB) that
+  stream in around the camera and swap with the block model per tile;
+  flat-roofed buildings keep their prisms, which are already the true shape
 
 **Live multimodal simulation** (dedicated web worker):
 
@@ -105,6 +110,8 @@ Processed binaries in `public/data/` are committed. To regenerate from OpenStree
 npm run fetch-data      # tiled Overpass downloads → data/raw/ (~280 MB, resumable)
 npm run fetch-heights   # 3D BAG measured heights → data/heights-3dbag.json (optional)
 npm run build-data      # → public/data/*.bin + meta.json (~17 MB)
+npm run fetch-roofs     # 3D BAG LoD2.2 roof geometry → public/data/roofs/ (28 MB;
+                        #   downloads ~600 MB of CityJSON, cached + resumable)
 ```
 
 To upgrade heights on the committed binaries without a full rebuild:
@@ -117,6 +124,7 @@ To upgrade heights on the committed binaries without a full rebuild:
 scripts/
   fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings + parts, water, rail)
   fetch-heights.mjs  3D BAG WFS fetch → measured roof heights per building
+  fetch-lod2.mjs     3D BAG CityJSON fetch → true LoD2.2 roof tiles (public/data/roofs/)
   apply-heights.mjs  patch heights into buildings.bin without a rebuild
   audit-buildings.mjs  height distribution + landmark verification report
   lib-heights.mjs    shared projection/RD conversion, matching, landmark logic

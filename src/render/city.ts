@@ -2,7 +2,9 @@
 // Data coords are (x east, y north) meters; world is (x, up, -y).
 
 import * as THREE from "three";
-import type { CityData, PolylineSet, BuildingTile } from "../data/loader";
+import earcut from "earcut";
+import { parseRoofTile } from "../data/loader";
+import type { CityData, PolylineSet, BuildingTile, RoofShell, RoofIndex } from "../data/loader";
 
 // class: motorway, trunk, primary, secondary, tertiary, residential, service,
 // pedestrian, cycleway, footpath
@@ -342,6 +344,7 @@ const buildingMat = new THREE.ShaderMaterial({
       vec3 fdx = dFdx(vW);
       vec3 fdy = dFdy(vW);
       vec3 N = normalize(cross(fdx, fdy));
+      if (!gl_FrontFacing) N = -N; // roof tiles render double-sided
       // stylized monochrome shading
       float top = clamp(N.y, 0.0, 1.0);
       float side = clamp(dot(N, normalize(vec3(0.5, 0.0, 0.62))), 0.0, 1.0);
@@ -367,44 +370,47 @@ export function setAmbient(v: number) {
   buildingMat.uniforms.uAmbient.value = v;
 }
 
-function buildTileMesh(tile: BuildingTile): THREE.Mesh {
-  const V = tile.totalVerts * 2; // bottom + top ring per footprint vertex
-  const T = tile.totalTris + tile.totalVerts * 2; // roof + 2 wall tris per edge
-  const apos = new Int16Array(V * 3);
-  const idx = V > 65000 ? new Uint32Array(T * 3) : new Uint16Array(T * 3);
-  let v = 0;
-  let ii = 0;
+/** Prism (extruded footprint) geometry for a tile; `skip` drops buildings replaced by roof shells. */
+function emitPrisms(tile: BuildingTile, skip: Set<number> | null, apos: number[], idx: number[]) {
   for (let b = 0; b < tile.count; b++) {
+    if (skip?.has(b)) continue;
     const nv = tile.nVerts[b];
     const off = tile.vertOff[b];
     const h = tile.heights[b];
-    const base = v;
+    const base = apos.length / 3;
     for (let k = 0; k < nv; k++) {
       const x = tile.verts[(off + k) * 2];
       const y = tile.verts[(off + k) * 2 + 1];
-      apos[v * 3] = x; apos[v * 3 + 1] = 0; apos[v * 3 + 2] = y;
-      apos[(v + nv) * 3] = x; apos[(v + nv) * 3 + 1] = h; apos[(v + nv) * 3 + 2] = y;
-      v++;
+      apos.push(x, 0, y);
     }
-    v += nv;
+    for (let k = 0; k < nv; k++) {
+      const x = tile.verts[(off + k) * 2];
+      const y = tile.verts[(off + k) * 2 + 1];
+      apos.push(x, h, y);
+    }
     // walls
     for (let k = 0; k < nv; k++) {
       const k2 = (k + 1) % nv;
       const b0 = base + k, b1 = base + k2, t0 = base + nv + k, t1 = base + nv + k2;
-      idx[ii++] = b0; idx[ii++] = b1; idx[ii++] = t1;
-      idx[ii++] = b0; idx[ii++] = t1; idx[ii++] = t0;
+      idx.push(b0, b1, t1, b0, t1, t0);
     }
     // roof (precomputed earcut indices, CCW)
     const tOff = tile.triOff[b];
     for (let k = 0; k < tile.nTris[b]; k++) {
-      idx[ii++] = base + nv + tile.tris[(tOff + k) * 3];
-      idx[ii++] = base + nv + tile.tris[(tOff + k) * 3 + 2];
-      idx[ii++] = base + nv + tile.tris[(tOff + k) * 3 + 1];
+      idx.push(
+        base + nv + tile.tris[(tOff + k) * 3],
+        base + nv + tile.tris[(tOff + k) * 3 + 2],
+        base + nv + tile.tris[(tOff + k) * 3 + 1]
+      );
     }
   }
+}
+
+function makeTileMesh(tile: BuildingTile, apos: number[], idx: number[], doubleSide: boolean): THREE.Mesh {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute("apos", new THREE.BufferAttribute(apos, 3, false));
-  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  geo.setAttribute("apos", new THREE.BufferAttribute(Int16Array.from(apos), 3, false));
+  const maxIdx = apos.length / 3;
+  geo.setIndex(new THREE.BufferAttribute(maxIdx > 65000 ? Uint32Array.from(idx) : Uint16Array.from(idx), 1));
   // bounding sphere in world space for culling
   geo.boundingSphere = new THREE.Sphere(new THREE.Vector3(tile.ox + 500, 30, -(tile.oy + 500)), 950);
 
@@ -414,10 +420,150 @@ function buildTileMesh(tile: BuildingTile): THREE.Mesh {
   mat.uniforms.fogNear = buildingMat.uniforms.fogNear;
   mat.uniforms.fogFar = buildingMat.uniforms.fogFar;
   mat.uniforms.uAmbient = buildingMat.uniforms.uAmbient;
+  if (doubleSide) mat.side = THREE.DoubleSide;
   const mesh = new THREE.Mesh(geo, mat);
   mesh.matrixAutoUpdate = false;
   mesh.renderOrder = 2;
   return mesh;
+}
+
+function buildTileMesh(tile: BuildingTile): THREE.Mesh {
+  const apos: number[] = [];
+  const idx: number[] = [];
+  emitPrisms(tile, null, apos, idx);
+  return makeTileMesh(tile, apos, idx, false);
+}
+
+/**
+ * Street-view tile: true LoD2.2 roof surfaces (with skirt walls dropped to the
+ * ground) for slanted-roof buildings, prisms for the rest. Coordinates share
+ * the prism convention: dm ints against the tile origin.
+ */
+function buildNearTileMesh(tile: BuildingTile, shells: RoofShell[]): THREE.Mesh {
+  const apos: number[] = [];
+  const idx: number[] = [];
+  const skip = new Set<number>();
+  for (const s of shells) skip.add(s.ordinal);
+  emitPrisms(tile, skip, apos, idx);
+
+  for (const s of shells) {
+    const nV = s.verts.length / 3;
+    const base = apos.length / 3;
+    // top vertices, then ground copies for the skirts
+    for (let k = 0; k < nV; k++) apos.push(s.verts[k * 3], s.verts[k * 3 + 2], s.verts[k * 3 + 1]);
+    for (let k = 0; k < nV; k++) apos.push(s.verts[k * 3], 0, s.verts[k * 3 + 1]);
+    for (const rings of s.faces) {
+      // triangulate the roof face on its XY projection (roof planes are never vertical)
+      const flat: number[] = [];
+      const holes: number[] = [];
+      for (let r = 0; r < rings.length; r++) {
+        if (r > 0) holes.push(flat.length / 2);
+        for (const vi of rings[r]) flat.push(s.verts[vi * 3], s.verts[vi * 3 + 1]);
+      }
+      const ringVerts: number[] = [];
+      for (const ring of rings) for (const vi of ring) ringVerts.push(vi);
+      let tris = earcut(flat, holes.length ? holes : undefined, 2);
+      if (!tris.length && rings[0].length >= 3) {
+        tris = [];
+        for (let k = 1; k < rings[0].length - 1; k++) tris.push(0, k, k + 1);
+      }
+      for (const t of tris) idx.push(base + ringVerts[t]);
+      // skirt: vertical quads from every ring edge down to the ground
+      for (const ring of rings) {
+        for (let k = 0; k < ring.length; k++) {
+          const a = ring[k], b = ring[(k + 1) % ring.length];
+          idx.push(base + a, base + b, base + nV + b, base + a, base + nV + b, base + nV + a);
+        }
+      }
+    }
+  }
+  return makeTileMesh(tile, apos, idx, true);
+}
+
+const tileKeyOf = (tile: BuildingTile) => `${Math.round(tile.ox / 1000)}_${Math.round(tile.oy / 1000)}`;
+
+/**
+ * Streams true roof tiles in around the camera: within RADIUS_IN of the view
+ * target a tile swaps its prism mesh for the LoD2.2 near mesh (fetched and
+ * built on first approach), beyond RADIUS_OUT it swaps back. Built tiles stay
+ * cached up to CACHE_MAX, then the farthest are disposed.
+ */
+export class RoofStreamer {
+  private states = new Map<string, { tile: BuildingTile; prism: THREE.Mesh; near?: THREE.Mesh; status: "far" | "loading" | "near" | "none" }>();
+  private group: THREE.Group;
+  private base: string;
+  private inflight = 0;
+  private lastUpdate = 0;
+  static RADIUS_IN = 1700;
+  static RADIUS_OUT = 2300;
+  static CACHE_MAX = 80;
+
+  constructor(base: string, index: RoofIndex, tiles: BuildingTile[], group: THREE.Group) {
+    this.base = base;
+    this.group = group;
+    const meshByKey = new Map<string, THREE.Mesh>();
+    for (const child of group.children) {
+      const key = (child as THREE.Mesh).userData.tileKey as string | undefined;
+      if (key) meshByKey.set(key, child as THREE.Mesh);
+    }
+    for (const tile of tiles) {
+      const key = tileKeyOf(tile);
+      const prism = meshByKey.get(key);
+      if (!prism) continue;
+      this.states.set(key, { tile, prism, status: index.tiles[key] ? "far" : "none" });
+    }
+  }
+
+  update(target: THREE.Vector3, now: number) {
+    if (now - this.lastUpdate < 250) return;
+    this.lastUpdate = now;
+    const nearKeys: { key: string; d: number }[] = [];
+    for (const [key, st] of this.states) {
+      if (st.status === "none") continue;
+      const d = Math.hypot(st.tile.ox + 500 - target.x, -(st.tile.oy + 500) - target.z);
+      if (st.status === "far" && d < RoofStreamer.RADIUS_IN && this.inflight < 3) this.load(key, st);
+      if (st.near) {
+        const showNear = d < (st.prism.visible ? RoofStreamer.RADIUS_IN : RoofStreamer.RADIUS_OUT);
+        st.near.visible = showNear;
+        st.prism.visible = !showNear;
+        nearKeys.push({ key, d });
+      }
+    }
+    // evict the farthest cached near meshes beyond the cap
+    if (nearKeys.length > RoofStreamer.CACHE_MAX) {
+      nearKeys.sort((a, b) => b.d - a.d);
+      for (const { key, d } of nearKeys.slice(0, nearKeys.length - RoofStreamer.CACHE_MAX)) {
+        const st = this.states.get(key)!;
+        if (d < RoofStreamer.RADIUS_OUT) continue;
+        this.group.remove(st.near!);
+        st.near!.geometry.dispose();
+        (st.near!.material as THREE.Material).dispose();
+        st.near = undefined;
+        st.prism.visible = true;
+        st.status = "far";
+      }
+    }
+  }
+
+  private async load(key: string, st: { tile: BuildingTile; prism: THREE.Mesh; near?: THREE.Mesh; status: string }) {
+    st.status = "loading";
+    this.inflight++;
+    try {
+      const res = await fetch(`${this.base}roofs/${key}.bin`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const shells = parseRoofTile(await res.arrayBuffer());
+      const near = buildNearTileMesh(st.tile, shells);
+      near.userData.tileKey = key;
+      near.visible = false;
+      this.group.add(near);
+      st.near = near;
+      st.status = "near";
+    } catch {
+      st.status = "none"; // stay on prisms for this tile
+    } finally {
+      this.inflight--;
+    }
+  }
 }
 
 // rAF stalls in hidden tabs; MessageChannel yields run at full speed anywhere.
@@ -438,7 +584,11 @@ export async function buildBuildings(
   const CHUNK = 14;
   while (i < tiles.length) {
     const end = Math.min(tiles.length, i + CHUNK);
-    for (; i < end; i++) group.add(buildTileMesh(tiles[i]));
+    for (; i < end; i++) {
+      const mesh = buildTileMesh(tiles[i]);
+      mesh.userData.tileKey = tileKeyOf(tiles[i]);
+      group.add(mesh);
+    }
     onProgress(i / tiles.length);
     await yieldTask();
   }

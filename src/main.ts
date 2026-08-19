@@ -2,7 +2,8 @@ import "./style.css";
 import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
-import { buildCity, buildDistrictBounds, syncFog, setAmbient } from "./render/city";
+import { buildCity, buildDistrictBounds, syncFog, setAmbient, RoofStreamer } from "./render/city";
+import type { RoofIndex } from "./data/loader";
 import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "./render/dynamic";
 import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
@@ -40,12 +41,25 @@ async function resolveDataBase(): Promise<string> {
 async function boot() {
   const scene = new SceneCtx(ui.sceneCanvas);
 
-  const data = await loadCity(await resolveDataBase(), paintBoot);
+  const dataBase = await resolveDataBase();
+  const data = await loadCity(dataBase, paintBoot);
   paintBoot("grid", 1);
   paintBoot("signals", 1);
 
   const meshes = await buildCity(data, scene.scene, (f) => paintBoot("structures", 0.55 + f * 0.45));
   paintBoot("structures", 1);
+
+  // true LoD2.2 roofs stream in around the camera when the data is present
+  let roofs: RoofStreamer | null = null;
+  try {
+    const res = await fetch(`${dataBase}roofs/index.json`);
+    if (res.ok) {
+      const index = (await res.json()) as RoofIndex;
+      roofs = new RoofStreamer(dataBase, index, data.buildings, meshes.buildings);
+    }
+  } catch {
+    /* run with prisms only */
+  }
 
   const signals = new SignalsLayer(data.graph);
   const vehicles = new VehiclesLayer();
@@ -128,6 +142,7 @@ async function boot() {
     const t = THREE.MathUtils.clamp((scene.distance - 1500) / 2300, 0, 1);
     lineMat.opacity = 0.13 + 0.49 * t;
     meshes.roadLines.visible = meshes.roads.visible;
+    roofs?.update(scene.controls.target, now);
     app.frame(now);
     scene.renderer.render(scene.scene, scene.camera);
     fpsBox.frames++;

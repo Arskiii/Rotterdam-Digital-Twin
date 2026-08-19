@@ -12,6 +12,7 @@
     "build-data": "node scripts/build-data.mjs",
     "fetch-ndw": "node scripts/fetch-ndw.mjs",
     "fetch-heights": "NODE_USE_ENV_PROXY=1 node scripts/fetch-heights.mjs",
+    "fetch-roofs": "NODE_USE_ENV_PROXY=1 node scripts/fetch-lod2.mjs",
     "apply-heights": "node scripts/apply-heights.mjs",
     "audit-buildings": "node scripts/audit-buildings.mjs"
   },
