@@ -109,6 +109,7 @@ export class VehiclesLayer {
   cars: AgentMesh;
   bikes: AgentMesh;
   peds: AgentMesh;
+  trucks: AgentMesh;
   private dummy = new THREE.Object3D();
   private color = new THREE.Color();
 
@@ -116,10 +117,11 @@ export class VehiclesLayer {
     this.cars = new AgentMesh(15000, 4.5, 1.7, 2.0);
     this.bikes = new AgentMesh(8000, 1.9, 1.15, 0.5);
     this.peds = new AgentMesh(8000, 0.46, 1.1, 0.46);
+    this.trucks = new AgentMesh(2500, 8.6, 2.9, 2.6);
   }
 
   get meshes(): THREE.InstancedMesh[] {
-    return [this.cars.mesh, this.bikes.mesh, this.peds.mesh];
+    return [this.cars.mesh, this.bikes.mesh, this.peds.mesh, this.trucks.mesh];
   }
 
   /**
@@ -131,21 +133,23 @@ export class VehiclesLayer {
     this.cars.cursor = 0;
     this.bikes.cursor = 0;
     this.peds.cursor = 0;
+    this.trucks.cursor = 0;
     const carScale = Math.min(6, Math.max(1.45, viewScale));
     const softScale = Math.min(3, Math.max(1.2, viewScale * 0.75));
     for (let i = 0; i < count; i++) {
       let k = data[i * 4 + 3];
-      const mode = k >= 8 ? 2 : k >= 4 ? 1 : 0;
+      const mode = k >= 12 ? 3 : k >= 8 ? 2 : k >= 4 ? 1 : 0;
       k -= mode * 4;
       const tunnel = k >= 2;
       if (tunnel) k -= 2;
-      const target = mode === 0 ? this.cars : mode === 1 ? this.bikes : this.peds;
+      const target =
+        mode === 0 ? this.cars : mode === 1 ? this.bikes : mode === 2 ? this.peds : this.trucks;
       if (target.cursor >= target.capacity) continue;
       const x = data[i * 4];
       const z = -data[i * 4 + 1];
       this.dummy.position.set(x, 0.55, z);
       this.dummy.rotation.set(0, data[i * 4 + 2], 0);
-      const s = mode === 0 ? carScale : softScale;
+      const s = mode === 0 ? carScale : mode === 3 ? Math.min(4, carScale) : softScale;
       this.dummy.scale.set(s, 1, s);
       this.dummy.updateMatrix();
       const idx = target.cursor++;
@@ -163,17 +167,22 @@ export class VehiclesLayer {
         r = 0.5 - slow * 0.12;
         g = 0.92 - slow * 0.25;
         b = 0.8 - slow * 0.22;
-      } else {
+      } else if (mode === 2) {
         // pedestrians: warm amber-gray
         r = 0.78 - slow * 0.2;
         g = 0.7 - slow * 0.2;
         b = 0.56 - slow * 0.16;
+      } else {
+        // trucks: cold steel white, brake red when crawling
+        r = 0.88 + slow * 0.1;
+        g = 0.9 - slow * 0.5;
+        b = 0.95 - slow * 0.6;
       }
       if (tunnel) { r *= 0.3; g *= 0.3; b *= 0.32; }
       this.color.setRGB(r, g, b);
       target.mesh.setColorAt(idx, this.color);
     }
-    for (const t of [this.cars, this.bikes, this.peds]) {
+    for (const t of [this.cars, this.bikes, this.peds, this.trucks]) {
       t.mesh.count = t.cursor;
       t.mesh.instanceMatrix.needsUpdate = true;
       t.mesh.instanceColor!.needsUpdate = true;

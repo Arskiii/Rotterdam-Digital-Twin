@@ -59,6 +59,14 @@ export class App {
   private replayBar!: HTMLElement;
   private replayRange!: HTMLInputElement;
   private replayTime!: HTMLElement;
+  private liveCong: Float32Array | null = null;
+  // signal-program trial (A/B/C experiment)
+  private trial: {
+    stage: number;
+    stageStartSim: number;
+    acc: { n: number; speed: number; queued: number; thr: number; wait: number };
+    results: { program: string; speed: number; queued: number; thr: number; wait: number }[];
+  } | null = null;
   // street-intel spatial index (built lazily from graph geometry)
   private streetGrid: { cellOff: Int32Array; list: Int32Array; xy: Float32Array; edge: Uint32Array; minX: number; minY: number; nx: number; ny: number } | null = null;
   private hoverPx = { x: -1, y: -1 };
@@ -385,11 +393,11 @@ export class App {
     const v = this.layers.vehicles;
     const f = this.lastFrame;
     if (f && v.cars.mesh.visible) {
-      const MODE_LABEL = ["VEH", "BIKE", "PED"];
-      const visibleByMode = [v.cars.mesh.visible, v.bikes.mesh.visible, v.peds.mesh.visible];
+      const MODE_LABEL = ["VEH", "BIKE", "PED", "TRK"];
+      const visibleByMode = [v.cars.mesh.visible, v.bikes.mesh.visible, v.peds.mesh.visible, v.trucks.mesh.visible];
       for (let i = 0; i < f.count; i++) {
         const k = f.data[i * 4 + 3];
-        const mode = k >= 8 ? 2 : k >= 4 ? 1 : 0;
+        const mode = k >= 12 ? 3 : k >= 8 ? 2 : k >= 4 ? 1 : 0;
         if (!visibleByMode[mode]) continue;
         if (!this.scene.project(f.data[i * 4], 1, -f.data[i * 4 + 1], this.tmpPt)) continue;
         const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
@@ -493,7 +501,10 @@ export class App {
         this.districtLabels.forEach((l) => (l.style.display = on ? "" : "none"));
         break;
       case "signals": this.layers.signals.points.visible = on; break;
-      case "vehicles": this.layers.vehicles.cars.mesh.visible = on; break;
+      case "vehicles":
+        this.layers.vehicles.cars.mesh.visible = on;
+        this.layers.vehicles.trucks.mesh.visible = on;
+        break;
       case "bikes": this.layers.vehicles.bikes.mesh.visible = on; break;
       case "pedestrians": this.layers.vehicles.peds.mesh.visible = on; break;
       case "congestion":
@@ -522,6 +533,7 @@ export class App {
       case "metrics": {
         this.metrics = msg;
         this.incidentPts = msg.incidentPts ?? [];
+        this.trialTick(msg);
         this.cityHistory.push({ active: msg.active, speed: msg.avgSpeedKmh, cong: msg.congestionIndex });
         if (this.cityHistory.length > 900) this.cityHistory.shift();
         msg.districts.forEach((d, i) => {
@@ -535,6 +547,7 @@ export class App {
       }
       case "congestion": {
         const per = new Float32Array(msg.perEdge);
+        this.liveCong = per;
         if (this.replayIdx === null) this.layers.congestion.update(per);
         const now = performance.now();
         if (now - this.lastSnapAt > 9500) {
@@ -776,6 +789,74 @@ export class App {
     }
   }
 
+  // ---------- infrastructure trial (signal-program A/B/C) ----------
+  private static TRIAL_PROGRAMS: ("actuated" | "coordinated" | "fixed")[] = ["actuated", "coordinated", "fixed"];
+  private static TRIAL_LABEL = { actuated: "ACTUATED", coordinated: "GREEN WAVE", fixed: "FIXED-TIME" };
+  private static TRIAL_STAGE_SIM_S = 240; // 4 sim-minutes per program
+
+  startTrial() {
+    if (this.trial) {
+      this.toast("warn", "TRIAL ALREADY RUNNING");
+      return;
+    }
+    const first = App.TRIAL_PROGRAMS[0];
+    this.worker.postMessage({ type: "params", signalProgram: first });
+    this.trial = {
+      stage: 0,
+      stageStartSim: this.metrics?.simTime ?? 0,
+      acc: { n: 0, speed: 0, queued: 0, thr: 0, wait: 0 },
+      results: [],
+    };
+    this.log("info", `INFRASTRUCTURE TRIAL STARTED — 3 SIGNAL PROGRAMS × ${App.TRIAL_STAGE_SIM_S / 60} SIM-MIN (RAISE PHYSICS RATE TO SHORTEN)`);
+    this.toast("info", "<b>SIGNAL TRIAL RUNNING</b> — STAGE 1/3: ACTUATED");
+  }
+
+  private trialTick(m: MetricsMsg) {
+    const t = this.trial;
+    if (!t) return;
+    // skip the first 45 sim-s of each stage (transition wash-out)
+    if (m.simTime - t.stageStartSim > 45) {
+      t.acc.n++;
+      t.acc.speed += m.avgSpeedKmh;
+      t.acc.queued += m.queued;
+      t.acc.thr += m.throughputMin;
+      t.acc.wait += m.avgWaitSec;
+    }
+    if (m.simTime - t.stageStartSim < App.TRIAL_STAGE_SIM_S) return;
+    // stage complete
+    const program = App.TRIAL_PROGRAMS[t.stage];
+    const n = Math.max(1, t.acc.n);
+    t.results.push({
+      program: App.TRIAL_LABEL[program],
+      speed: t.acc.speed / n,
+      queued: t.acc.queued / n,
+      thr: t.acc.thr / n,
+      wait: t.acc.wait / n,
+    });
+    t.stage++;
+    if (t.stage < App.TRIAL_PROGRAMS.length) {
+      const next = App.TRIAL_PROGRAMS[t.stage];
+      this.worker.postMessage({ type: "params", signalProgram: next });
+      t.stageStartSim = m.simTime;
+      t.acc = { n: 0, speed: 0, queued: 0, thr: 0, wait: 0 };
+      this.toast("info", `SIGNAL TRIAL — STAGE ${t.stage + 1}/3: ${App.TRIAL_LABEL[next]}`);
+      return;
+    }
+    // trial finished: report and restore actuated
+    for (const r of t.results) {
+      this.log(
+        "info",
+        `TRIAL ${r.program}: ${r.speed.toFixed(1)} KM/H MEAN · ${Math.round(r.queued)} QUEUED · ${Math.round(r.thr)} TRIPS/MIN · WAIT ${r.wait.toFixed(0)}S`
+      );
+    }
+    const best = [...t.results].sort((a, b) => b.speed - a.speed)[0];
+    this.log("ok", `TRIAL VERDICT — ${best.program} DELIVERS BEST FLOW (${best.speed.toFixed(1)} KM/H NETWORK MEAN)`);
+    this.toast("info", `<b>TRIAL COMPLETE</b> — ${best.program} WINS · SEE MESSAGES FOR THE COMPARISON`);
+    this.worker.postMessage({ type: "params", signalProgram: "actuated" });
+    this.trial = null;
+    this.setDock("messages");
+  }
+
   // ---------- congestion replay ----------
   private syncReplayRange(jumpToEnd: boolean) {
     this.replayRange.max = String(Math.max(0, this.history.length - 1));
@@ -809,6 +890,7 @@ export class App {
     const on = (layer: string) =>
       this.ui.layerBoxes.find((b) => b.dataset.layer === layer)?.checked ?? true;
     this.layers.vehicles.cars.mesh.visible = on("vehicles");
+    this.layers.vehicles.trucks.mesh.visible = on("vehicles");
     this.layers.vehicles.bikes.mesh.visible = on("bikes");
     this.layers.vehicles.peds.mesh.visible = on("pedestrians");
     this.layers.signals.points.visible = on("signals");
@@ -895,7 +977,11 @@ export class App {
     const speed = g.edges.speed[edge];
     const district = DISTRICTS[g.edges.district[edge]]?.name ?? "";
     const speedPart = g.edges.cls[edge] <= 6 ? ` · ${speed} KM/H` : "";
-    return `${name.toUpperCase()} · ${cls}${speedPart} · ${district.toUpperCase()}`;
+    let flux = "";
+    if (this.liveCong && g.edges.cls[edge] <= 6 && edge < this.liveCong.length) {
+      flux = ` · FLUX ${Math.round(this.liveCong[edge] * 100)}%`;
+    }
+    return `${name.toUpperCase()} · ${cls}${speedPart}${flux} · ${district.toUpperCase()}`;
   }
 
   private zoneName(x: number, y: number): string {
@@ -929,6 +1015,7 @@ export class App {
     if (!m || !this.ui.statsRow.isConnected) return;
     const cards: [string, string, string?][] = [
       ["Active tracks", fmtInt(m.active), `PEAK TARGET ${fmtInt(this.density)}`],
+      ["Freight", fmtInt(m.trucks)],
       ["Bike tracks", fmtInt(m.bikes)],
       ["Pedestrians", fmtInt(m.walkers)],
       ["Transit units", fmtInt(this.layers.transit.vehicleCount), `${fmtInt(this.data.transit.length)} ROUTES`],
@@ -1198,6 +1285,33 @@ export class App {
             <div class="seg" id="su-dpr"><button data-v="0">Auto</button><button data-v="1">1×</button><button data-v="2" class="on">2×</button></div></div>
           <div style="font-size:9.5px;line-height:1.8;color:var(--text-faint);letter-spacing:.05em;margin-top:6px" id="su-sysinfo"></div>
         </div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="panel">
+        <div class="p-title">Scenario library — city operations</div>
+        <div id="su-scenarios" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
+          <div class="sc">
+            <button class="action-btn" data-sc="bridge" style="width:100%">Erasmusbrug raised</button>
+            <div class="sc-d">DECK OPENS FOR SHIPPING — SPAN CLOSED ~4 MIN, ALL TRAFFIC REROUTES VIA WILLEMSBRUG / MAASTUNNEL</div>
+          </div>
+          <div class="sc">
+            <button class="action-btn" data-sc="stadium" style="width:100%">De Kuip egress</button>
+            <div class="sc-d">MATCH ENDS AT STADIONPARK — 2,200 CARS AND PEDESTRIANS SURGE OUT OVER ~7 MIN</div>
+          </div>
+          <div class="sc">
+            <button class="action-btn" data-sc="roadworks" style="width:100%">'s-Gravendijkwal works</button>
+            <div class="sc-d">CAPACITY CUT TO ONE LANE FOR 10 MIN — WATCH SPILLBACK ON THE FLUX OVERLAY</div>
+          </div>
+          <div class="sc">
+            <button class="action-btn" data-sc="freight" style="width:100%">Waalhaven surge</button>
+            <div class="sc-d">HEAVY FREIGHT CONVOY RELEASES FROM THE PORT ONTO THE RING</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
+          <button class="action-btn" id="su-sc-clear">Clear scenario</button>
+          <button class="action-btn" id="su-trial" style="border-color:#1e4a2a;color:var(--green)">Run signal trial — A/B/C</button>
+          <span style="font-size:9px;color:var(--text-faint);letter-spacing:.08em">TRIAL SEQUENCES ACTUATED → GREEN WAVE → FIXED (4 SIM-MIN EACH) AND REPORTS THE BEST-FLOWING PROGRAM</span>
+        </div>
       </div>`;
 
     const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -1276,6 +1390,28 @@ export class App {
       })
     );
     $("su-sysinfo").innerHTML = `ENGINE: THREE.JS WEBGL2 · SIM: DEDICATED WORKER<br>DATA: OPENSTREETMAP (ODBL) — PROCESSED ${new Date().toISOString().slice(0, 10)}<br>PROJECTION: LOCAL TANGENT PLANE @ 51.9200N 4.4800E`;
+
+    // scenario library
+    const SC_VIEW: Record<string, [number, number, number]> = {
+      bridge: [481, 1216, 1500],
+      stadium: [2960, 2886, 1900],
+      roadworks: [-920, 498, 1500],
+      freight: [-4258, 3317, 2600],
+    };
+    p.querySelectorAll<HTMLButtonElement>("#su-scenarios button[data-sc]").forEach((b) =>
+      b.addEventListener("click", () => {
+        const kind = b.dataset.sc as "bridge" | "stadium" | "roadworks" | "freight";
+        this.worker.postMessage({ type: "scenario", kind });
+        this.setPage("map");
+        const [x, z, d] = SC_VIEW[kind];
+        this.scene.flyTo(new THREE.Vector3(x, 0, z), d, 1300);
+      })
+    );
+    $("su-sc-clear").addEventListener("click", () => this.worker.postMessage({ type: "scenario", kind: "clear" }));
+    $("su-trial").addEventListener("click", () => {
+      this.startTrial();
+      this.setPage("map");
+    });
   }
 
   private unitsCountLabel() {

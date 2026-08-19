@@ -1353,6 +1353,14 @@ table.district td:first-child {
   border-color: #5c2626;
 }
 
+#su-scenarios .sc-d {
+  font-size: 8.5px;
+  line-height: 1.6;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  margin-top: 7px;
+}
+
 /* ---------- boot overlay ----------------------------------- */
 
 #boot {
