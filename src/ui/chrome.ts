@@ -115,6 +115,7 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="rail" checked /><span class="box"></span>Rail grid</label>
           <label><input type="checkbox" data-layer="transit" checked /><span class="box"></span>Transit fleet</label>
           <label><input type="checkbox" data-layer="bounds" checked /><span class="box"></span>District bounds</label>
+          <label><input type="checkbox" data-layer="sensors" checked /><span class="box"></span>Sensor net</label>
           <label><input type="checkbox" data-layer="labels" checked /><span class="box"></span>Unit labels</label>
         </div>
 

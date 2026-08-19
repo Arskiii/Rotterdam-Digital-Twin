@@ -86,6 +86,7 @@ export class App {
       congestion: CongestionLayer;
       transit: TransitLayer;
       districtLines: THREE.LineSegments;
+      ndwPoints: THREE.Points;
     },
     public worker: Worker
   ) {
@@ -500,6 +501,7 @@ export class App {
         this.layers.districtLines.visible = on;
         this.districtLabels.forEach((l) => (l.style.display = on ? "" : "none"));
         break;
+      case "sensors": this.layers.ndwPoints.visible = on; break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles":
         this.layers.vehicles.cars.mesh.visible = on;
@@ -757,6 +759,19 @@ export class App {
     const m = this.metrics;
     const el = document.getElementById("sim-clock-chip");
     if (el && m) el.textContent = `SIM ${fmtSimClock(m.clockMin)}`;
+    // live calibration readout on the SETUP page
+    const live = document.getElementById("su-ndw-live");
+    if (live && m?.calibration) {
+      const c = m.calibration;
+      if (c.ratio > 0) {
+        const n = 1 / c.ratio;
+        live.innerHTML =
+          `LIVE: SIM <b style="color:var(--text)">${fmtInt(c.simVehH)}</b> VS EXPECTED <b style="color:var(--text)">${fmtInt(c.realVehH)}</b> VEH/H · ` +
+          `<b style="color:${c.ratio > 0.85 && c.ratio < 1.18 ? "var(--green)" : "var(--amber)"}">${(c.ratio * 100).toFixed(1)}%</b> — SCALE 1:${n.toFixed(1)}`;
+      } else {
+        live.textContent = "LIVE: MEASURING…";
+      }
+    }
   }
 
   // ---------- perf/health live panel ----------
@@ -1025,6 +1040,9 @@ export class App {
       ["Signals green", fmtInt(m.greensNow), `OF ${fmtInt(this.data.meta.counts.signalsInventory)} HEADS`],
       ["Congestion idx", `${Math.round(m.congestionIndex * 100)}<span class="u">%</span>`],
       ["Incidents", fmtInt(m.incidents)],
+      ...(m.calibration && m.calibration.ratio > 0
+        ? [["NDW match", `${(m.calibration.ratio * 100).toFixed(0)}<span class="u">%</span>`, `${fmtInt(m.calibration.stations)} STATIONS · 1:${(1 / m.calibration.ratio).toFixed(1)}`] as [string, string, string]]
+        : []),
       ["Sim clock", fmtSimClock(m.clockMin), `DAY COMPRESSION 72×`],
       ["Completed trips", fmtInt(m.completed)],
     ];
@@ -1092,7 +1110,7 @@ export class App {
         ${line("Structures", fmtInt(c.buildings))}
         ${line("Hydro polygons", fmtInt(c.waterPolys))}
         ${line("Transit routes", fmtInt(this.data.transit.length))}
-        ${line("Observation districts", fmtInt(this.data.meta.districts.length))}
+        ${line("NDW sensor stations", fmtInt(this.data.ndw?.stations.length ?? 0))}
       </div>
       <div class="ov-col">
         <div class="ov-title">Fleet</div>
@@ -1288,6 +1306,18 @@ export class App {
       </div>
       <div style="height:12px"></div>
       <div class="panel">
+        <div class="p-title">Calibration — NDW real traffic counts</div>
+        <div style="display:flex;gap:26px;align-items:center;flex-wrap:wrap">
+          <div id="su-ndw-info" style="font-size:10px;letter-spacing:.08em;color:var(--text-dim);line-height:1.9">NO SENSOR SNAPSHOT LOADED</div>
+          <div id="su-ndw-live" style="font-size:10px;letter-spacing:.08em;color:var(--text-dim);line-height:1.9"></div>
+          <button class="action-btn" id="su-calibrate" style="border-color:#1e4a2a;color:var(--green)">Auto-calibrate demand</button>
+        </div>
+        <div style="font-size:8.5px;letter-spacing:.06em;color:var(--text-faint);margin-top:9px;line-height:1.7">
+          THE SIM COUNTS ITS OWN VEHICLES PASSING EVERY NDW STATION AND COMPARES AGAINST THE MEASURED VEH/H (NORMALIZED TO THE SIM CLOCK VIA THE DEMAND CURVE). AUTO-CALIBRATE SCALES FLEET DENSITY TOWARD PARITY; THE RESIDUAL IS REPORTED AS A 1:N REPRESENTATION FACTOR. SOURCE: NDW OPEN DATA.
+        </div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="panel">
         <div class="p-title">Scenario library — city operations</div>
         <div id="su-scenarios" style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px">
           <div class="sc">
@@ -1408,6 +1438,36 @@ export class App {
       })
     );
     $("su-sc-clear").addEventListener("click", () => this.worker.postMessage({ type: "scenario", kind: "clear" }));
+
+    // calibration panel
+    const ndw = this.data.ndw;
+    if (ndw) {
+      const cap = new Date(ndw.capturedAt);
+      $("su-ndw-info").innerHTML =
+        `SNAPSHOT: <b style="color:var(--text)">${ndw.stations.length}</b> STATIONS · CAPTURED ${cap.toISOString().slice(0, 16).replace("T", " ")}Z (${fmtSimClock(ndw.todMin)} NL)<br>` +
+        `MEASURED FLOW OVER STATIONS: <b style="color:var(--text)">${fmtInt(ndw.stations.reduce((a, s) => a + s.flow, 0))}</b> VEH/H`;
+    }
+    $("su-calibrate").addEventListener("click", () => {
+      const cal = this.metrics?.calibration;
+      if (!cal || cal.ratio <= 0) {
+        this.toast("warn", "CALIBRATION NOT READY — LET THE SIM MEASURE FOR A MINUTE");
+        return;
+      }
+      const factor = Math.min(3, 1 / cal.ratio);
+      const newDensity = Math.round(Math.min(12000, Math.max(600, this.density * factor)));
+      this.density = newDensity;
+      const slider = document.getElementById("su-dens") as HTMLInputElement | null;
+      if (slider) {
+        slider.value = String(newDensity);
+        const label = document.getElementById("su-dens-v");
+        if (label) label.textContent = fmtInt(newDensity);
+      }
+      this.worker.postMessage({ type: "params", density: newDensity });
+      this.log(
+        "ok",
+        `AUTO-CALIBRATION APPLIED — FLEET DENSITY → ${fmtInt(newDensity)} (SIM WAS AT ${(cal.ratio * 100).toFixed(1)}% OF MEASURED FLOW)`
+      );
+    });
     $("su-trial").addEventListener("click", () => {
       this.startTrial();
       this.setPage("map");

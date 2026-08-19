@@ -190,6 +190,38 @@ export class VehiclesLayer {
   }
 }
 
+/** NDW loop-detector stations: small cyan diamonds. */
+export function buildNdwLayer(stations: { x: number; y: number }[]): THREE.Points {
+  const pos = new Float32Array(stations.length * 3);
+  stations.forEach((s, i) => {
+    pos[i * 3] = s.x;
+    pos[i * 3 + 1] = 4;
+    pos[i * 3 + 2] = -s.y;
+  });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    vertexShader: /* glsl */ `
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(position, 1.0);
+        gl_PointSize = clamp(2200.0 / -mv.z, 2.0, 7.0);
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: /* glsl */ `
+      void main() {
+        vec2 uv = abs(gl_PointCoord - 0.5);
+        if (uv.x + uv.y > 0.5) discard; // diamond
+        gl_FragColor = vec4(0.31, 0.76, 0.91, 0.85);
+      }`,
+  });
+  const pts = new THREE.Points(geo, mat);
+  pts.frustumCulled = false;
+  pts.renderOrder = 5;
+  return pts;
+}
+
 export class CongestionLayer {
   lines: THREE.LineSegments;
   private colAttr: THREE.BufferAttribute;
