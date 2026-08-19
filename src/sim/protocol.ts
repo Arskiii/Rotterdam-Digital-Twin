@@ -24,7 +24,12 @@ export interface IncidentMsg {
   action: "random" | "clearAll";
 }
 
-export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg;
+export interface ScenarioMsg {
+  type: "scenario";
+  kind: "bridge" | "stadium" | "roadworks" | "freight" | "clear";
+}
+
+export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg;
 
 export interface ReadyMsg {
   type: "ready";
@@ -56,6 +61,7 @@ export interface MetricsMsg {
   simTime: number;
   clockMin: number;
   active: number; // cars
+  trucks: number;
   bikes: number;
   walkers: number;
   completed: number;

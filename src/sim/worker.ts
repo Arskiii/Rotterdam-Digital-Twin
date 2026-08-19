@@ -54,14 +54,15 @@ let ctlTimer: Float32Array;
 let ctlGap: Float32Array; // seconds since last demand on the green phase
 let phaseDemand: Float32Array; // [cluster*2 + phase] accumulated waiting
 
-// agents (SoA)
+// agents (SoA) — mode 3 = truck (car rules, heavier dynamics, shares car lanes)
 const MAXV = 22000;
-const MODES = 3; // 0 car, 1 bike, 2 walk
-const V_LEN = [4.8, 2.0, 0.6];
-const IDM_A = [1.7, 1.4, 0];
-const IDM_B = [2.4, 2.0, 0];
-const IDM_T = [1.15, 0.9, 0];
-const IDM_S0 = [2.1, 1.4, 0];
+const MODES = 3; // spawn-table modes: 0 car, 1 bike, 2 walk
+const V_LEN = [4.8, 2.0, 0.6, 9.5];
+const IDM_A = [1.7, 1.4, 0, 0.9];
+const IDM_B = [2.4, 2.0, 0, 1.6];
+const IDM_T = [1.15, 0.9, 0, 1.5];
+const IDM_S0 = [2.1, 1.4, 0, 3.0];
+const TRUCK_SHARE = 0.05;
 let vAlive: Uint8Array;
 let vMode: Uint8Array;
 let vEdge: Int32Array;
@@ -74,7 +75,17 @@ let vWait: Float32Array;
 let vRouteIdx: Int32Array;
 const vRoutes: Int32Array[] = [];
 let freeList: number[] = [];
-const activeByMode = [0, 0, 0];
+const activeByMode = [0, 0, 0, 0]; // cars, bikes, walkers, trucks
+
+// scenario machinery
+interface ScenarioState {
+  kind: string;
+  until: number; // simTime
+  blockedEdges: number[]; // directed
+  speedEdges: { d: number; orig: number }[];
+}
+let scenario: ScenarioState | null = null;
+let burst: { edges: Int32Array; walkEdges: Int32Array; carsLeft: number; walkLeft: number; truckChance: number } | null = null;
 
 // params
 let targetDensity = 5200;
@@ -101,6 +112,7 @@ const incidents: { dEdge: number; until: number; x: number; y: number }[] = [];
 // per-mode free-flow speed on a directed edge
 function modeSpeed(d: number, mode: number): number {
   if (mode === 0) return dSpeed[d];
+  if (mode === 3) return Math.min(23, dSpeed[d] * 0.88); // trucks capped ~83 km/h
   const cls = G.edges.cls[d >> 1];
   if (mode === 1) {
     if (cls === 8) return 5.6; // cycle track
@@ -109,7 +121,7 @@ function modeSpeed(d: number, mode: number): number {
   }
   return 1.38; // walk
 }
-const MODE_HEUR_SPEED = [27, 5.6, 1.6];
+const MODE_HEUR_SPEED = [27, 5.6, 1.6, 23];
 
 // ---------------- init ----------------
 function init(buf: ArrayBuffer) {
@@ -330,7 +342,7 @@ function route(fromEdge: number, toEdge: number, mode: number): Int32Array | nul
   return null;
 }
 
-// ---------------- queues ----------------
+// ---------------- queues (trucks share the car lanes) ----------------
 const qBase = (mode: number) => (mode === 1 ? M : 0);
 function enqueue(veh: number, d: number) {
   const q = qBase(vMode[veh]) + d;
@@ -358,10 +370,10 @@ const TRIP_SHAPE = [
   [140, 1300, 1.0],
 ];
 
-function spawn(mode: number) {
+function spawn(mode: number, originEdge = -1, truckChance = TRUCK_SHARE) {
   if (freeList.length === 0) return;
   for (let tries = 0; tries < 4; tries++) {
-    const a = sampleSpawnEdge(mode);
+    const a = originEdge >= 0 ? originEdge : sampleSpawnEdge(mode);
     if (a < 0) return;
     let b = sampleSpawnEdge(mode);
     const [minR, maxR, localShare] = TRIP_SHAPE[mode];
@@ -380,16 +392,17 @@ function spawn(mode: number) {
     const id = freeList.pop()!;
     vRoutes[id] = r;
     vRouteIdx[id] = 0;
-    vMode[id] = mode;
+    vMode[id] = mode === 0 && Math.random() < truckChance ? 3 : mode;
+    const m = vMode[id];
     vEdge[id] = a;
     vS[id] = Math.min(8, dLen[a] * 0.3);
-    vV[id] = Math.min(modeSpeed(a, mode), mode === 2 ? 1.4 : 8);
-    vV0f[id] = mode === 2 ? 0.85 + Math.random() * 0.4 : 0.88 + Math.random() * 0.27;
+    vV[id] = Math.min(modeSpeed(a, m), m === 2 ? 1.4 : 8);
+    vV0f[id] = m === 2 ? 0.85 + Math.random() * 0.4 : m === 3 ? 0.78 + Math.random() * 0.14 : 0.88 + Math.random() * 0.27;
     vWait[id] = 0;
     vAlive[id] = 1;
-    if (mode !== 2) {
-      const tail = qTail[qBase(mode) + a];
-      if (tail >= 0 && vS[tail] < vS[id] + V_LEN[mode] + 2) {
+    if (m !== 2) {
+      const tail = qTail[qBase(m) + a];
+      if (tail >= 0 && vS[tail] < vS[id] + V_LEN[m] + 2) {
         vAlive[id] = 0;
         freeList.push(id);
         return;
@@ -399,7 +412,7 @@ function spawn(mode: number) {
       vAhead[id] = -1;
       vBehind[id] = -1;
     }
-    activeByMode[mode]++;
+    activeByMode[m]++;
     return;
   }
 }
@@ -409,7 +422,7 @@ function despawn(id: number, finished: boolean) {
   vAlive[id] = 0;
   freeList.push(id);
   activeByMode[vMode[id]]--;
-  if (finished && vMode[id] === 0) {
+  if (finished && (vMode[id] === 0 || vMode[id] === 3)) {
     completed++;
     completedLog.push({ t: simTime, wait: vWait[id] });
   }
@@ -670,8 +683,8 @@ function stepVehicles(dt: number) {
     const v = vV[id];
 
     const remain = len - s;
-    if (remain < 34 && mode === 0) {
-      const turnV = 7.5;
+    if (remain < 34 && (mode === 0 || mode === 3)) {
+      const turnV = mode === 3 ? 5.5 : 7.5;
       v0 = Math.min(v0, turnV + (remain / 34) * (v0 - turnV) * 0.5 + turnV);
     }
 
@@ -692,7 +705,7 @@ function stepVehicles(dt: number) {
       const isLast = rIdx >= routeArr.length - 1;
       const next = isLast ? -1 : routeArr[rIdx + 1];
       if (!mustStop && next >= 0) {
-        if (mode === 0 && dBlocked[next]) mustStop = true;
+        if ((mode === 0 || mode === 3) && dBlocked[next]) mustStop = true;
         else {
           const tail = qTail[qBase(mode) + next];
           if (tail >= 0) {
@@ -705,7 +718,7 @@ function stepVehicles(dt: number) {
         gap = Math.min(gap, stopGap);
         dv = v;
         // register demand with the actuated controller (cars near the stop line)
-        if (mode === 0 && sig === 0 && remain < 40 && v < 3) {
+        if ((mode === 0 || mode === 3) && sig === 0 && remain < 40 && v < 3) {
           const si = nodeSignal[dTarget[d]];
           if (si >= 0) phaseDemand[G.signals.cluster[si] * 2 + G.signals.phase[si]] += dt;
         }
@@ -733,7 +746,7 @@ function stepVehicles(dt: number) {
       const canGo = sig === 2 || sig === 3 || (sig === 1 && vV[id] > 3);
       const tail = next >= 0 ? qTail[qBase(mode) + next] : -1;
       const room = tail < 0 || vS[tail] > V_LEN[mode] + 1.5;
-      if (canGo && next >= 0 && !(mode === 0 && dBlocked[next]) && room) {
+      if (canGo && next >= 0 && !((mode === 0 || mode === 3) && dBlocked[next]) && room) {
         removeFromQueue(id);
         vEdge[id] = next;
         vRouteIdx[id] = rIdx + 1;
@@ -742,7 +755,7 @@ function stepVehicles(dt: number) {
         enqueue(id, next);
         vV[id] = nv;
         continue;
-      } else if (mode === 0 && next >= 0 && dBlocked[next] && vV[id] < 1) {
+      } else if ((mode === 0 || mode === 3) && next >= 0 && dBlocked[next] && vV[id] < 1) {
         const dest = routeArr[routeArr.length - 1];
         const r = route(d, dest, 0);
         if (r && r.length >= 2) {
@@ -759,7 +772,7 @@ function stepVehicles(dt: number) {
 
     vS[id] = ns;
     vV[id] = nv;
-    if (mode === 0) {
+    if (mode === 0 || mode === 3) {
       edgeVSum[e] += nv / Math.max(1, dSpeed[d]);
       edgeVN[e] = Math.min(65000, edgeVN[e] + 1);
     }
@@ -826,6 +839,90 @@ function injectIncident() {
   }
 }
 
+// ---------------- scenario library ----------------
+function edgesByName(name: string): number[] {
+  const target = name.toLowerCase();
+  let nameIdx = -1;
+  for (let i = 0; i < G.names.length; i++) {
+    if (G.names[i].toLowerCase() === target) { nameIdx = i; break; }
+  }
+  if (nameIdx < 0) return [];
+  const out: number[] = [];
+  for (let e = 0; e < G.edges.count; e++) {
+    if (G.edges.nameIdx[e] === nameIdx && G.edges.modeMask[e] & MODE_CAR) out.push(e);
+  }
+  return out;
+}
+
+function spawnEdgesNear(mode: number, x: number, y: number, radius: number): Int32Array {
+  const out: number[] = [];
+  const r2 = radius * radius;
+  const table = spawnEdges[mode];
+  for (let i = 0; i < table.length; i++) {
+    const d = table[i];
+    const n = dSource[d];
+    const dx = G.nodesXY[n * 2] - x;
+    const dy = G.nodesXY[n * 2 + 1] - y;
+    if (dx * dx + dy * dy < r2) out.push(d);
+  }
+  return Int32Array.from(out);
+}
+
+function clearScenario(announce: boolean) {
+  if (!scenario) return;
+  for (const d of scenario.blockedEdges) dBlocked[d] = 0;
+  for (const { d, orig } of scenario.speedEdges) dSpeed[d] = orig;
+  scenario = null;
+  burst = null;
+  if (announce) post({ type: "event", level: "ok", text: "SCENARIO CLEARED BY OPERATOR — NETWORK RESTORED" });
+}
+
+function startScenario(kind: string) {
+  clearScenario(false);
+  if (kind === "bridge") {
+    const es = edgesByName("Erasmusbrug");
+    if (!es.length) {
+      post({ type: "event", level: "warn", text: "SCENARIO ABORT — TARGET SPAN NOT FOUND IN GRID" });
+      return;
+    }
+    const blocked: number[] = [];
+    for (const e of es) {
+      dBlocked[e * 2] = 1;
+      blocked.push(e * 2);
+      if (dExists[e * 2 + 1]) { dBlocked[e * 2 + 1] = 1; blocked.push(e * 2 + 1); }
+    }
+    scenario = { kind, until: simTime + 260, blockedEdges: blocked, speedEdges: [] };
+    post({ type: "event", level: "crit", text: "ERASMUSBRUG DECK RAISED — SPAN CLOSED, ALL TRACKS REROUTING VIA WILLEMSBRUG / MAASTUNNEL" });
+  } else if (kind === "roadworks") {
+    const es = edgesByName("'s-Gravendijkwal");
+    if (!es.length) {
+      post({ type: "event", level: "warn", text: "SCENARIO ABORT — WORKS CORRIDOR NOT FOUND IN GRID" });
+      return;
+    }
+    const speedEdges: { d: number; orig: number }[] = [];
+    for (const e of es) {
+      for (const d of [e * 2, e * 2 + 1]) {
+        if (!dExists[d]) continue;
+        speedEdges.push({ d, orig: dSpeed[d] });
+        dSpeed[d] = dSpeed[d] * 0.32;
+      }
+    }
+    scenario = { kind, until: simTime + 600, blockedEdges: [], speedEdges };
+    post({ type: "event", level: "warn", text: "ROADWORKS ON 'S-GRAVENDIJKWAL — CAPACITY CUT TO ONE LANE, EXPECT SPILLBACK" });
+  } else if (kind === "stadium") {
+    const edges = spawnEdgesNear(0, 2960, -2886, 950);
+    const walkEdges = spawnEdgesNear(2, 2960, -2886, 950);
+    burst = { edges, walkEdges, carsLeft: 700, walkLeft: 1500, truckChance: 0.02 };
+    scenario = { kind, until: simTime + 420, blockedEdges: [], speedEdges: [] };
+    post({ type: "event", level: "warn", text: "DE KUIP MATCH EGRESS — 2,200 TRACKS SURGING FROM STADIONPARK" });
+  } else if (kind === "freight") {
+    const edges = spawnEdgesNear(0, -4258, -3317, 1300);
+    burst = { edges, walkEdges: Int32Array.of(), carsLeft: 520, walkLeft: 0, truckChance: 0.8 };
+    scenario = { kind, until: simTime + 420, blockedEdges: [], speedEdges: [] };
+    post({ type: "event", level: "warn", text: "WAALHAVEN FREIGHT SURGE — HEAVY CONVOY RELEASING ONTO THE RING" });
+  }
+}
+
 // ---------------- metrics ----------------
 let lastMetrics = 0;
 let lastCong = 0;
@@ -835,8 +932,10 @@ function sendMetrics() {
   const dists: DistrictStat[] = [];
   distAgg.veh.fill(0); distAgg.spd.fill(0); distAgg.q.fill(0); distAgg.cong.fill(0); distAgg.n.fill(0);
   let vSum = 0, queued = 0;
+  let roadAgents = 0;
   for (let id = 0; id < MAXV; id++) {
-    if (!vAlive[id] || vMode[id] !== 0) continue;
+    if (!vAlive[id] || (vMode[id] !== 0 && vMode[id] !== 3)) continue;
+    roadAgents++;
     const e = vEdge[id] >> 1;
     const di = G.edges.district[e];
     distAgg.veh[di]++;
@@ -870,17 +969,17 @@ function sendMetrics() {
   for (let e = 0; e < G.edges.count; e++) {
     if (G.edges.cls[e] <= 4) { congSum += edgeCong[e]; congN++; }
   }
-  const carActive = activeByMode[0];
   const msg: MetricsMsg = {
     type: "metrics",
     simTime,
     clockMin,
-    active: carActive,
+    active: activeByMode[0],
+    trucks: activeByMode[3],
     bikes: activeByMode[1],
     walkers: activeByMode[2],
     completed,
     throughputMin: thr,
-    avgSpeedKmh: carActive > 0 ? (vSum / carActive) * 3.6 : 0,
+    avgSpeedKmh: roadAgents > 0 ? (vSum / roadAgents) * 3.6 : 0,
     queued,
     avgWaitSec: avgWait,
     congestionIndex: congN ? congSum / congN : 0,
@@ -931,9 +1030,30 @@ function tick() {
     Math.round(targetDensity * 0.34 * (0.35 + 0.65 * dm)),
   ];
   for (let mode = 0; mode < MODES; mode++) {
-    const deficit = targets[mode] - activeByMode[mode];
+    const have = mode === 0 ? activeByMode[0] + activeByMode[3] : activeByMode[mode];
+    const deficit = targets[mode] - have;
     const spawns = Math.min(mode === 0 ? 7 : 5, Math.max(0, Math.ceil(deficit * 0.02)));
     for (let i = 0; i < spawns; i++) spawn(mode);
+  }
+
+  // scenario burst spawns (stadium egress / freight surge)
+  if (burst) {
+    for (let i = 0; i < 8 && burst.carsLeft > 0; i++) {
+      if (burst.edges.length === 0) break;
+      spawn(0, burst.edges[Math.floor(Math.random() * burst.edges.length)], burst.truckChance);
+      burst.carsLeft--;
+    }
+    for (let i = 0; i < 12 && burst.walkLeft > 0; i++) {
+      if (burst.walkEdges.length === 0) break;
+      spawn(2, burst.walkEdges[Math.floor(Math.random() * burst.walkEdges.length)]);
+      burst.walkLeft--;
+    }
+    if (burst.carsLeft <= 0 && burst.walkLeft <= 0) burst = null;
+  }
+  if (scenario && simTime > scenario.until) {
+    const kind = scenario.kind;
+    clearScenario(false);
+    post({ type: "event", level: "ok", text: `SCENARIO ${kind.toUpperCase()} CONCLUDED — NETWORK RESTORED` });
   }
 
   maybeInject();
@@ -973,7 +1093,7 @@ function tick() {
     const hl = Math.hypot(hx, hy) || 1;
     // lane offset right of travel: cars centered in lane, bikes at the curb,
     // pedestrians on the sidewalk side
-    const lane = mode === 0 ? 1.65 : mode === 1 ? 2.9 : 0.9;
+    const lane = mode === 0 || mode === 3 ? 1.65 : mode === 1 ? 2.9 : 0.9;
     const ox = (hy / hl) * lane;
     const oy = (-hx / hl) * lane;
     const tunnel = (G.edges.flags[e] & 2) !== 0;
@@ -1020,6 +1140,9 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     if (msg.congestionFeed !== undefined) congestionFeed = msg.congestionFeed;
     if (msg.autoIncidents !== undefined) autoIncidents = msg.autoIncidents;
     if (msg.timeOfDayMin !== undefined) clockMin = msg.timeOfDayMin;
+  } else if (msg.type === "scenario") {
+    if (msg.kind === "clear") clearScenario(true);
+    else startScenario(msg.kind);
   } else if (msg.type === "incident") {
     if (msg.action === "random") injectIncident();
     else {
