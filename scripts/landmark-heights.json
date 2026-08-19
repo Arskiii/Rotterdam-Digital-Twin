@@ -1,0 +1,19 @@
+[
+  { "name": "Zalmhaventoren", "lat": 51.90545, "lon": 4.47461, "h": 203, "note": "roof height; 215 m to mast tip — tallest tower in the Benelux (2022)" },
+  { "name": "New Orleans", "lat": 51.90495, "lon": 4.4875, "h": 158.4, "note": "Wilhelminapier" },
+  { "name": "World Port Center", "lat": 51.90471, "lon": 4.48573, "h": 123, "note": "roof; antenna to 138 m" },
+  { "name": "Delftse Poort", "lat": 51.9243, "lon": 4.4757, "h": 151.4, "note": "main tower; the 93 m second tower is mapped as building:part" },
+  { "name": "Euromast", "lat": 51.9054, "lon": 4.46661, "h": 185, "note": "observation tower incl. Space Tower mast" },
+
+  { "name": "Maastoren", "lat": 51.9088, "lon": 4.4934, "h": 164.8, "note": "validator — OSM tags 169 m incl. antenna" },
+  { "name": "De Rotterdam", "lat": 51.90658, "lon": 4.4881, "h": 151.3, "note": "validator — OMA vertical city" },
+  { "name": "Montevideo", "lat": 51.90407, "lon": 4.48582, "h": 152.3, "note": "validator — incl. mast" },
+  { "name": "Toren op Zuid (KPN)", "lat": 51.90713, "lon": 4.48938, "h": 96.5, "note": "validator — leaning facade next to Erasmusbrug" },
+  { "name": "Cooltoren", "lat": 51.91443, "lon": 4.48083, "h": 153.7, "note": "validator — OSM tags 150 m roof" },
+  { "name": "First Rotterdam", "lat": 51.92218, "lon": 4.46897, "h": 128, "note": "validator" },
+  { "name": "The Red Apple", "lat": 51.91728, "lon": 4.48891, "h": 127, "note": "validator — Wijnhaveneiland" },
+  { "name": "Waterstadtoren", "lat": 51.91608, "lon": 4.48912, "h": 109, "note": "validator — OSM tags 104 m roof" },
+  { "name": "Schielandtoren", "lat": 51.91872, "lon": 4.48266, "h": 102, "note": "validator — OSM tags 106.9 m" },
+  { "name": "WTC Rotterdam", "lat": 51.9185, "lon": 4.48154, "h": 93, "note": "validator — Beurs tower, OSM tags 95.3 m" },
+  { "name": "Erasmus MC faculty tower", "lat": 51.91053, "lon": 4.46945, "h": 114, "note": "validator" }
+]

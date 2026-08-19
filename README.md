@@ -14,8 +14,12 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **4,349 traffic-signal heads — 4,331 bound to the multimodal network**, clustered
   into **472 signalized junctions** and standalone crossings, each running a
   fixed-time two-phase controller
-- 264k building footprints extruded to their mapped heights, 7k water polygons
-  (the Maas, harbours, the Rotte, lakes), rail/metro/tram lines
+- 264k building footprints extruded to sourced heights — measured 3D BAG
+  (BAG × AHN LiDAR) heights when fetched, OSM `height`/`building:levels` tags,
+  `building:part` tower shafts rendered as their own prisms, and published
+  heights for the named skyline towers (Zalmhaventoren 203 m, De Rotterdam,
+  Maastoren, Delftse Poort, …) — plus 7k water polygons (the Maas, harbours,
+  the Rotte, lakes) and rail/metro/tram lines
 
 **Live multimodal simulation** (dedicated web worker):
 
@@ -67,6 +71,17 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **NWB road register** (PDOK): 94.3% of 70,367 official road segments (89% of km)
   covered — motorways 98.4% of km; the residual is ferries, rural dike tracks and
   bbox-edge clipping — `node scripts/validate-roads.mjs`.
+- **Building heights**: footprints come from OSM's BAG import (the official
+  Dutch buildings register), so geometry is register-accurate. Heights resolve
+  through a source chain — measured **3D BAG** roof heights (TU Delft,
+  BAG × AHN LiDAR, CC BY 4.0; `npm run fetch-heights` then
+  `npm run apply-heights` — needs access to data.3dbag.nl) → OSM
+  `height` / `building:levels` tags and `building:part` shafts → published
+  heights for 16 named towers (`scripts/landmark-heights.json`, verified
+  against the skyline literature) → a deterministic 5–11 m low-rise estimate
+  for the untagged fabric until measured data is fetched.
+  `npm run audit-buildings` reports the distribution and checks every named
+  tower against its published height (currently 16/16 within ±5 m).
 
 ## Run locally
 
@@ -83,15 +98,24 @@ cursor. Everything in the UI is live.
 Processed binaries in `public/data/` are committed. To regenerate from OpenStreetMap:
 
 ```bash
-npm run fetch-data   # tiled Overpass downloads → data/raw/ (~280 MB, resumable)
-npm run build-data   # → public/data/*.bin + meta.json (~17 MB)
+npm run fetch-data      # tiled Overpass downloads → data/raw/ (~280 MB, resumable)
+npm run fetch-heights   # 3D BAG measured heights → data/heights-3dbag.json (optional)
+npm run build-data      # → public/data/*.bin + meta.json (~17 MB)
 ```
+
+To upgrade heights on the committed binaries without a full rebuild:
+`npm run fetch-heights && npm run apply-heights` (patches
+`public/data/buildings.bin` in place), then `npm run audit-buildings`.
 
 ## Architecture
 
 ```
 scripts/
-  fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings, water, rail)
+  fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings + parts, water, rail)
+  fetch-heights.mjs  3D BAG WFS fetch → measured roof heights per building
+  apply-heights.mjs  patch heights into buildings.bin without a rebuild
+  audit-buildings.mjs  height distribution + landmark verification report
+  lib-heights.mjs    shared projection/RD conversion, matching, landmark logic
   build-data.mjs     projection, graph build, signal clustering, SCC, triangulation,
                      quantized binary packing
 src/

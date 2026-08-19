@@ -18,6 +18,7 @@ export interface Meta {
     waterPolys: number;
     railWays: number;
     buildings: number;
+    buildingParts?: number;
     transitRoutes?: number;
   };
   districts: { key: string; name: string; x: number; y: number }[];

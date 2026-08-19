@@ -15,6 +15,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from 
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import earcut from "earcut";
+import { loadMeasuredGrid, loadLandmarks, applyLandmarks, heightForFootprint, PointGrid, clampH } from "./lib-heights.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RAW = join(ROOT, "data", "raw");
@@ -723,35 +724,47 @@ console.log("── rail ──");
 // ============================================================
 console.log("── buildings ──");
 let buildingCount = 0;
+let partCount = 0;
 {
   const tileFiles = readdirSync(RAW).filter((f) => /^buildings-\d+-\d+\.json$/.test(f));
   if (tileFiles.length < 36) {
     console.warn(`only ${tileFiles.length}/36 building tiles present — rerun once fetch completes`);
   }
   const seen = new Set();
-  const items = []; // {pts:[[x,y]...], h}
+  const items = []; // outlines: {pts, cx, cy, area, h|null, id, measured}
+  const parts = []; // building:part prisms: {pts, cx, cy, area, h}
 
-  function heightOf(tags, id) {
-    const parse = (v) => { const m = String(v).match(/([\d.]+)/); return m ? parseFloat(m[1]) : NaN; };
-    let h = NaN;
-    if (tags?.height) h = parse(tags.height);
-    if (Number.isNaN(h) && tags?.["building:levels"]) {
-      const lv = parse(tags["building:levels"]);
-      if (!Number.isNaN(lv)) h = lv * 3.1 + 1.5;
+  const parseNum = (v) => { const m = String(v).match(/([\d.]+)/); return m ? parseFloat(m[1]) : NaN; };
+  /** Explicit OSM height (m) or levels-derived estimate; null when untagged. */
+  function tagHeight(tags) {
+    if (tags?.height) { const h = parseNum(tags.height); if (!Number.isNaN(h)) return h; }
+    if (tags?.["building:levels"]) {
+      const lv = parseNum(tags["building:levels"]);
+      if (!Number.isNaN(lv)) return lv * 3.1 + 1.5;
     }
-    if (Number.isNaN(h)) h = 5 + (hash32(id >>> 0) % 60) / 10; // 5..11 m deterministic
-    return Math.max(2.5, Math.min(190, h));
+    return null;
   }
 
-  function addFootprint(ringLatLon, tags, id) {
+  function toPts(ringLatLon) {
     let pts = ringLatLon.map(([lat, lon]) => [px(lon), py(lat)]);
     pts = simplify(pts, 0.55);
-    if (pts.length < 3) return;
-    const area = Math.abs(ringAreaXY(pts));
-    if (area < 22) return;
+    if (pts.length < 3) return null;
     if (ringAreaXY(pts) < 0) pts.reverse(); // CCW
     if (pts.length > 200) pts = simplify(pts, 2.0).slice(0, 200);
-    items.push({ pts, h: heightOf(tags, id) });
+    return pts;
+  }
+  const withCentroid = (pts) => {
+    let cx = 0, cy = 0;
+    for (const [x, y] of pts) { cx += x; cy += y; }
+    return { cx: cx / pts.length, cy: cy / pts.length, area: Math.abs(ringAreaXY(pts)) };
+  };
+
+  function addFootprint(ringLatLon, tags, id) {
+    const pts = toPts(ringLatLon);
+    if (!pts) return;
+    const { cx, cy, area } = withCentroid(pts);
+    if (area < 22) return;
+    items.push({ pts, cx, cy, area, h: tagHeight(tags), id, measured: false });
   }
 
   // multipolygon relations first (outer rings only), remember member ways
@@ -774,14 +787,91 @@ let buildingCount = 0;
   }
   buildingCount = items.length;
 
+  // --- building:part prisms: tower shafts, podium setbacks — the real 3D
+  // massing OSM keeps on parts while the outline only describes the block.
+  // Rendered as extra prisms rising through their outline.
+  const partFiles = readdirSync(RAW).filter((f) => /^buildings-parts-\d+-\d+\.json$/.test(f));
+  {
+    const seenParts = new Set();
+    for (const f of partFiles) {
+      for (const el of loadJSON(f).elements) {
+        if (el.type !== "way" || seenParts.has(el.id) || !el.geometry || el.geometry.length < 4) continue;
+        seenParts.add(el.id);
+        const first = el.geometry[0], last = el.geometry[el.geometry.length - 1];
+        if (keyOf(first.lat, first.lon) !== keyOf(last.lat, last.lon)) continue;
+        const h = tagHeight(el.tags);
+        if (h == null || h < 6) continue; // untagged/low parts add nothing at city scale
+        const pts = toPts(el.geometry.slice(0, -1).map((g) => [g.lat, g.lon]));
+        if (!pts) continue;
+        const { cx, cy, area } = withCentroid(pts);
+        if (area < 15) continue;
+        parts.push({ pts, cx, cy, area, h });
+      }
+    }
+    partCount = parts.length;
+    if (partFiles.length) console.log(`building parts (≥6 m, with height): ${partCount}`);
+    else console.warn("no buildings-parts-*.json — tower shafts will be missing; rerun: node scripts/fetch-osm.mjs buildings");
+  }
+  const partGrid = new PointGrid(60);
+  parts.forEach((p, i) => partGrid.add(p.cx, p.cy, i));
+  /** Height of the tallest building:part whose centroid falls inside the outline. */
+  function maxPartIn(it) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of it.pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    let best = 0;
+    for (const gi of partGrid.query(minX, minY, maxX, maxY)) {
+      const p = parts[partGrid.pts[gi][2]];
+      if (p.h > best && pointInRing(p.cx, p.cy, it.pts)) best = p.h;
+    }
+    return best;
+  }
+
+  // --- measured heights (3D BAG × AHN) are authoritative when fetched ---
+  const measured = loadMeasuredGrid(join(ROOT, "data", "heights-3dbag.json"));
+  let nMeasured = 0;
+  if (measured) {
+    for (const it of items) {
+      const h = heightForFootprint(measured.grid, it.pts, it.cx, it.cy);
+      if (h != null) { it.h = h; it.measured = true; nMeasured++; }
+    }
+    console.log(`measured 3D BAG heights: ${nMeasured}/${items.length} outlines matched (source: ${measured.meta.source})`);
+  } else {
+    console.log("data/heights-3dbag.json not present — run: node scripts/fetch-heights.mjs for measured heights");
+  }
+
+  // --- remaining untagged outlines: deterministic low-rise fallback ---
+  let nFallback = 0;
+  for (const it of items) {
+    if (it.measured || it.h != null) continue;
+    it.h = 5 + (hash32(it.id >>> 0) % 60) / 10; // 5..11 m deterministic
+    nFallback++;
+  }
+  console.log(`outline heights: ${nMeasured} measured, ${items.length - nMeasured - nFallback} tagged, ${nFallback} estimated`);
+
+  // --- published landmark heights: fix famous towers that carry no tag.
+  // Outlines whose massing already comes from a tall part are locked so the
+  // landmark pass never turns a podium block into a slab.
+  for (const it of items) {
+    if (!it.measured && it.area > 400 && maxPartIn(it) >= 40) it.measured = true;
+  }
+  {
+    const cGrid = new PointGrid(120);
+    items.forEach((it, i) => cGrid.add(it.cx, it.cy, i));
+    const lookupGrid = { query: (a, b, c, d) => cGrid.query(a, b, c, d).map((i) => cGrid.pts[i][2]) };
+    const report = applyLandmarks(items, loadLandmarks(join(ROOT, "scripts", "landmark-heights.json")), lookupGrid);
+    for (const r of report) if (!r.matched) console.warn(`  landmark unmatched: ${r.name}`);
+    console.log(`landmarks: ${report.filter((r) => r.changed).length} applied, ${report.filter((r) => r.matched && !r.changed).length} already accurate`);
+  }
+
   // tile grid (1 km) for culling + i16 quantization (0.1 m)
   const TILE = 1000;
   const tiles = new Map();
-  for (const it of items) {
-    let cx = 0, cy = 0;
-    for (const [x, y] of it.pts) { cx += x; cy += y; }
-    cx /= it.pts.length; cy /= it.pts.length;
-    const tx = Math.floor(cx / TILE), ty = Math.floor(cy / TILE);
+  for (const it of items.concat(parts)) {
+    it.h = clampH(it.h);
+    const tx = Math.floor(it.cx / TILE), ty = Math.floor(it.cy / TILE);
     const k = `${tx},${ty}`;
     if (!tiles.has(k)) tiles.set(k, { tx, ty, items: [] });
     tiles.get(k).items.push(it);
@@ -807,7 +897,7 @@ let buildingCount = 0;
   }
   const bin = w.done();
   writeFileSync(join(OUT, "buildings.bin"), bin);
-  console.log(`buildings.bin: ${buildingCount} buildings, ${tiles.size} tiles, ${(bin.length / 1e6).toFixed(1)} MB`);
+  console.log(`buildings.bin: ${buildingCount} buildings + ${partCount} parts, ${tiles.size} tiles, ${(bin.length / 1e6).toFixed(1)} MB`);
 }
 
 // ============================================================
@@ -973,6 +1063,7 @@ let districtBounds = 0;
       waterPolys: waterPolyCount,
       railWays: railCount,
       buildings: buildingCount,
+      buildingParts: partCount,
       transitRoutes,
     },
     districts: DISTRICTS.map((d) => ({ key: d.key, name: d.name, x: +d.x.toFixed(1), y: +d.y.toFixed(1) })),

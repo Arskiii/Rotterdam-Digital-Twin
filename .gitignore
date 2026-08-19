@@ -10,3 +10,7 @@ dist-ssr
 
 # raw OSM downloads (large, regenerate with npm run fetch-data)
 data/raw
+
+# raw 3D BAG pages + reduced height lookup (regenerate with npm run fetch-heights)
+data/raw3dbag
+data/heights-3dbag.json
