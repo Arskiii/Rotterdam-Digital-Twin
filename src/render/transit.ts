@@ -27,6 +27,7 @@ export class TransitLayer {
   vehicles: Veh[] = [];
   tramVehIdx: number[] = []; // instance index → vehicles[] index (picking)
   metroVehIdx: number[] = [];
+  serviceLevel = 1; // fraction of the fleet in service (night thinning)
   private cum: Float32Array[] = [];
   private time = 0;
   private dummy = new THREE.Object3D();
@@ -127,6 +128,7 @@ export class TransitLayer {
     let ti = 0;
     let mi = 0;
     for (let vIdx = 0; vIdx < this.vehicles.length; vIdx++) {
+      if (vIdx % 20 >= this.serviceLevel * 20) continue; // parked overnight
       const veh = this.vehicles[vIdx];
       const r = this.routes[veh.route];
       const cum = this.cum[veh.route];

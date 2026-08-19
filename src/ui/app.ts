@@ -18,6 +18,9 @@ interface UnitRuntime {
   def: UnitDef;
   x: number; // data coords (east)
   y: number; // north
+  baseX: number;
+  baseY: number;
+  patrolPhase: number;
   power: number;
   sessionSec: number;
   signal: string;
@@ -49,6 +52,13 @@ export class App {
   incidentEls: HTMLElement[] = [];
   incidentPts: { x: number; y: number }[] = [];
   clockMin = 8 * 60;
+  // congestion history (fed by the worker's 10s heartbeat)
+  private history: { t: number; clockMin: number; cong: Uint8Array }[] = [];
+  private lastSnapAt = 0;
+  replayIdx: number | null = null;
+  private replayBar!: HTMLElement;
+  private replayRange!: HTMLInputElement;
+  private replayTime!: HTMLElement;
   // street-intel spatial index (built lazily from graph geometry)
   private streetGrid: { cellOff: Int32Array; list: Int32Array; xy: Float32Array; edge: Uint32Array; minX: number; minY: number; nx: number; ny: number } | null = null;
   private hoverPx = { x: -1, y: -1 };
@@ -62,7 +72,13 @@ export class App {
     public scene: SceneCtx,
     public data: CityData,
     public meshes: CityMeshes,
-    public layers: { signals: SignalsLayer; vehicles: VehiclesLayer; congestion: CongestionLayer; transit: TransitLayer },
+    public layers: {
+      signals: SignalsLayer;
+      vehicles: VehiclesLayer;
+      congestion: CongestionLayer;
+      transit: TransitLayer;
+      districtLines: THREE.LineSegments;
+    },
     public worker: Worker
   ) {
     this.drone = new DroneViewer(ui.droneCanvas);
@@ -70,6 +86,38 @@ export class App {
     this.streetChip = document.createElement("div");
     this.streetChip.id = "street-chip";
     ui.hud.appendChild(this.streetChip);
+
+    // replay scrubber
+    this.replayBar = document.createElement("div");
+    this.replayBar.id = "replay-bar";
+    this.replayBar.innerHTML = `
+      <button id="rp-live">Live</button>
+      <input id="rp-range" type="range" min="0" max="0" value="0" />
+      <span id="rp-time">—</span>`;
+    ui.hud.appendChild(this.replayBar);
+    this.replayRange = this.replayBar.querySelector("#rp-range") as HTMLInputElement;
+    this.replayTime = this.replayBar.querySelector("#rp-time") as HTMLElement;
+    ui.mapTools.insertAdjacentHTML(
+      "beforeend",
+      `<div class="tool-gap"></div><button class="tool-btn" id="replay-btn" title="Congestion replay">${_replayIcon}</button>`
+    );
+    const replayBtn = ui.hud.querySelector("#replay-btn") as HTMLButtonElement;
+    replayBtn.addEventListener("click", () => {
+      const open = this.replayBar.classList.toggle("open");
+      replayBtn.classList.toggle("on", open);
+      if (open) {
+        this.syncReplayRange(true);
+        this.enterReplay(this.history.length - 1);
+      } else {
+        this.exitReplay();
+      }
+    });
+    (this.replayBar.querySelector("#rp-live") as HTMLButtonElement).addEventListener("click", () => {
+      this.replayBar.classList.remove("open");
+      replayBtn.classList.remove("on");
+      this.exitReplay();
+    });
+    this.replayRange.addEventListener("input", () => this.enterReplay(+this.replayRange.value));
 
     const trailGeo = new THREE.BufferGeometry();
     trailGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(600 * 3), 3));
@@ -84,6 +132,7 @@ export class App {
     scene.scene.add(this.trail);
 
     this.buildUnits();
+    this.buildDistrictLabels();
     this.buildBriefPage();
     this.buildSetupPage();
     this.buildOverview();
@@ -96,6 +145,19 @@ export class App {
   }
 
   // ---------- units ----------
+  districtLabels: HTMLElement[] = [];
+  private buildDistrictLabels() {
+    for (const b of this.data.districtBounds) {
+      const el = document.createElement("div");
+      el.className = "district-label";
+      el.textContent = b.name.toUpperCase();
+      this.ui.markers.appendChild(el);
+      (el as unknown as { _x: number; _y: number })._x = b.labelX;
+      (el as unknown as { _y: number })._y = b.labelY;
+      this.districtLabels.push(el);
+    }
+  }
+
   private buildUnits() {
     const distByKey = new Map(this.data.meta.districts.map((d) => [d.key, d]));
     for (const def of UNITS) {
@@ -112,6 +174,9 @@ export class App {
         def,
         x,
         y,
+        baseX: x,
+        baseY: y,
+        patrolPhase: (h % 628) / 100,
         power: def.power,
         sessionSec: def.sessionMin * 60,
         signal: def.signal,
@@ -423,6 +488,10 @@ export class App {
       case "water": this.meshes.water.visible = on; break;
       case "rail": this.meshes.rail.visible = on; break;
       case "transit": this.layers.transit.group.visible = on; break;
+      case "bounds":
+        this.layers.districtLines.visible = on;
+        this.districtLabels.forEach((l) => (l.style.display = on ? "" : "none"));
+        break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles": this.layers.vehicles.cars.mesh.visible = on; break;
       case "bikes": this.layers.vehicles.bikes.mesh.visible = on; break;
@@ -464,9 +533,20 @@ export class App {
         });
         break;
       }
-      case "congestion":
-        this.layers.congestion.update(new Float32Array(msg.perEdge));
+      case "congestion": {
+        const per = new Float32Array(msg.perEdge);
+        if (this.replayIdx === null) this.layers.congestion.update(per);
+        const now = performance.now();
+        if (now - this.lastSnapAt > 9500) {
+          this.lastSnapAt = now;
+          const q = new Uint8Array(per.length);
+          for (let i = 0; i < per.length; i++) q[i] = Math.min(255, Math.round(per[i] * 255));
+          this.history.push({ t: Date.now(), clockMin: this.clockMin, cong: q });
+          if (this.history.length > 240) this.history.shift();
+          if (this.replayIdx === null && this.replayBar.classList.contains("open")) this.syncReplayRange(false);
+        }
         break;
+      }
       case "event":
         this.log(msg.level, msg.text);
         if (msg.level === "crit" || msg.level === "warn") this.toast(msg.level, msg.text);
@@ -575,9 +655,31 @@ export class App {
       });
     }
 
-    // markers
+    // district labels (city/district zoom only)
     if (this.page === "map") {
+      const showLabels = this.scene.distance > 2300;
+      const boundsOn = this.ui.layerBoxes.find((b) => b.dataset.layer === "bounds")?.checked ?? true;
+      for (const el of this.districtLabels) {
+        if (!showLabels || !boundsOn) {
+          el.style.display = "none";
+          continue;
+        }
+        const lx = (el as unknown as { _x: number })._x;
+        const ly = (el as unknown as { _y: number })._y;
+        const vis = this.scene.project(lx, 2, -ly, this.tmpPt);
+        el.style.display = vis ? "" : "none";
+        if (vis) el.style.transform = `translate(${this.tmpPt.x.toFixed(1)}px, ${this.tmpPt.y.toFixed(1)}px) translate(-50%, -50%)`;
+      }
+    }
+
+    // markers (units patrol a slow orbit around their hold point)
+    if (this.page === "map") {
+      const tOrbit = now * 0.000045;
       for (const u of this.units) {
+        if (u.status === "active") {
+          u.x = u.baseX + Math.cos(tOrbit + u.patrolPhase) * 240;
+          u.y = u.baseY + Math.sin(tOrbit * 0.83 + u.patrolPhase) * 240;
+        }
         const visible = this.scene.project(u.x, 120, -u.y, this.tmpPt);
         u.el.style.display = visible ? "" : "none";
         if (visible) {
@@ -672,6 +774,47 @@ export class App {
         ${cell("ALTITUDE", u.status === "disabled" ? "—" : `${u.def.alt}<span class="u"> M</span>`)}
       `;
     }
+  }
+
+  // ---------- congestion replay ----------
+  private syncReplayRange(jumpToEnd: boolean) {
+    this.replayRange.max = String(Math.max(0, this.history.length - 1));
+    if (jumpToEnd) this.replayRange.value = this.replayRange.max;
+  }
+
+  private enterReplay(idx: number) {
+    const snap = this.history[idx];
+    if (!snap) {
+      this.replayTime.textContent = "NO HISTORY YET";
+      return;
+    }
+    const wasLive = this.replayIdx === null;
+    this.replayIdx = idx;
+    const per = new Float32Array(snap.cong.length);
+    for (let i = 0; i < per.length; i++) per[i] = snap.cong[i] / 255;
+    this.layers.congestion.lines.visible = true;
+    this.layers.congestion.update(per);
+    // freeze the live picture: historical flux only
+    for (const m of this.layers.vehicles.meshes) m.visible = false;
+    this.layers.signals.points.visible = false;
+    this.layers.transit.group.visible = false;
+    const ageMin = Math.round((Date.now() - snap.t) / 60000);
+    this.replayTime.textContent = `SIM ${fmtSimClock(snap.clockMin)} · T−${ageMin} MIN`;
+    if (wasLive) this.log("info", "FLUX REPLAY ENGAGED — HISTORICAL CONGESTION OVERLAY");
+  }
+
+  private exitReplay() {
+    if (this.replayIdx === null) return;
+    this.replayIdx = null;
+    const on = (layer: string) =>
+      this.ui.layerBoxes.find((b) => b.dataset.layer === layer)?.checked ?? true;
+    this.layers.vehicles.cars.mesh.visible = on("vehicles");
+    this.layers.vehicles.bikes.mesh.visible = on("bikes");
+    this.layers.vehicles.peds.mesh.visible = on("pedestrians");
+    this.layers.signals.points.visible = on("signals");
+    this.layers.transit.group.visible = on("transit");
+    this.layers.congestion.lines.visible = on("congestion");
+    this.log("info", "FLUX REPLAY RELEASED — LIVE PICTURE RESTORED");
   }
 
   // ---------- street intelligence ----------
@@ -1023,7 +1166,7 @@ export class App {
             </div></div>
           <div class="field"><div class="f-label"><span>Signal program</span></div>
             <div class="seg" id="su-signal">
-              <button data-v="actuated" class="on">Actuated</button><button data-v="fixed">Fixed-time</button>
+              <button data-v="actuated" class="on">Actuated</button><button data-v="coordinated">Green wave</button><button data-v="fixed">Fixed</button>
             </div></div>
           <div class="field"><div class="f-label"><span>Cycle / max-green scale</span><b id="su-cycle-v">1.00×</b></div>
             <input id="su-cycle" type="range" min="60" max="160" value="100"></div>
@@ -1077,9 +1220,15 @@ export class App {
     $("su-signal").querySelectorAll("button").forEach((b) =>
       b.addEventListener("click", () => {
         $("su-signal").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
-        const program = b.dataset.v as "actuated" | "fixed";
+        const program = b.dataset.v as "actuated" | "coordinated" | "fixed";
         this.worker.postMessage({ type: "params", signalProgram: program });
-        this.log("info", `SIGNAL PROGRAM SET TO ${program.toUpperCase()} — ${program === "actuated" ? "DEMAND-RESPONSIVE GREEN EXTENSION" : "FIXED-TIME TWO-PHASE"}`);
+        const desc =
+          program === "actuated"
+            ? "DEMAND-RESPONSIVE GREEN EXTENSION"
+            : program === "coordinated"
+              ? "ARTERIAL GREEN-WAVE OFFSETS @ 45 KM/H"
+              : "FIXED-TIME TWO-PHASE";
+        this.log("info", `SIGNAL PROGRAM SET TO ${program.toUpperCase()} — ${desc}`);
       })
     );
     const cyc = $<HTMLInputElement>("su-cycle");
@@ -1133,6 +1282,8 @@ export class App {
     return `${this.units.length} — ${this.units.filter((u) => u.status === "active").length} ACTIVE`;
   }
 }
+
+const _replayIcon = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="square" aria-hidden="true"><path d="M3.5 12a8.5 8.5 0 1 0 2.5-6L3.5 8.5"/><path d="M3.5 3.5v5h5"/><path d="M12 7.5V12l3 2"/></svg>`;
 
 function cell(k: string, v: string, color?: string) {
   return `<div class="pl-cell"><div class="k">${k}</div><div class="v" ${color ? `style="color:${color}"` : ""}>${v}</div></div>`;

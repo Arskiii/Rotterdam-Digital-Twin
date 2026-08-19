@@ -346,6 +346,59 @@ svg {
   border-color: var(--line-bright);
 }
 
+/* ---------- replay scrubber -------------------------------- */
+
+#replay-bar {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: 172px;
+  display: none;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.94);
+  padding: 8px 12px;
+  z-index: 16;
+  width: min(560px, 52%);
+}
+#replay-bar.open {
+  display: flex;
+}
+#replay-bar #rp-live {
+  border: 1px solid #1e4a2a;
+  color: var(--green);
+  padding: 3px 9px;
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  flex: none;
+}
+#replay-bar #rp-live:hover {
+  background: rgba(53, 209, 88, 0.1);
+}
+#replay-bar #rp-range {
+  flex: 1;
+  height: 3px;
+  -webkit-appearance: none;
+  background: #2c2c2c;
+}
+#replay-bar #rp-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 9px;
+  height: 15px;
+  background: #dedede;
+  border: 1px solid #888;
+  cursor: ew-resize;
+}
+#replay-bar #rp-time {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex: none;
+}
+
 /* ---------- street intel readout --------------------------- */
 
 #street-chip {
@@ -780,6 +833,17 @@ svg {
 .marker.inactive .box::after { background: var(--red); }
 .marker.disabled .box { border-color: #555; }
 .marker.disabled .box::after { background: #777; }
+
+.district-label {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  font-size: 9px;
+  letter-spacing: 0.26em;
+  color: #55585e;
+  pointer-events: none;
+  white-space: nowrap;
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.9);
+}
 
 .marker .tag {
   position: absolute;

@@ -2,7 +2,7 @@ import "./style.css";
 import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
-import { buildCity, syncFog, setAmbient } from "./render/city";
+import { buildCity, buildDistrictBounds, syncFog, setAmbient } from "./render/city";
 import { SignalsLayer, VehiclesLayer, CongestionLayer } from "./render/dynamic";
 import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
@@ -51,7 +51,8 @@ async function boot() {
   const vehicles = new VehiclesLayer();
   const congestion = new CongestionLayer(data.graph);
   const transit = new TransitLayer(data.transit);
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group);
+  const districtLines = buildDistrictBounds(data.districtBounds);
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines);
 
   paintBoot("sim", 0.2);
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -77,7 +78,7 @@ async function boot() {
   });
   paintBoot("sim", 1);
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit }, worker);
+  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines }, worker);
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);
@@ -105,6 +106,8 @@ async function boot() {
     };
     const daylight = sstep(5.4, 7.6, hh) * (1 - sstep(20.4, 22.6, hh));
     setAmbient(0.78 + 0.5 * daylight);
+    // RET service level: skeleton fleet deep at night
+    transit.serviceLevel = hh > 0.5 && hh < 5.5 ? 0.35 : 1;
     const waterMat = (meshes.water.material as THREE.ShaderMaterial).uniforms;
     waterMat.uTime.value = now / 1000;
     waterMat.fogNear.value = scene.fog.near;

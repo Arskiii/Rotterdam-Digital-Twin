@@ -78,6 +78,13 @@ export interface BuildingTile {
   totalTris: number;
 }
 
+export interface DistrictBoundary {
+  name: string;
+  labelX: number;
+  labelY: number;
+  rings: Float32Array[]; // x,y pairs per ring
+}
+
 export interface TransitRoute {
   kind: number; // 0 tram, 1 metro
   ref: string;
@@ -95,6 +102,7 @@ export interface CityData {
   water: { verts: Float32Array; tris: Uint32Array };
   buildings: BuildingTile[];
   transit: TransitRoute[];
+  districtBounds: DistrictBoundary[];
 }
 
 async function fetchBuf(url: string, onProgress: (frac: number) => void): Promise<ArrayBuffer> {
@@ -335,6 +343,31 @@ function parseTransit(buf: ArrayBuffer): TransitRoute[] {
   return routes;
 }
 
+function parseDistrictBounds(buf: ArrayBuffer): DistrictBoundary[] {
+  const r = new Reader(buf);
+  if (r.u32() !== 0x444d5452) throw new Error("bad districts magic");
+  const count = r.u16();
+  const dec = new TextDecoder();
+  const out: DistrictBoundary[] = [];
+  for (let i = 0; i < count; i++) {
+    const nameLen = r.u8();
+    const name = dec.decode(new Uint8Array(buf, r.pos, nameLen));
+    r.pos += nameLen;
+    const labelX = r.f32();
+    const labelY = r.f32();
+    const ringCount = r.u16();
+    const rings: Float32Array[] = [];
+    for (let k = 0; k < ringCount; k++) {
+      const n = r.u16();
+      const pts = new Float32Array(n * 2);
+      for (let p = 0; p < n * 2; p++) pts[p] = r.f32();
+      rings.push(pts);
+    }
+    out.push({ name, labelX, labelY, rings });
+  }
+  return out;
+}
+
 export type ProgressFn = (stage: "grid" | "signals" | "structures" | "sim", frac: number) => void;
 
 export async function loadCity(base: string, onProgress: ProgressFn): Promise<CityData> {
@@ -350,13 +383,20 @@ export async function loadCity(base: string, onProgress: ProgressFn): Promise<Ci
     fetchBuf(`${base}buildings.bin`, (f) => onProgress("structures", f * 0.55)),
   ]);
 
-  // transit is optional — older data mirrors may not carry it
+  // transit & district boundaries are optional — older mirrors may lack them
   let transit: TransitRoute[] = [];
   try {
     const res = await fetch(`${base}transit.bin`);
     if (res.ok) transit = parseTransit(await res.arrayBuffer());
   } catch {
     /* run without transit */
+  }
+  let districtBounds: DistrictBoundary[] = [];
+  try {
+    const res = await fetch(`${base}districts.bin`);
+    if (res.ok) districtBounds = parseDistrictBounds(await res.arrayBuffer());
+  } catch {
+    /* run without boundaries */
   }
 
   const roads = parsePolylines(roadsBuf, 0x524d5452);
@@ -369,5 +409,5 @@ export async function loadCity(base: string, onProgress: ProgressFn): Promise<Ci
   const buildings = parseBuildings(bldBuf);
   onProgress("structures", 0.7);
 
-  return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings, transit };
+  return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings, transit, districtBounds };
 }
