@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
 import { buildCity, buildDistrictBounds, syncFog, setAmbient } from "./render/city";
-import { SignalsLayer, VehiclesLayer, CongestionLayer, buildNdwLayer } from "./render/dynamic";
+import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "./render/dynamic";
 import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
 import { App } from "./ui/app";
@@ -52,8 +52,8 @@ async function boot() {
   const congestion = new CongestionLayer(data.graph);
   const transit = new TransitLayer(data.transit);
   const districtLines = buildDistrictBounds(data.districtBounds);
-  const ndwPoints = buildNdwLayer(data.ndw?.stations ?? []);
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwPoints);
+  const ndwLayer = new NdwLayer(data.ndw?.stations ?? []);
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points);
 
   paintBoot("sim", 0.2);
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -79,7 +79,7 @@ async function boot() {
   });
   paintBoot("sim", 1);
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwPoints }, worker);
+  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer }, worker);
 
   // feed the NDW snapshot into the sim's calibration loop
   if (data.ndw?.stations.length) {
@@ -147,6 +147,7 @@ async function boot() {
   (window as unknown as { __meshes: unknown }).__meshes = meshes;
   (window as unknown as { __layers: unknown }).__layers = { signals, vehicles, congestion };
   (window as unknown as { __scene: unknown }).__scene = scene;
+  (window as unknown as { __app: unknown }).__app = app;
   // headless perf probe: window.__bench(n) → avg ms per full render
   (window as unknown as { __bench: (n?: number) => string }).__bench = (n = 30) => {
     const t0 = performance.now();
