@@ -27,14 +27,20 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **RET public transport**: trams and metros on their real OSM route relations,
   braking into stops, dwelling, and continuing (~280 vehicles on 39 routes)
 - Signals: **vehicle-actuated by default** (Dutch-style gap-out green extension with
-  demand detection at stop lines; switchable to fixed-time), signal faults, cycle-scale control
+  demand detection at stop lines), plus a **green-wave program** — 61 corridors of
+  same-street junctions with 45 km/h progression offsets — and fixed-time; signal
+  faults, cycle-scale control
 - Time-of-day demand curve (morning/evening peaks, 72× day compression)
 - Per-district telemetry: tracks, mean speed, queues, congestion index
 - **Target tracking**: click any car, bike, pedestrian, tram or metro to lock the
   camera on it — live speed + zone readout, a fading breadcrumb trail, and the name
   of the street it is on (10k-street name index); incidents appear as blinking map
   markers; hovering any road shows name · class · limit · district
-- Day/night ambience follows the sim clock (dawn ≈ 06:00, dusk ≈ 21:30)
+- Day/night ambience follows the sim clock (dawn ≈ 06:00, dusk ≈ 21:30); the RET
+  fleet thins to night service after midnight; observation drones patrol their zones
+- **Flux replay**: the platform records the congestion picture every 10 s — scrub back
+  through the last 40 minutes on a timeline and watch rush hour build and dissolve
+- Real district boundaries (OSM admin polygons) with map labels
 
 **Platform UI** (the SurveilTrack look):
 

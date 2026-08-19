@@ -902,6 +902,51 @@ let transitRoutes = 0;
 }
 
 // ============================================================
+// 4c. DISTRICT BOUNDARIES (admin_level 10)
+// ============================================================
+console.log("── district boundaries ──");
+let districtBounds = 0;
+{
+  const w = new Writer();
+  w.u32(0x444d5452); // 'RTMD'
+  const body = new Writer();
+  if (existsSync(join(RAW, "districts.json"))) {
+    for (const rel of loadJSON("districts.json").elements) {
+      if (rel.type !== "relation" || !rel.tags?.name) continue;
+      const rings = assembleRings((rel.members ?? []).filter((m) => m.role === "outer" || m.role === ""));
+      const xyRings = rings
+        .map((r) => simplify(r.map(([lat, lon]) => [px(lon), py(lat)]), 18))
+        .filter((r) => r.length >= 4 && Math.abs(ringAreaXY(r)) > 300000); // ≥ 0.3 km²
+      if (!xyRings.length) continue;
+      // label at the centroid of the largest ring; skip if far outside coverage
+      let big = xyRings[0];
+      for (const r of xyRings) if (Math.abs(ringAreaXY(r)) > Math.abs(ringAreaXY(big))) big = r;
+      let cx = 0, cy = 0;
+      for (const [x, y] of big) { cx += x; cy += y; }
+      cx /= big.length; cy /= big.length;
+      if (Math.abs(cx) > 13000 || Math.abs(cy) > 12000) continue;
+      const nameBytes = Buffer.from(String(rel.tags.name).slice(0, 40), "utf8");
+      body.u8(nameBytes.length);
+      for (const b of nameBytes) body.u8(b);
+      body.f32(cx);
+      body.f32(cy);
+      body.u16(xyRings.length);
+      for (const r of xyRings) {
+        body.u16(Math.min(65535, r.length));
+        for (const [x, y] of r.slice(0, 65535)) { body.f32(x); body.f32(y); }
+      }
+      districtBounds++;
+    }
+  } else {
+    console.warn("districts.json missing — run: node scripts/fetch-osm.mjs districts");
+  }
+  w.u16(districtBounds);
+  const bin = Buffer.concat([w.done(), body.done()]);
+  writeFileSync(join(OUT, "districts.bin"), bin);
+  console.log(`districts.bin: ${districtBounds} boundaries, ${(bin.length / 1e6).toFixed(2)} MB`);
+}
+
+// ============================================================
 // 5. META
 // ============================================================
 {

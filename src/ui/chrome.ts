@@ -114,6 +114,7 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="water" checked /><span class="box"></span>Hydro surface</label>
           <label><input type="checkbox" data-layer="rail" checked /><span class="box"></span>Rail grid</label>
           <label><input type="checkbox" data-layer="transit" checked /><span class="box"></span>Transit fleet</label>
+          <label><input type="checkbox" data-layer="bounds" checked /><span class="box"></span>District bounds</label>
           <label><input type="checkbox" data-layer="labels" checked /><span class="box"></span>Unit labels</label>
         </div>
 
@@ -219,6 +220,7 @@ export function buildChrome(root: HTMLElement) {
     perfLiveTitle: $("#perf-live-title"),
     perfSpark: $<HTMLCanvasElement>("#perf-spark"),
     perfGrid: $("#perf-grid"),
+    mapTools: $("#map-tools"),
     zoomIn: $("#zoom-in"),
     zoomOut: $("#zoom-out"),
     layersBtn: $("#layers-btn"),
