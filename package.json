@@ -9,7 +9,8 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "fetch-data": "node scripts/fetch-osm.mjs",
-    "build-data": "node scripts/build-data.mjs"
+    "build-data": "node scripts/build-data.mjs",
+    "fetch-ndw": "node scripts/fetch-ndw.mjs"
   },
   "dependencies": {
     "earcut": "^3.2.3",

@@ -53,6 +53,21 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - Dock: unit list, live statistics, district performance table, coverage overview,
   message log
 
+**Calibration & validation against official data:**
+
+- **NDW real traffic counts** (opendata.ndw.nu): `npm run fetch-ndw` ingests the national
+  loop-detector network — 1,687 live sites in the coverage area, grouped into 613
+  stations matched onto our edges. The sim counts its own vehicles passing every
+  station and reports live sim-vs-measured flow (normalized via the demand curve);
+  SETUP → Auto-calibrate scales fleet density toward parity and reports the residual
+  as a 1:N representation factor.
+- **UDAP iVRI registry**: all 82 official smart-traffic-light installations in the
+  coverage area match one of our signal clusters (Rotterdam 61/61 ≤ 75 m, median 28 m)
+  — `node scripts/validate-signals.mjs`.
+- **NWB road register** (PDOK): 94.3% of 70,367 official road segments (89% of km)
+  covered — motorways 98.4% of km; the residual is ferries, rural dike tracks and
+  bbox-edge clipping — `node scripts/validate-roads.mjs`.
+
 ## Run locally
 
 ```bash

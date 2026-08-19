@@ -3,7 +3,7 @@ import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
 import { buildCity, buildDistrictBounds, syncFog, setAmbient } from "./render/city";
-import { SignalsLayer, VehiclesLayer, CongestionLayer } from "./render/dynamic";
+import { SignalsLayer, VehiclesLayer, CongestionLayer, buildNdwLayer } from "./render/dynamic";
 import { TransitLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
 import { App } from "./ui/app";
@@ -52,7 +52,8 @@ async function boot() {
   const congestion = new CongestionLayer(data.graph);
   const transit = new TransitLayer(data.transit);
   const districtLines = buildDistrictBounds(data.districtBounds);
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines);
+  const ndwPoints = buildNdwLayer(data.ndw?.stations ?? []);
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwPoints);
 
   paintBoot("sim", 0.2);
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -78,7 +79,16 @@ async function boot() {
   });
   paintBoot("sim", 1);
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines }, worker);
+  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwPoints }, worker);
+
+  // feed the NDW snapshot into the sim's calibration loop
+  if (data.ndw?.stations.length) {
+    worker.postMessage({
+      type: "ndw",
+      stations: data.ndw.stations.map((s) => ({ edge: s.edge, flow: s.flow })),
+      todMin: data.ndw.todMin,
+    });
+  }
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);

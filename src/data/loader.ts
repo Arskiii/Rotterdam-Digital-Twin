@@ -78,6 +78,24 @@ export interface BuildingTile {
   totalTris: number;
 }
 
+export interface NdwStation {
+  x: number;
+  y: number;
+  edge: number;
+  cls: number;
+  flow: number; // veh/h at capture
+  speed: number;
+  lanes: number;
+  name: string;
+}
+
+export interface NdwData {
+  source: string;
+  capturedAt: string;
+  todMin: number;
+  stations: NdwStation[];
+}
+
 export interface DistrictBoundary {
   name: string;
   labelX: number;
@@ -103,6 +121,7 @@ export interface CityData {
   buildings: BuildingTile[];
   transit: TransitRoute[];
   districtBounds: DistrictBoundary[];
+  ndw: NdwData | null;
 }
 
 async function fetchBuf(url: string, onProgress: (frac: number) => void): Promise<ArrayBuffer> {
@@ -398,6 +417,13 @@ export async function loadCity(base: string, onProgress: ProgressFn): Promise<Ci
   } catch {
     /* run without boundaries */
   }
+  let ndw: NdwData | null = null;
+  try {
+    const res = await fetch(`${base}ndw.json`);
+    if (res.ok) ndw = (await res.json()) as NdwData;
+  } catch {
+    /* run without calibration */
+  }
 
   const roads = parsePolylines(roadsBuf, 0x524d5452);
   onProgress("grid", 0.9);
@@ -409,5 +435,5 @@ export async function loadCity(base: string, onProgress: ProgressFn): Promise<Ci
   const buildings = parseBuildings(bldBuf);
   onProgress("structures", 0.7);
 
-  return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings, transit, districtBounds };
+  return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings, transit, districtBounds, ndw };
 }
