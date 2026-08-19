@@ -473,8 +473,9 @@ export class LiveIncidentsLayer {
     const COLORS: [number, number, number][] = [
       [244, 63, 52], // accident
       [235, 172, 64], // obstruction
-      [240, 128, 56], // jam
+      [240, 118, 60], // jam
       [200, 42, 60], // closure
+      [246, 210, 84], // roadworks / lane closure
     ];
     const n = Math.min(this.cap, incidents.length);
     for (let i = 0; i < n; i++) {

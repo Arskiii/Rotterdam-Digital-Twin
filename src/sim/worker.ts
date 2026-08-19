@@ -1220,7 +1220,8 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     liveBridges.clear();
     for (const [name, ds] of next) liveBridges.set(name, ds);
   } else if (msg.type === "liveIncidents") {
-    const KINDLBL = ["TRAFFIC ACCIDENT", "OBSTRUCTION", "CONGESTION", "ROAD CLOSURE"];
+    const KINDLBL = ["TRAFFIC ACCIDENT", "OBSTRUCTION", "CONGESTION", "ROAD CLOSURE", "ROADWORKS"];
+    const SLOW = [0.35, 0.55, 1, 1, 0.6]; // capacity left per kind (3 severs instead)
     const next = new Set<string>();
     for (const inc of msg.incidents) {
       if (inc.kind === 2 || inc.edge < 0 || inc.edge >= G.edges.count) continue; // jams are display-only
@@ -1235,7 +1236,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
           entry.blocked.push(d);
         } else {
           entry.slowed.push({ d, orig: dSpeed[d] });
-          dSpeed[d] = dSpeed[d] * (inc.kind === 0 ? 0.35 : 0.55);
+          dSpeed[d] = dSpeed[d] * (SLOW[inc.kind] ?? 0.6);
         }
       }
       liveIncidents.set(key, entry);
@@ -1243,7 +1244,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
       post({
         type: "event",
         level: inc.kind === 0 ? "crit" : "warn",
-        text: `${KINDLBL[inc.kind]} (LIVE NDW) — ${where}${inc.kind === 3 ? ", SEGMENT SEVERED" : ", CAPACITY REDUCED"}`,
+        text: `${KINDLBL[inc.kind] ?? "INCIDENT"} (LIVE NDW) — ${where}${inc.kind === 3 ? ", SEGMENT SEVERED" : inc.kind === 4 ? ", LANES CLOSED" : ", CAPACITY REDUCED"}`,
       });
     }
     for (const [key, entry] of liveIncidents) {

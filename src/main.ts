@@ -216,9 +216,12 @@ async function boot() {
         const parts = [`LIVE ${age < 1 ? "<1" : Math.round(age)}M`];
         if (w?.temp != null) parts.push(`${Math.round(w.temp)}°C`);
         if (liveWater) parts.push(`MAAS ${liveWater.cm >= 0 ? "+" : ""}${liveWater.cm}CM`);
-        const nInc = live.snapshot.incidents?.length ?? 0;
+        const all = live.snapshot.incidents ?? [];
+        const nWrk = all.filter((i) => i.kind === 4).length;
+        const nInc = all.length - nWrk;
         const nBridge = live.snapshot.bridges?.length ?? 0;
         if (nInc) parts.push(`${nInc} INC`);
+        if (nWrk) parts.push(`${nWrk} WRK`);
         if (nBridge) parts.push(`${nBridge} BRUG`);
         ui.liveText.textContent = fresh ? parts.join(" · ") : `LIVE STALE (${Math.round(age)}M)`;
       }

@@ -163,12 +163,22 @@ function edgesNear(g, x, y, radius) {
   return hits.sort((a, b) => a.d - b.d);
 }
 
-// situationRecord type → incident kind: 0 accident, 1 obstruction, 2 jam, 3 closure
+// situationRecord type → incident kind:
+// 0 accident, 1 obstruction, 2 jam, 3 road closure, 4 roadworks / lane closure
 function recordKind(rec) {
   if (rec.includes('xsi:type="sit:Accident"')) return 0;
   if (rec.includes('xsi:type="sit:VehicleObstruction"') || rec.includes('xsi:type="sit:GeneralObstruction"')) return 1;
   if (rec.includes('xsi:type="sit:AbnormalTraffic"')) return 2;
   if (rec.includes("<sit:roadOrCarriagewayOrLaneManagementType>roadClosed<")) return 3;
+  if (
+    rec.includes('xsi:type="sit:MaintenanceWorks"') ||
+    rec.includes('xsi:type="sit:ConstructionWorks"') ||
+    rec.includes("<sit:roadOrCarriagewayOrLaneManagementType>laneClosures<") ||
+    rec.includes("<sit:roadOrCarriagewayOrLaneManagementType>carriagewayClosures<") ||
+    rec.includes("<sit:roadOrCarriagewayOrLaneManagementType>narrowLanes<")
+  ) {
+    return 4;
+  }
   return -1;
 }
 
@@ -214,7 +224,7 @@ async function fetchSituations() {
     });
   }
   const incidents = [];
-  for (const inc of rawIncidents.slice(0, 60)) {
+  for (const inc of rawIncidents.slice(0, 90)) {
     const x = px(inc.lon), y = py(inc.lat);
     const near = edgesNear(g, x, y, 60);
     incidents.push({
