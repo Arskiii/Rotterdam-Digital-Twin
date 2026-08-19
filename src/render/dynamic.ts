@@ -334,3 +334,68 @@ export class CongestionLayer {
     this.colAttr.needsUpdate = true;
   }
 }
+
+// ---------------- live air quality (Luchtmeetnet) ----------------
+/** Monitoring stations colored by NO₂ (fallback PM2.5): green → amber → red. */
+export class AirLayer {
+  points: THREE.Points;
+  stations: [number, number, number | null, number | null, string][] = [];
+  private cap = 40;
+  private pos: Float32Array;
+  private col: Uint8Array;
+
+  constructor() {
+    this.pos = new Float32Array(this.cap * 3);
+    this.col = new Uint8Array(this.cap * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.col, 3, true));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 color;
+        varying vec3 vC;
+        void main() {
+          vC = color;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(3600.0 / -mv.z, 5.0, 16.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying vec3 vC;
+        void main() {
+          float d = length(gl_PointCoord - 0.5);
+          if (d > 0.5) discard;
+          float ring = smoothstep(0.5, 0.36, d) - smoothstep(0.3, 0.12, d) * 0.55;
+          gl_FragColor = vec4(vC, 0.35 + 0.6 * ring);
+        }`,
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 8;
+    this.points.visible = false;
+  }
+
+  set(stations: [number, number, number | null, number | null, string][]) {
+    this.stations = stations;
+    const n = Math.min(this.cap, stations.length);
+    for (let i = 0; i < n; i++) {
+      const [x, y, no2, pm25] = stations[i];
+      this.pos[i * 3] = x;
+      this.pos[i * 3 + 1] = 10;
+      this.pos[i * 3 + 2] = -y;
+      const v = no2 ?? (pm25 !== null ? pm25 * 2 : null);
+      let c: [number, number, number] = [150, 150, 150];
+      if (v !== null) c = v < 25 ? [98, 214, 128] : v < 40 ? [235, 190, 84] : [236, 92, 74];
+      this.col[i * 3] = c[0];
+      this.col[i * 3 + 1] = c[1];
+      this.col[i * 3 + 2] = c[2];
+    }
+    const geo = this.points.geometry;
+    geo.setDrawRange(0, n);
+    (geo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    (geo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+  }
+}

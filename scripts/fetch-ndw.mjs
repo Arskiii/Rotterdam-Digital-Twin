@@ -86,6 +86,7 @@ async function main() {
     const id = rx(rec, /measurementSiteRecord id="([^"]+)"/);
     if (!id) return;
     sites.set(id, {
+      id,
       lat,
       lon,
       x: px(lon),
@@ -150,7 +151,7 @@ async function main() {
   const arr = live;
   for (let i = 0; i < arr.length; i++) {
     if (used.has(i)) continue;
-    const st = { x: arr[i].x, y: arr[i].y, flow: arr[i].flow, speed: arr[i].speed ?? 0, n: 1, lanes: arr[i].lanes, name: arr[i].name };
+    const st = { x: arr[i].x, y: arr[i].y, flow: arr[i].flow, speed: arr[i].speed ?? 0, n: 1, lanes: arr[i].lanes, name: arr[i].name, ids: [arr[i].id] };
     used.add(i);
     for (let j = i + 1; j < arr.length; j++) {
       if (used.has(j)) continue;
@@ -161,6 +162,7 @@ async function main() {
         st.speed += arr[j].speed ?? 0;
         st.lanes += arr[j].lanes;
         st.n++;
+        st.ids.push(arr[j].id);
         used.add(j);
       }
     }
@@ -262,6 +264,7 @@ async function main() {
       speed: +st.speed.toFixed(1),
       lanes: st.lanes,
       name: String(st.name).slice(0, 48),
+      ids: st.ids, // member measurement-site ids, lets fetch-live.mjs refresh flows in place
     };
     const prev = perEdge.get(e);
     if (!prev || rec.flow > prev.flow) perEdge.set(e, rec);

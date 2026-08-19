@@ -89,6 +89,8 @@ export class App {
       transit: TransitLayer;
       districtLines: THREE.LineSegments;
       ndwLayer: NdwLayer;
+      airLayer?: import("../render/dynamic").AirLayer;
+      fixesLayer?: import("../render/transit").LiveFixesLayer;
     },
     public worker: Worker
   ) {
@@ -576,6 +578,8 @@ export class App {
         this.districtLabels.forEach((l) => (l.style.display = on ? "" : "none"));
         break;
       case "sensors": this.layers.ndwLayer.points.visible = on; break;
+      case "air": if (this.layers.airLayer) this.layers.airLayer.points.visible = on; break;
+      case "fixes": if (this.layers.fixesLayer) this.layers.fixesLayer.points.visible = on; break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles":
         this.layers.vehicles.cars.mesh.visible = on;

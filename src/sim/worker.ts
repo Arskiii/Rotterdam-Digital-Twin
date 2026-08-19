@@ -118,11 +118,13 @@ const CLOCK_RATE = 72;
 let completed = 0;
 let completedLog: { t: number; wait: number }[] = [];
 const incidents: { dEdge: number; until: number; x: number; y: number }[] = [];
+let weatherFactor = 1; // live-weather speed multiplier for motorized modes
+const liveBridges = new Map<string, number[]>(); // open bascule bridge → blocked directed edges
 
 // per-mode free-flow speed on a directed edge
 function modeSpeed(d: number, mode: number): number {
-  if (mode === 0) return dSpeed[d];
-  if (mode === 3) return Math.min(23, dSpeed[d] * 0.88); // trucks capped ~83 km/h
+  if (mode === 0) return dSpeed[d] * weatherFactor;
+  if (mode === 3) return Math.min(23, dSpeed[d] * 0.88) * weatherFactor; // trucks capped ~83 km/h
   const cls = G.edges.cls[d >> 1];
   if (mode === 1) {
     if (cls === 8) return 5.6; // cycle track
@@ -1191,6 +1193,30 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     if (msg.congestionFeed !== undefined) congestionFeed = msg.congestionFeed;
     if (msg.autoIncidents !== undefined) autoIncidents = msg.autoIncidents;
     if (msg.timeOfDayMin !== undefined) clockMin = msg.timeOfDayMin;
+    if (msg.speedFactor !== undefined) weatherFactor = Math.min(1, Math.max(0.7, msg.speedFactor));
+  } else if (msg.type === "liveBridges") {
+    const next = new Map<string, number[]>();
+    for (const b of msg.bridges) {
+      const ds: number[] = [];
+      for (const e of b.edges) {
+        if (e < 0 || e >= G.edges.count) continue;
+        ds.push(e * 2);
+        if (dExists[e * 2 + 1]) ds.push(e * 2 + 1);
+      }
+      if (ds.length) next.set(b.name, ds);
+    }
+    for (const [name, ds] of liveBridges) {
+      if (next.has(name)) continue;
+      for (const d of ds) dBlocked[d] = 0;
+      post({ type: "event", level: "ok", text: `${name.toUpperCase()} DECK DOWN — SPAN REOPENED TO ROAD TRAFFIC` });
+    }
+    for (const [name, ds] of next) {
+      if (liveBridges.has(name)) continue;
+      for (const d of ds) dBlocked[d] = 1;
+      post({ type: "event", level: "crit", text: `${name.toUpperCase()} OPEN FOR SHIPPING (LIVE NDW) — SPAN CLOSED, TRACKS REROUTING` });
+    }
+    liveBridges.clear();
+    for (const [name, ds] of next) liveBridges.set(name, ds);
   } else if (msg.type === "ndw") {
     ndwEdgeFlow = new Map();
     ndwCounts = new Map();
@@ -1209,8 +1235,10 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     ndwSimVehH = 0;
     post({
       type: "event",
-      level: "ok",
-      text: `NDW SENSOR NET ONLINE — ${ndwStations} STATIONS FEEDING THE CALIBRATION LOOP`,
+      level: msg.live ? "info" : "ok",
+      text: msg.live
+        ? `LIVE NDW REFRESH — ${ndwStations} STATIONS UPDATED FROM THE MINUTELY FEED`
+        : `NDW SENSOR NET ONLINE — ${ndwStations} STATIONS FEEDING THE CALIBRATION LOOP`,
     });
   } else if (msg.type === "scenario") {
     if (msg.kind === "clear") clearScenario(true);

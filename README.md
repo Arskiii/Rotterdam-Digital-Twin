@@ -63,6 +63,24 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - Dock: unit list, live statistics, district performance table, coverage overview,
   message log
 
+**Live city feeds** (refreshed every 5 minutes by `.github/workflows/live-data.yml`
+onto the `live` branch; the app polls it and falls back to the committed
+snapshot — header chip shows freshness, temperature and Maas level):
+
+- **NDW live traffic** (opendata.ndw.nu, minutely): real flows for the 610
+  matched stations re-feed the calibration loop continuously instead of a
+  one-off snapshot
+- **Bascule bridge openings** (NDW situation feed): a bridge open for shipping
+  severs its car edges in the sim until it closes — traffic reroutes live
+- **Transit RT fixes** (OVapi GTFS-RT): last-known real positions of every
+  tram, metro and bus in the coverage area as a glowing overlay (~250
+  vehicles), the simulated RET fleet keeps the animation
+- **Maas water level** (Rijkswaterstaat, Boompjes tide gauge): the river
+  surface rides the real tide; **weather** (Buienradar Rotterdam): rain slows
+  motorized traffic; **air quality** (Luchtmeetnet, 9 DCMR stations): NO₂/PM2.5
+  as a toggleable station layer
+- `npm run fetch-live` produces the snapshot on demand
+
 **Calibration & validation against official data:**
 
 - **NDW real traffic counts** (opendata.ndw.nu): `npm run fetch-ndw` ingests the national
@@ -125,6 +143,8 @@ scripts/
   fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings + parts, water, rail)
   fetch-heights.mjs  3D BAG WFS fetch → measured roof heights per building
   fetch-lod2.mjs     3D BAG CityJSON fetch → true LoD2.2 roof tiles (public/data/roofs/)
+  fetch-live.mjs     live snapshot: NDW traffic + bridges, OVapi GTFS-RT, RWS water,
+                     Buienradar weather, Luchtmeetnet air → public/data/live/live.json
   apply-heights.mjs  patch heights into buildings.bin without a rebuild
   audit-buildings.mjs  height distribution + landmark verification report
   lib-heights.mjs    shared projection/RD conversion, matching, landmark logic

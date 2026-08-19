@@ -135,6 +135,7 @@ export interface NdwStation {
   speed: number;
   lanes: number;
   name: string;
+  ids?: string[]; // member measurement-site ids (used by the live feed refresh)
 }
 
 export interface NdwData {
