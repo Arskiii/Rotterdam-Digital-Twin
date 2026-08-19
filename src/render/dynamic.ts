@@ -236,6 +236,21 @@ export class NdwLayer {
     });
     this.points = new THREE.Points(geo, mat);
     this.points.frustumCulled = false;
+  }
+
+  /** Live congestion: color each station by measured speed vs its edge's limit
+   *  (green flowing, amber dense, red jammed); null ratios keep the base blue. */
+  setLive(ratios: (number | null)[]) {
+    const n = Math.min(this.stations.length, ratios.length);
+    for (let i = 0; i < n; i++) {
+      const r = ratios[i];
+      let c: [number, number, number] = [79, 194, 232];
+      if (r !== null) c = r > 0.75 ? [88, 214, 120] : r > 0.45 ? [235, 186, 78] : [242, 80, 64];
+      this.colors[i * 3] = c[0];
+      this.colors[i * 3 + 1] = c[1];
+      this.colors[i * 3 + 2] = c[2];
+    }
+    (this.points.geometry.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
     this.points.renderOrder = 5;
   }
 
@@ -389,6 +404,84 @@ export class AirLayer {
       const v = no2 ?? (pm25 !== null ? pm25 * 2 : null);
       let c: [number, number, number] = [150, 150, 150];
       if (v !== null) c = v < 25 ? [98, 214, 128] : v < 40 ? [235, 190, 84] : [236, 92, 74];
+      this.col[i * 3] = c[0];
+      this.col[i * 3 + 1] = c[1];
+      this.col[i * 3 + 2] = c[2];
+    }
+    const geo = this.points.geometry;
+    geo.setDrawRange(0, n);
+    (geo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    (geo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+  }
+}
+
+// ---------------- live incidents (NDW situation feed) ----------------
+/** Pulsing markers for real accidents (red), obstructions (amber), jams
+ *  (orange) and closures (deep red) from the live feed. */
+export class LiveIncidentsLayer {
+  points: THREE.Points;
+  private cap = 80;
+  private pos: Float32Array;
+  private col: Uint8Array;
+  private mat: THREE.ShaderMaterial;
+
+  constructor() {
+    this.pos = new Float32Array(this.cap * 3);
+    this.col = new Uint8Array(this.cap * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.col, 3, true));
+    geo.setDrawRange(0, 0);
+    this.mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      uniforms: { uTime: { value: 0 } },
+      vertexShader: /* glsl */ `
+        attribute vec3 color;
+        varying vec3 vC;
+        uniform float uTime;
+        void main() {
+          vC = color;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          float pulse = 0.75 + 0.25 * sin(uTime * 4.2);
+          gl_PointSize = clamp(5200.0 / -mv.z, 8.0, 26.0) * pulse;
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying vec3 vC;
+        void main() {
+          vec2 p = gl_PointCoord - 0.5;
+          float d = length(p);
+          if (d > 0.5) discard;
+          // ring + hot core
+          float ring = smoothstep(0.5, 0.42, d) - smoothstep(0.34, 0.22, d) * 0.82;
+          float core = smoothstep(0.14, 0.0, d);
+          float a = clamp(ring + core, 0.0, 1.0);
+          gl_FragColor = vec4(vC, a * 0.95);
+        }`,
+    });
+    this.points = new THREE.Points(geo, this.mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 9;
+  }
+
+  update(nowSec: number) {
+    this.mat.uniforms.uTime.value = nowSec;
+  }
+
+  set(incidents: { x: number; y: number; kind: number }[]) {
+    const COLORS: [number, number, number][] = [
+      [244, 63, 52], // accident
+      [235, 172, 64], // obstruction
+      [240, 128, 56], // jam
+      [200, 42, 60], // closure
+    ];
+    const n = Math.min(this.cap, incidents.length);
+    for (let i = 0; i < n; i++) {
+      this.pos[i * 3] = incidents[i].x;
+      this.pos[i * 3 + 1] = 14;
+      this.pos[i * 3 + 2] = -incidents[i].y;
+      const c = COLORS[incidents[i].kind] ?? COLORS[1];
       this.col[i * 3] = c[0];
       this.col[i * 3 + 1] = c[1];
       this.col[i * 3 + 2] = c[2];

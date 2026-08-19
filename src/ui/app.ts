@@ -212,7 +212,8 @@ export class App {
     this.selected = u;
     this.units.forEach((x) => x.el.classList.toggle("sel", x === u));
     this.ui.unitChips.forEach((c) => c.classList.toggle("sel", c.dataset.unit === u.def.id));
-    this.ui.unitCard.classList.add("open");
+    // phones: the card covers half the map — only open it on an explicit tap
+    if (fly || !window.matchMedia("(max-width: 780px)").matches) this.ui.unitCard.classList.add("open");
     this.updateUnitCard();
     this.startPerfLoading();
     if (fly) this.scene.flyTo(new THREE.Vector3(u.x, 0, -u.y), Math.max(2600, Math.min(5200, this.scene.distance)), 1100);

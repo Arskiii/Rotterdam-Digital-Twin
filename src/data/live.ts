@@ -9,6 +9,7 @@ export interface LiveSnapshot {
   t: string;
   traffic?: { t: string; todMin: number; s: [number, number, number][] }; // [stationIdx, veh/h, km/h]
   bridges?: { name: string; x: number; y: number; edges: number[]; until: string }[];
+  incidents?: { x: number; y: number; kind: number; edge: number; name: string; until: string }[];
   vehicles?: { t: string; v: [number, number, number, number, string][] }; // [x, y, kind, bearing, line]
   water?: { station: string; cm: number; trend: number; t: string };
   weather?: { t: string; temp: number | null; wind: number | null; dir: number | null; gust: number | null; rain: number; desc: string };

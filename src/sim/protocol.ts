@@ -45,7 +45,15 @@ export interface LiveBridgesMsg {
   bridges: { name: string; edges: number[] }[];
 }
 
-export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg | NdwMsg | LiveBridgesMsg;
+// Real incidents from the NDW situation feed. kind: 0 accident, 1 obstruction,
+// 2 jam (display only), 3 road closure. Accidents/obstructions slow their
+// matched edge, closures sever it; everything clears on the next update.
+export interface LiveIncidentsMsg {
+  type: "liveIncidents";
+  incidents: { edge: number; kind: number; x: number; y: number; name: string }[];
+}
+
+export type MainToWorker = InitMsg | ParamsMsg | IncidentMsg | ScenarioMsg | NdwMsg | LiveBridgesMsg | LiveIncidentsMsg;
 
 export interface ReadyMsg {
   type: "ready";

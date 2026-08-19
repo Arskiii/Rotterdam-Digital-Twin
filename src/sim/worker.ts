@@ -120,6 +120,8 @@ let completedLog: { t: number; wait: number }[] = [];
 const incidents: { dEdge: number; until: number; x: number; y: number }[] = [];
 let weatherFactor = 1; // live-weather speed multiplier for motorized modes
 const liveBridges = new Map<string, number[]>(); // open bascule bridge → blocked directed edges
+// real NDW incidents: key edge:kind → affected directed edges with saved speeds
+const liveIncidents = new Map<string, { blocked: number[]; slowed: { d: number; orig: number }[] }>();
 
 // per-mode free-flow speed on a directed edge
 function modeSpeed(d: number, mode: number): number {
@@ -1217,6 +1219,40 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     }
     liveBridges.clear();
     for (const [name, ds] of next) liveBridges.set(name, ds);
+  } else if (msg.type === "liveIncidents") {
+    const KINDLBL = ["TRAFFIC ACCIDENT", "OBSTRUCTION", "CONGESTION", "ROAD CLOSURE"];
+    const next = new Set<string>();
+    for (const inc of msg.incidents) {
+      if (inc.kind === 2 || inc.edge < 0 || inc.edge >= G.edges.count) continue; // jams are display-only
+      const key = `${inc.edge}:${inc.kind}`;
+      next.add(key);
+      if (liveIncidents.has(key)) continue;
+      const entry: { blocked: number[]; slowed: { d: number; orig: number }[] } = { blocked: [], slowed: [] };
+      for (const d of [inc.edge * 2, inc.edge * 2 + 1]) {
+        if (!dExists[d]) continue;
+        if (inc.kind === 3) {
+          dBlocked[d] = 1;
+          entry.blocked.push(d);
+        } else {
+          entry.slowed.push({ d, orig: dSpeed[d] });
+          dSpeed[d] = dSpeed[d] * (inc.kind === 0 ? 0.35 : 0.55);
+        }
+      }
+      liveIncidents.set(key, entry);
+      const where = inc.name && inc.name !== "MOTORWAY SEGMENT" ? inc.name.toUpperCase() : zoneName(inc.x, inc.y);
+      post({
+        type: "event",
+        level: inc.kind === 0 ? "crit" : "warn",
+        text: `${KINDLBL[inc.kind]} (LIVE NDW) — ${where}${inc.kind === 3 ? ", SEGMENT SEVERED" : ", CAPACITY REDUCED"}`,
+      });
+    }
+    for (const [key, entry] of liveIncidents) {
+      if (next.has(key)) continue;
+      for (const d of entry.blocked) dBlocked[d] = 0;
+      for (const { d, orig } of entry.slowed) dSpeed[d] = orig;
+      liveIncidents.delete(key);
+      post({ type: "event", level: "ok", text: "LIVE INCIDENT CLEARED — SEGMENT RESTORED" });
+    }
   } else if (msg.type === "ndw") {
     ndwEdgeFlow = new Map();
     ndwCounts = new Map();

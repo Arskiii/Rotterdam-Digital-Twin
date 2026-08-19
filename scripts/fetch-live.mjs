@@ -146,56 +146,86 @@ function loadGraphForBridges() {
   return { edges, names, geo };
 }
 
-async function fetchBridges() {
+/** Car edges near a projected point: [{e, d, bridge, nameIdx}] sorted by distance. */
+function edgesNear(g, x, y, radius) {
+  const hits = [];
+  for (let e = 0; e < g.edges.length; e++) {
+    const ed = g.edges[e];
+    if (!(ed.modeMask & 1)) continue; // car edges only
+    let best = Infinity;
+    for (let k = 0; k < ed.geoN; k++) {
+      const d = Math.hypot(g.geo[(ed.geoOff + k) * 2] - x, g.geo[(ed.geoOff + k) * 2 + 1] - y);
+      if (d < best) best = d;
+    }
+    if (best > radius) continue;
+    hits.push({ e, d: best, bridge: (ed.flags & 4) !== 0, nameIdx: ed.nameIdx });
+  }
+  return hits.sort((a, b) => a.d - b.d);
+}
+
+// situationRecord type → incident kind: 0 accident, 1 obstruction, 2 jam, 3 closure
+function recordKind(rec) {
+  if (rec.includes('xsi:type="sit:Accident"')) return 0;
+  if (rec.includes('xsi:type="sit:VehicleObstruction"') || rec.includes('xsi:type="sit:GeneralObstruction"')) return 1;
+  if (rec.includes('xsi:type="sit:AbnormalTraffic"')) return 2;
+  if (rec.includes("<sit:roadOrCarriagewayOrLaneManagementType>roadClosed<")) return 3;
+  return -1;
+}
+
+async function fetchSituations() {
   const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/actueel_beeld.xml.gz")).toString("utf8");
   const now = Date.now();
-  const open = [];
+  const openBridges = [];
+  const rawIncidents = [];
   for (const rec of blocks(xml, "sit:situationRecord")) {
-    if (!rec.includes("<sit:generalNetworkManagementType>bridgeSwingInOperation<")) continue;
+    const isBridge = rec.includes("<sit:generalNetworkManagementType>bridgeSwingInOperation<");
+    const kind = recordKind(rec);
+    if (!isBridge && kind < 0) continue;
     const lat = parseFloat(rx(rec, /<loc:latitude>([\d.\-]+)</) ?? "NaN");
     const lon = parseFloat(rx(rec, /<loc:longitude>([\d.\-]+)</) ?? "NaN");
     if (!inBbox(lat, lon)) continue;
+    if (rec.includes("<sit:probabilityOfOccurrence>riskOf<")) continue; // planned, not happening
     const start = Date.parse(rx(rec, /<com:overallStartTime>([^<]+)</) ?? "");
     const endRaw = rx(rec, /<com:overallEndTime>([^<]+)</);
     const end = endRaw ? Date.parse(endRaw) : now + 10 * 60_000;
     if (!(start <= now + 60_000 && end >= now - 60_000)) continue; // active window only
-    open.push({ lat, lon, until: new Date(end).toISOString() });
+    if (isBridge) openBridges.push({ lat, lon, until: new Date(end).toISOString() });
+    else rawIncidents.push({ lat, lon, kind, until: new Date(end).toISOString() });
   }
-  if (!open.length) return [];
+  if (!openBridges.length && !rawIncidents.length) return { bridges: [], incidents: [] };
 
-  const { edges, names, geo } = loadGraphForBridges();
+  const g = loadGraphForBridges();
   const bridges = [];
-  for (const b of open) {
+  for (const b of openBridges) {
     const x = px(b.lon), y = py(b.lat);
-    const hits = [];
-    for (let e = 0; e < edges.length; e++) {
-      const ed = edges[e];
-      if (!(ed.modeMask & 1)) continue; // car edges only
-      let best = Infinity;
-      for (let k = 0; k < ed.geoN; k++) {
-        const d = Math.hypot(geo[(ed.geoOff + k) * 2] - x, geo[(ed.geoOff + k) * 2 + 1] - y);
-        if (d < best) best = d;
-      }
-      if (best > 130) continue;
-      hits.push({ e, d: best, bridge: (ed.flags & 4) !== 0, nameIdx: ed.nameIdx });
-    }
     // bascule spans are bridge-flagged; fall back to nearest edges when tagging is missing
-    let use = hits.filter((h) => h.bridge && h.d < 130);
-    if (!use.length) use = hits.filter((h) => h.d < 60);
+    let use = edgesNear(g, x, y, 130).filter((h) => h.bridge);
+    if (!use.length) use = edgesNear(g, x, y, 60);
     if (!use.length) continue;
-    use.sort((a, b) => a.d - b.d);
     use = use.slice(0, 10);
     const nameVotes = new Map();
     for (const h of use) nameVotes.set(h.nameIdx, (nameVotes.get(h.nameIdx) ?? 0) + 1);
     const topName = [...nameVotes.entries()].sort((a, b) => b[1] - a[1])[0][0];
     bridges.push({
-      name: names[topName] ?? "BASCULE BRIDGE",
+      name: g.names[topName] ?? "BASCULE BRIDGE",
       x, y,
       edges: use.map((h) => h.e),
       until: b.until,
     });
   }
-  return bridges;
+  const incidents = [];
+  for (const inc of rawIncidents.slice(0, 60)) {
+    const x = px(inc.lon), y = py(inc.lat);
+    const near = edgesNear(g, x, y, 60);
+    incidents.push({
+      x, y,
+      kind: inc.kind,
+      edge: near.length ? near[0].e : -1,
+      name: near.length ? g.names[near[0].nameIdx] ?? "" : "",
+      until: inc.until,
+    });
+  }
+  return { bridges, incidents };
 }
 
 // ---------------- 3. transit vehicle positions (OVapi GTFS-RT) ----------------
@@ -358,7 +388,15 @@ async function main() {
   const out = { v: 1, t: new Date().toISOString() };
   const feeds = [
     ["traffic", fetchTraffic],
-    ["bridges", fetchBridges],
+    [
+      "situations",
+      async () => {
+        const { bridges, incidents } = await fetchSituations();
+        out.bridges = bridges;
+        out.incidents = incidents;
+        return `${bridges.length} bridges, ${incidents.length} incidents`;
+      },
+    ],
     ["vehicles", fetchVehicles],
     ["water", fetchWater],
     ["weather", fetchWeather],
@@ -367,9 +405,10 @@ async function main() {
   let ok = 0;
   for (const [key, fn] of feeds) {
     try {
-      out[key] = await fn();
+      const res = await fn();
+      if (key !== "situations") out[key] = res;
       ok++;
-      const n = Array.isArray(out[key]) ? out[key].length : (out[key].s?.length ?? out[key].v?.length ?? "");
+      const n = typeof res === "string" ? res : Array.isArray(res) ? res.length : (res.s?.length ?? res.v?.length ?? "");
       console.log(`  + ${key}${n !== "" ? `: ${n}` : ""}`);
     } catch (err) {
       console.warn(`  ! ${key}: ${err.message ?? err}`);

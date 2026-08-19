@@ -69,7 +69,12 @@ snapshot — header chip shows freshness, temperature and Maas level):
 
 - **NDW live traffic** (opendata.ndw.nu, minutely): real flows for the 610
   matched stations re-feed the calibration loop continuously instead of a
-  one-off snapshot
+  one-off snapshot, and the sensor-net layer colors each station by measured
+  speed against its edge's limit — live congestion, green → amber → red
+- **Live incidents** (NDW situation feed): real accidents, obstructions, jams
+  and road closures inside the coverage area render as pulsing markers, and
+  the matched edges slow down (accidents to 35% capacity) or sever (closures)
+  in the sim, with event-log announcements naming the street
 - **Bascule bridge openings** (NDW situation feed): a bridge open for shipping
   severs its car edges in the sim until it closes — traffic reroutes live
 - **Transit RT fixes** (OVapi GTFS-RT): last-known real positions of every
@@ -118,7 +123,9 @@ npm run dev
 ```
 
 Open `http://localhost:5173`. Left-drag pans, right-drag orbits, scroll zooms toward the
-cursor. Everything in the UI is live.
+cursor. Everything in the UI is live. The layout is responsive: on phones the
+console collapses to a full-bleed map with compact chrome, and the canvas takes
+standard touch gestures (one-finger pan, two-finger pinch/rotate).
 
 ## Rebuild the city data
 
