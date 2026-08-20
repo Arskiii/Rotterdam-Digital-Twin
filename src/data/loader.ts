@@ -438,41 +438,51 @@ function parseDistrictBounds(buf: ArrayBuffer): DistrictBoundary[] {
 
 export type ProgressFn = (stage: "grid" | "signals" | "structures" | "sim", frac: number) => void;
 
-export async function loadCity(base: string, onProgress: ProgressFn): Promise<CityData> {
+export async function loadCity(
+  base: string,
+  onProgress: ProgressFn,
+  // fires the moment graph.bin is fully downloaded — lets the caller boot the
+  // sim worker in parallel with the rest of the download and mesh building
+  onGraphReady?: (graphBuffer: ArrayBuffer, meta: Meta) => void
+): Promise<CityData> {
   const metaRes = await fetch(`${base}meta.json`);
   if (!metaRes.ok) throw new Error("meta.json missing — run: npm run fetch-data && npm run build-data");
   const meta: Meta = await metaRes.json();
 
-  const [roadsBuf, graphBuf, waterBuf, railBuf, bldBuf] = await Promise.all([
+  // optional files (older mirrors may lack them) — fetched alongside the rest
+  const optionalBuf = async (name: string): Promise<ArrayBuffer | null> => {
+    try {
+      const res = await fetch(`${base}${name}`);
+      return res.ok ? await res.arrayBuffer() : null;
+    } catch {
+      return null;
+    }
+  };
+  const optionalJson = async <T>(name: string): Promise<T | null> => {
+    try {
+      const res = await fetch(`${base}${name}`);
+      return res.ok ? ((await res.json()) as T) : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const [roadsBuf, graphBuf, waterBuf, railBuf, bldBuf, transitBuf, districtsBuf, ndw] = await Promise.all([
     fetchBuf(`${base}roads.bin`, (f) => onProgress("grid", f * 0.5)),
-    fetchBuf(`${base}graph.bin`, (f) => onProgress("signals", f * 0.6)),
+    fetchBuf(`${base}graph.bin`, (f) => onProgress("signals", f * 0.6)).then((buf) => {
+      onGraphReady?.(buf, meta);
+      return buf;
+    }),
     fetchBuf(`${base}water.bin`, (f) => onProgress("grid", 0.5 + f * 0.2)),
     fetchBuf(`${base}rail.bin`, (f) => onProgress("grid", 0.7 + f * 0.1)),
     fetchBuf(`${base}buildings.bin`, (f) => onProgress("structures", f * 0.55)),
+    optionalBuf("transit.bin"),
+    optionalBuf("districts.bin"),
+    optionalJson<NdwData>("ndw.json"),
   ]);
 
-  // transit & district boundaries are optional — older mirrors may lack them
-  let transit: TransitRoute[] = [];
-  try {
-    const res = await fetch(`${base}transit.bin`);
-    if (res.ok) transit = parseTransit(await res.arrayBuffer());
-  } catch {
-    /* run without transit */
-  }
-  let districtBounds: DistrictBoundary[] = [];
-  try {
-    const res = await fetch(`${base}districts.bin`);
-    if (res.ok) districtBounds = parseDistrictBounds(await res.arrayBuffer());
-  } catch {
-    /* run without boundaries */
-  }
-  let ndw: NdwData | null = null;
-  try {
-    const res = await fetch(`${base}ndw.json`);
-    if (res.ok) ndw = (await res.json()) as NdwData;
-  } catch {
-    /* run without calibration */
-  }
+  const transit: TransitRoute[] = transitBuf ? parseTransit(transitBuf) : [];
+  const districtBounds: DistrictBoundary[] = districtsBuf ? parseDistrictBounds(districtsBuf) : [];
 
   const roads = parsePolylines(roadsBuf, 0x524d5452);
   onProgress("grid", 0.9);
