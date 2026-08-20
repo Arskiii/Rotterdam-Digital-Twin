@@ -11,6 +11,12 @@ on:
   # this repo whose cron actually fires. live-refresh.yml was added as its own
   # workflow and its schedule never armed; deploy.yml's has been firing all
   # along. Keep the job here until that changes.
+  #
+  # "*/5" is aspirational and always was: GitHub throttles short crons hard, and
+  # the observed firings were 09:00, 09:40, 10:04 — twenty to forty minutes
+  # apart, not five. The `live` job therefore refreshes on a loop for the length
+  # of its run rather than once per firing, which is what actually keeps the
+  # snapshot fresh between sparse ticks.
   schedule:
     - cron: "*/5 * * * *"
 
@@ -23,7 +29,11 @@ concurrency:
   # Schedule ticks get their own group so a refresh can never cancel a deploy,
   # and a push can never kill a refresh mid-write.
   group: ${{ github.event_name == 'schedule' && 'live-data' || format('pages-{0}', github.ref) }}
-  cancel-in-progress: true
+  # A newer push should replace an older in-flight deploy, but a refresh loop
+  # must never be killed by the next tick — with sparse firings that would be
+  # the difference between continuous coverage and none. A queued tick simply
+  # takes over when the running loop ends.
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   build:
@@ -68,7 +78,7 @@ jobs:
   live:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
         with:
@@ -76,18 +86,48 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Fetch live snapshot
-        run: node scripts/fetch-live.mjs --out /tmp/live.json
-      - name: Publish to the live branch
+      - name: Refresh loop
+        env:
+          MINUTES: ${{ github.event.inputs.minutes || '25' }}
+          REPO_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
         run: |
-          set -euo pipefail
-          mkdir /tmp/live-branch
-          cp /tmp/live.json /tmp/live-branch/live.json
-          printf '{"git":{"deploymentEnabled":{"live":false}}}' > /tmp/live-branch/vercel.json
-          cd /tmp/live-branch
-          git init -b live --quiet
-          git config user.name "live-data bot"
-          git config user.email "actions@github.com"
-          git add live.json vercel.json
-          git commit -q -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live
+          set -uo pipefail
+          MINUTES=$(echo "$MINUTES" | tr -cd '0-9')
+          [ -z "$MINUTES" ] && MINUTES=25
+          [ "$MINUTES" -gt 55 ] && MINUTES=55
+          [ "$MINUTES" -lt 1 ] && MINUTES=1
+          END=$(( $(date +%s) + MINUTES * 60 ))
+          echo "refreshing every 60s for ${MINUTES} minute(s)"
+
+          mkdir -p /tmp/live-branch
+          OK=0
+          FAIL=0
+
+          while [ "$(date +%s)" -lt "$END" ]; do
+            START=$(date +%s)
+            if node scripts/fetch-live.mjs --out /tmp/live.json; then
+              OK=$((OK + 1))
+              cp /tmp/live.json /tmp/live-branch/live.json
+              printf '{"git":{"deploymentEnabled":{"live":false}}}' > /tmp/live-branch/vercel.json
+              ( cd /tmp/live-branch
+                rm -rf .git
+                git init -b live --quiet
+                git config user.name "live-data bot"
+                git config user.email "actions@github.com"
+                git add live.json vercel.json
+                git commit -q -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                git push -q --force "$REPO_URL" live ) || echo "  live push failed"
+            else
+              FAIL=$((FAIL + 1))
+              echo "  fetch failed ($FAIL so far)"
+            fi
+            ELAPSED=$(( $(date +%s) - START ))
+            SLEEP=$(( 60 - ELAPSED ))
+            [ "$SLEEP" -lt 5 ] && SLEEP=5
+            [ "$(date +%s)" -ge "$END" ] && break
+            sleep "$SLEEP"
+          done
+
+          echo "loop finished: $OK refreshed, $FAIL failed"
+          # a run where nothing succeeded is a real failure worth surfacing
+          [ "$OK" -gt 0 ]
