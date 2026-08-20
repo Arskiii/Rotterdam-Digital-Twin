@@ -102,7 +102,15 @@ jobs:
           [ "$MINUTES" -gt 55 ] && MINUTES=55
           [ "$MINUTES" -lt 1 ] && MINUTES=1
           END=$(( $(date +%s) + MINUTES * 60 ))
-          echo "refreshing every 60s for ${MINUTES} minute(s)"
+          # 120s, not 60s: raw.githubusercontent.com serves the live branch with
+          # cache-control max-age=300, and a cache-busting query string does not
+          # get past it (verified — x-cache: HIT either way). Five minutes is
+          # therefore a hard floor on how fresh the browser can see this data,
+          # so publishing more often than every couple of minutes buys nothing
+          # downstream and just doubles the load on NDW and OVapi, who serve
+          # these feeds for free.
+          CADENCE=120
+          echo "refreshing every ${CADENCE}s for ${MINUTES} minute(s)"
 
           mkdir -p /tmp/live-branch
           OK=0
@@ -127,7 +135,7 @@ jobs:
               echo "  fetch failed ($FAIL so far)"
             fi
             ELAPSED=$(( $(date +%s) - START ))
-            SLEEP=$(( 60 - ELAPSED ))
+            SLEEP=$(( CADENCE - ELAPSED ))
             [ "$SLEEP" -lt 5 ] && SLEEP=5
             [ "$(date +%s)" -ge "$END" ] && break
             sleep "$SLEEP"
