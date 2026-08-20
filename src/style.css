@@ -573,6 +573,26 @@ svg {
   display: flex;
 }
 
+#unit-card .uc-close {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  z-index: 4;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: rgba(8, 8, 8, 0.72);
+  border: 1px solid var(--line);
+}
+#unit-card .uc-close:hover {
+  color: var(--text);
+  background: var(--bg-active);
+}
+
 #unit-card .uc-image {
   position: relative;
   margin: 8px;
@@ -1578,6 +1598,10 @@ label {
   #unit-card .uc-image {
     display: none;
   }
+  /* with the image hidden the ✕ sits on the header row — keep the id clear */
+  #unit-card .uc-status {
+    padding-right: 32px;
+  }
   #perf-card {
     display: none !important;
   }
@@ -1653,6 +1677,9 @@ label {
   }
   #unit-card .uc-image {
     display: none;
+  }
+  #unit-card .uc-status {
+    padding-right: 32px;
   }
   #perf-card {
     display: none !important;
