@@ -11,8 +11,9 @@ on:
       - claude/rotterdam-traffic-simulation-PL88s
   workflow_dispatch:
   # Live city snapshot refresh (see the `live` job). Lives in this workflow
-  # because the repo silently refuses to register new workflow files pushed
-  # by the integration; this one predates that and updates fine.
+  # because the Actions trigger index in this repo doesn't refresh from
+  # integration pushes (new workflow files never register), so the cron only
+  # arms via a user-authored commit touching this file — like this one.
   schedule:
     - cron: "*/5 * * * *"
 
