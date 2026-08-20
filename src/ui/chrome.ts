@@ -62,6 +62,7 @@ export function buildChrome(root: HTMLElement) {
         </div>
 
         <div id="unit-card" class="brk">${TICKS}
+          <button class="uc-close" id="uc-close" aria-label="Dismiss unit card">✕</button>
           <div class="uc-image">
             <canvas id="drone-canvas"></canvas>
             <button class="uc-details-btn" id="uc-details">Details ${icons.arrowUpRight()}</button>
@@ -209,6 +210,7 @@ export function buildChrome(root: HTMLElement) {
     trackLabel: $("#track-label"),
     trackRelease: $("#track-release"),
     unitCard: $("#unit-card"),
+    ucClose: $<HTMLButtonElement>("#uc-close"),
     droneCanvas: $<HTMLCanvasElement>("#drone-canvas"),
     ucDetails: $("#uc-details"),
     ucChip: $("#uc-chip"),

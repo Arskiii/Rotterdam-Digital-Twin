@@ -139,7 +139,9 @@ const MODE_HEUR_SPEED = [27, 5.6, 1.6, 23];
 
 // ---------------- init ----------------
 function init(buf: ArrayBuffer) {
+  post({ type: "initProgress", frac: 0.08 });
   G = parseGraph(buf);
+  post({ type: "initProgress", frac: 0.42 });
   const E = G.edges.count;
   const N = G.nodeCount;
   M = E * 2;
@@ -181,6 +183,7 @@ function init(buf: ArrayBuffer) {
     }
   }
 
+  post({ type: "initProgress", frac: 0.6 });
   nodeSignal = new Int32Array(N).fill(-1);
   for (let s = 0; s < G.signals.count; s++) nodeSignal[G.signals.nodeIdx[s]] = s;
 
@@ -206,8 +209,11 @@ function init(buf: ArrayBuffer) {
   freeList = [];
   for (let i = MAXV - 1; i >= 0; i--) freeList.push(i);
 
+  post({ type: "initProgress", frac: 0.74 });
   buildSpawnTables();
+  post({ type: "initProgress", frac: 0.9 });
   buildCorridors();
+  post({ type: "initProgress", frac: 0.97 });
 
   let laneKm = 0;
   for (let d = 0; d < M; d++) if (dExists[d] && G.edges.modeMask[d >> 1] & MODE_CAR) laneKm += dLen[d] / 1000;

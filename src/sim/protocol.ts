@@ -61,6 +61,13 @@ export interface ReadyMsg {
   laneKm: number;
 }
 
+// Engine init progress (graph parse → adjacency → tables) so the boot bar
+// keeps moving on slow devices instead of pinning until ready.
+export interface InitProgressMsg {
+  type: "initProgress";
+  frac: number; // 0..1
+}
+
 export interface FrameMsg {
   type: "frame";
   // Float32Array [x, y, heading, k] — k = speed01 + (tunnel ? 2 : 0) + mode * 4
@@ -119,4 +126,4 @@ export interface EventMsg {
   text: string;
 }
 
-export type WorkerToMain = ReadyMsg | FrameMsg | MetricsMsg | CongestionMsg | EventMsg;
+export type WorkerToMain = ReadyMsg | InitProgressMsg | FrameMsg | MetricsMsg | CongestionMsg | EventMsg;

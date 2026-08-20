@@ -35,6 +35,9 @@ const SIGNAL_COLOR: Record<string, string> = { STRONG: "green", MODERATE: "amber
 export class App {
   page: "map" | "brief" | "setup" = "map";
   selected: UnitRuntime | null = null;
+  // pan-away dismissal: arms once the camera target has been near the
+  // selected unit, so a selection made from far away doesn't self-close
+  private unitCardArmed = false;
   units: UnitRuntime[] = [];
   metrics: MetricsMsg | null = null;
   cityHistory: { active: number; speed: number; cong: number }[] = [];
@@ -210,6 +213,7 @@ export class App {
 
   selectUnit(u: UnitRuntime, fly: boolean) {
     this.selected = u;
+    this.unitCardArmed = false;
     this.units.forEach((x) => x.el.classList.toggle("sel", x === u));
     this.ui.unitChips.forEach((c) => c.classList.toggle("sel", c.dataset.unit === u.def.id));
     // phones: the card covers half the map — only open it on an explicit tap
@@ -218,6 +222,13 @@ export class App {
     this.startPerfLoading();
     if (fly) this.scene.flyTo(new THREE.Vector3(u.x, 0, -u.y), Math.max(2600, Math.min(5200, this.scene.distance)), 1100);
     this.positionPerfCard();
+  }
+
+  /** Close the unit detail pop-up (the unit stays selected in the lists). */
+  private dismissUnitCard() {
+    this.ui.unitCard.classList.remove("open");
+    this.ui.perfCard.classList.remove("open");
+    this.unitCardArmed = false;
   }
 
   private updateUnitCard() {
@@ -376,6 +387,9 @@ export class App {
     this.ui.viewport.addEventListener("pointerup", (e) => {
       if (e.target !== this.scene.renderer.domElement) return;
       if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+      // a tap anywhere on the map dismisses the unit pop-up (unit chips and
+      // cards sit above the canvas, so their taps never land here)
+      this.dismissUnitCard();
       this.tryAcquireTrack(e.clientX, e.clientY);
     });
     this.ui.viewport.addEventListener("pointermove", (e) => {
@@ -387,8 +401,12 @@ export class App {
       this.hoverPx.x = -1;
     });
     ui.trackRelease.addEventListener("click", () => this.releaseTrack("RELEASED BY OPERATOR"));
+    ui.ucClose.addEventListener("click", () => this.dismissUnitCard());
     window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this.track) this.releaseTrack("RELEASED BY OPERATOR");
+      if (e.key === "Escape") {
+        if (this.track) this.releaseTrack("RELEASED BY OPERATOR");
+        else this.dismissUnitCard();
+      }
     });
   }
 
@@ -659,6 +677,17 @@ export class App {
   private tmpPt = { x: 0, y: 0 };
   private trackVec = new THREE.Vector3();
   frame(now: number) {
+    // dismiss the unit card once the camera has visited the unit and then
+    // moved well away from it (manual pan or a track driving off)
+    if (this.selected && this.ui.unitCard.classList.contains("open")) {
+      const u = this.selected;
+      const t = this.scene.controls.target;
+      const dist = Math.hypot(t.x - u.x, t.z - -u.y);
+      const far = Math.max(700, this.scene.distance * 0.6);
+      if (dist < far * 0.45) this.unitCardArmed = true;
+      else if (this.unitCardArmed && dist > far) this.dismissUnitCard();
+    }
+
     // camera lock on tracked target
     if (this.track && this.page === "map") {
       const st = this.trackState();

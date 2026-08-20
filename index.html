@@ -9,6 +9,11 @@
       rel="icon"
       href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23e8e8e8' d='M12 1l2.4 8.6L23 12l-8.6 2.4L12 23l-2.4-8.6L1 12l8.6-2.4z'/%3E%3C/svg%3E"
     />
+    <!-- start the big data downloads while the JS is still parsing (deployments
+         without local data 404 these harmlessly and fall back to the CDN) -->
+    <link rel="preload" href="./data/graph.bin" as="fetch" crossorigin />
+    <link rel="preload" href="./data/roads.bin" as="fetch" crossorigin />
+    <link rel="preload" href="./data/buildings.bin" as="fetch" crossorigin />
   </head>
   <body>
     <div id="app"></div>
