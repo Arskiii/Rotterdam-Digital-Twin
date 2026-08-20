@@ -1,20 +1,26 @@
 #!/usr/bin/env node
-// The RET timetable, extracted from the national GTFS.
+// The Rotterdam timetable, extracted from the national GTFS.
 //
 //   node scripts/fetch-gtfs-timetable.mjs     (npm run fetch-timetable)
 //
-// Why this exists: OVapi's GTFS-RT tripUpdates feed reports stops a trip has
-// ALREADY called at, not stops ahead of it — measured on the live feed, 29 of
-// 653 metro stop updates were in the future, and a trip that has not departed
-// yet publishes a single row. That is a record of what happened, not a
-// forecast, so it cannot answer "when is the next metro". A real departure
+// Why this exists, twice over.
+//
+// The departure boards: OVapi's GTFS-RT tripUpdates feed reports stops a trip
+// has ALREADY called at, not stops ahead of it — measured on the live feed, 29
+// of 653 metro stop updates were in the future, and a trip that has not
+// departed yet publishes a single row. That is a record of what happened, not
+// a forecast, so it cannot answer "when is the next metro". A real departure
 // board is scheduled time + live delay, which means we need the schedule.
+//
+// The map: a position fix is a minute or two old before it is even published.
+// Without a schedule to drive them, every vehicle on screen stands still
+// between fixes and then jumps. The schedule is what makes them move.
 //
 // stop_times.txt is 1 GB uncompressed, so it is never held in memory: the
 // entry's compressed byte range is streamed straight through inflate and
-// filtered to RET metro and tram trips line by line. Output is a compact
-// binary (~2 MB) committed to data/, refreshed when RET changes its timetable
-// — a few times a year, not per refresh.
+// filtered to the operators below, line by line. Output is a compact binary
+// committed to data/, refreshed when the timetable changes — a few times a
+// year, not per refresh.
 //
 // Behind an HTTPS proxy run with NODE_USE_ENV_PROXY=1 (the npm script sets it).
 
@@ -109,20 +115,27 @@ function gtfsSeconds(hms) {
 
 async function main() {
   const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
-  // RET metro (route_type 1) and tram (0) — the fleet the platform models
+  // Every operator whose vehicles the map draws in the Rotterdam area: RET's
+  // metro (route_type 1), tram (0) and bus (3), plus the two ferry operators
+  // on the Maas. Buses never reach the departure boards — 80 bus routes to 17
+  // rail ones would multiply the station list several times over — but they
+  // are the majority of the vehicles on screen, and without a timetable every
+  // one of them stands still between position fixes.
+  const OPERATORS = new Set(["RET", "Waterbus", "WaterShuttle"]);
+  const KIND_OF = { 0: 0, 1: 1, 3: 2, 2: 3, 4: 4 }; // GTFS route_type → our kind
   const wanted = new Map(); // routeId → [line, kind]
   for (const [id, r] of Object.entries(routes)) {
-    if (r[0] !== "RET") continue;
-    if (r[2] === 1) wanted.set(id, [r[1], 1]);
-    else if (r[2] === 0) wanted.set(id, [r[1], 0]);
+    if (!OPERATORS.has(r[0])) continue;
+    const kind = KIND_OF[r[2]];
+    if (kind !== undefined) wanted.set(id, [r[1], kind]);
   }
-  console.log(`RET metro/tram routes: ${wanted.size}`);
+  console.log(`routes: ${wanted.size} across ${OPERATORS.size} operators`);
 
   const entries = await zipIndex();
   const need = ["trips.txt", "stop_times.txt", "calendar_dates.txt"];
   for (const n of need) if (!entries.has(n)) throw new Error(`${n} missing from the zip`);
 
-  // ---- 1. trips.txt → the RET trips and their service days ----
+  // ---- 1. trips.txt → the in-scope trips and their service days ----
   console.log("streaming trips.txt…");
   const trips = new Map(); // tripId → { line, kind, service, headsign }
   const services = new Set();
@@ -145,9 +158,9 @@ async function main() {
       trips.set(f[cols.t], { line: w[0], kind: w[1], service: f[cols.s], headsign: cols.hs >= 0 ? f[cols.hs] : "" });
       services.add(f[cols.s]);
     }
-    console.log(`  ${n} trips nationally → ${trips.size} RET metro/tram trips, ${services.size} service ids`);
+    console.log(`  ${n} trips nationally → ${trips.size} in-scope trips, ${services.size} service ids`);
   }
-  if (!trips.size) throw new Error("no RET trips matched — check data/gtfs-routes.json");
+  if (!trips.size) throw new Error("no trips matched the operator list — check data/gtfs-routes.json");
 
   // ---- 2. calendar_dates.txt → which dates each service runs ----
   console.log("streaming calendar_dates.txt…");
@@ -173,7 +186,7 @@ async function main() {
     console.log(`  ${serviceDates.size} services span ${days.size} calendar dates`);
   }
 
-  // ---- 3. stop_times.txt → scheduled calls, RET only (1 GB streamed) ----
+  // ---- 3. stop_times.txt → scheduled calls, in-scope trips only (1 GB streamed) ----
   console.log("streaming stop_times.txt (1 GB, filtered on the fly)…");
   const calls = new Map(); // tripId → [{ seq, stop, sec }]
   {
@@ -205,9 +218,9 @@ async function main() {
       list.push({ seq: +f[cols.q], stop: f[cols.s], sec });
       kept++;
     }
-    console.log(`  ${(n / 1e6).toFixed(1)}M stop_times scanned → ${kept} RET calls across ${calls.size} trips`);
+    console.log(`  ${(n / 1e6).toFixed(1)}M stop_times scanned → ${kept} calls across ${calls.size} trips`);
   }
-  if (!calls.size) throw new Error("no RET stop_times matched — trip_id column assumption may be wrong");
+  if (!calls.size) throw new Error("no stop_times matched — trip_id column assumption may be wrong");
 
   // ---- 4. pack ----
   // Strings are interned; every trip stores its ordered calls as
