@@ -73,6 +73,8 @@ export class App {
   mode: "live" | "sim" | "history" = "live";
   /** false when the sim worker refused to start; LIVE and HISTORY still work */
   simAvailable = true;
+  /** the operator's congestion-flux choice, remembered across mode switches */
+  private simCongestion = false;
   private historyBar!: HTMLElement;
   private archive = new ArchiveReader();
   private historyRecords: ArchiveRecord[] = [];
@@ -792,6 +794,7 @@ export class App {
   setMode(m: "live" | "sim" | "history") {
     // a mode that cannot run is not a mode
     if (m === "sim" && !this.simAvailable) m = "live";
+    const prevMode = this.mode;
     this.mode = m;
     this.ui.modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
     document.body.dataset.mode = m;
@@ -811,7 +814,18 @@ export class App {
     this.setBox("fixes", live);
     // measured congestion is the whole content of the live map
     this.setBox("sensors", live || sim);
-    this.setBox("congestion", history ? false : live);
+    // Congestion flux is the simulation's own output, edge by edge — so it
+    // belongs to SIMULATION and nowhere else. Switching it on for LIVE drew
+    // modelled congestion across the measured city, which is the exact
+    // confusion this mode split exists to remove, and it painted the whole
+    // network green (the free-flowing end of the ramp) over roads nobody had
+    // measured. In LIVE the honest equivalent is the sensor net above, which
+    // colours the 610 stations that actually report. It stays the opt-in
+    // choice it has always been in SIM, and that choice survives a trip
+    // through LIVE instead of being silently cleared.
+    const congBox = this.ui.layerBoxes.find((b) => b.dataset.layer === "congestion");
+    if (prevMode === "sim" && congBox) this.simCongestion = congBox.checked;
+    this.setBox("congestion", sim && this.simCongestion);
 
     if (!live) this.closeBoard();
     if (history) {
