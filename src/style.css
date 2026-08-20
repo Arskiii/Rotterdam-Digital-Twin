@@ -1549,6 +1549,83 @@ label {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* ---------- live departure board ---------- */
+/* The platform display: what is coming, when, how late. Sits opposite the
+   station card so both can be open without fighting for the same corner. */
+#board-card {
+  position: absolute;
+  right: 16px;
+  bottom: 196px;
+  width: 320px;
+  max-width: calc(100vw - 32px);
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.96);
+  padding: 10px 12px 8px;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  display: none;
+  flex-direction: column;
+  gap: 7px;
+  z-index: 16;
+}
+#board-card.open { display: flex; }
+.bd-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.bd-eyebrow { font-size: 9px; letter-spacing: 0.16em; color: var(--text-faint); }
+.bd-name {
+  font-size: 13px;
+  letter-spacing: 0.04em;
+  margin-top: 2px;
+  color: var(--text);
+  line-height: 1.2;
+}
+#board-close {
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 6px;
+  flex: none;
+}
+#board-close:hover { color: var(--text); border-color: var(--text-dim); }
+.bd-rows { display: flex; flex-direction: column; gap: 3px; }
+.bd-row {
+  display: grid;
+  /* line · mode · destination · countdown · delay */
+  grid-template-columns: 30px 40px 1fr auto auto;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 0;
+  border-top: 1px solid rgba(61, 61, 61, 0.45);
+}
+.bd-row:first-child { border-top: 0; }
+.bd-line {
+  display: inline-block;
+  text-align: center;
+  font-weight: 700;
+  padding: 2px 0;
+  font-size: 10px;
+  color: #0c0c0c;
+  background: #5fd88d;
+}
+/* metro keeps RET's own line colouring cue; tram stays green */
+.bd-line.k1 { background: #eb6054; color: #fff; }
+.bd-kind { color: var(--text-faint); font-size: 9px; letter-spacing: 0.1em; }
+.bd-dest {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bd-when { font-weight: 700; font-size: 12px; min-width: 34px; text-align: right; }
+.bd-late { color: var(--red); }
+.bd-early { color: var(--amber); }
+.bd-ontime { color: var(--green); font-size: 9px; letter-spacing: 0.08em; }
+.bd-sched { color: var(--text-faint); font-size: 9px; letter-spacing: 0.08em; }
+.bd-stale { color: var(--text-faint); padding: 10px 0; text-align: center; letter-spacing: 0.1em; }
+.bd-foot { font-size: 8px; letter-spacing: 0.1em; color: var(--text-faint); border-top: 1px solid rgba(61,61,61,0.45); padding-top: 6px; }
+
 @media (max-width: 780px) {
   #app {
     grid-template-columns: 1fr;
@@ -1665,6 +1742,12 @@ label {
     left: 6px;
     bottom: 148px;
     width: min(252px, 76vw);
+  }
+  #board-card {
+    right: 6px;
+    left: 6px;
+    bottom: 148px;
+    width: auto;
   }
   #street-chip {
     max-width: 70vw;

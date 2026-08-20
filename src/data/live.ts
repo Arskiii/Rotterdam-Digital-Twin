@@ -1,8 +1,14 @@
-// Live city state produced by scripts/fetch-live.mjs: NDW traffic flows,
-// open bascule bridges, OVapi transit positions, Maas water level, weather
-// and air quality. The snapshot is refreshed by .github/workflows/live-data.yml
-// onto the repo's `live` branch; a local copy ships as a fallback so the app
-// works offline and in dev.
+// Live city state produced by scripts/fetch-live.mjs: NDW traffic flows, open
+// bascule bridges, real transit positions and departure boards, Maas water
+// level, weather and air quality. The snapshot is refreshed on a 60-second
+// cadence by .github/workflows/live-data.yml onto the repo's `live` branch; a
+// local copy ships as a fallback so the app works offline and in dev.
+
+/** [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec] */
+export type LiveVehicle = [number, number, number, string, string, number, number, string, number];
+
+/** [line, kind, destination, secondsUntil, delaySec, isLive, tripId] */
+export type Departure = [string, number, string, number, number, number, string];
 
 export interface LiveSnapshot {
   v: number;
@@ -10,14 +16,34 @@ export interface LiveSnapshot {
   traffic?: { t: string; todMin: number; s: [number, number, number][] }; // [stationIdx, veh/h, km/h]
   bridges?: { name: string; x: number; y: number; edges: number[]; until: string }[];
   incidents?: { x: number; y: number; kind: number; edge: number; name: string; until: string }[];
-  vehicles?: { t: string; v: [number, number, number, number, string][] }; // [x, y, kind, bearing, line]
+  vehicles?: { t: string; v: LiveVehicle[] };
+  departures?: {
+    t: string;
+    /** stationKey → [name, x, y] */
+    stops: Record<string, [string, number, number]>;
+    /** stationKey → next services */
+    dep: Record<string, Departure[]>;
+    liveTrips?: number;
+  };
   water?: { station: string; cm: number; trend: number; t: string };
   weather?: { t: string; temp: number | null; wind: number | null; dir: number | null; gust: number | null; rain: number; desc: string };
   air?: { t: string; s: [number, number, number | null, number | null, string][] }; // [x, y, NO2, PM2.5, name]
 }
 
 const LIVE_BRANCH_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/live/live.json";
-const POLL_MS = 75_000;
+const POLL_MS = 45_000;
+
+/**
+ * Past this age a snapshot stops being "live" in any useful sense — the
+ * refresh loop publishes every 60 s, so ten minutes means the pipeline is
+ * down. The UI degrades to LAGGING/STALE rather than presenting old traffic as
+ * current, which matters most for the departure boards: a five-hour-old
+ * "due in 2 min" is worse than no board at all.
+ */
+export const LIVE_STALE_MIN = 10;
+export const LIVE_LAGGING_MIN = 3;
+
+export type LiveHealth = "live" | "lagging" | "stale" | "offline";
 
 export class LiveFeed {
   snapshot: LiveSnapshot | null = null;
@@ -39,26 +65,50 @@ export class LiveFeed {
     return Math.max(0, (Date.now() - Date.parse(this.snapshot.t)) / 60_000);
   }
 
+  health(): LiveHealth {
+    const age = this.ageMin();
+    if (!Number.isFinite(age)) return "offline";
+    if (age > LIVE_STALE_MIN) return "stale";
+    if (age > LIVE_LAGGING_MIN) return "lagging";
+    return "live";
+  }
+
+  /**
+   * Whether time-critical readings may be shown as current. Departure boards
+   * and vehicle positions go through this; slower-moving values (weather, tide,
+   * air quality) stay useful for far longer and do not.
+   */
+  get fresh(): boolean {
+    return this.ageMin() <= LIVE_STALE_MIN;
+  }
+
   private async poll() {
     // the refreshed branch first, the committed copy as fallback
     for (const [source, url] of [["branch", LIVE_BRANCH_URL], ["local", this.localUrl]] as const) {
+      let snap: LiveSnapshot;
       try {
         const res = await fetch(url, { cache: "no-cache" });
         if (!res.ok) continue;
-        const snap = (await res.json()) as LiveSnapshot;
-        if (!snap?.t || snap.v !== 1) continue;
-        // never replace a fresher snapshot with a staler one
-        if (this.snapshot && Date.parse(snap.t) < Date.parse(this.snapshot.t)) return;
-        this.source = source;
-        if (snap.t !== this.lastT) {
-          this.lastT = snap.t;
-          this.snapshot = snap;
-          this.onUpdate(snap);
-        }
-        return;
+        snap = (await res.json()) as LiveSnapshot;
       } catch {
-        /* try next source */
+        continue; // this source is unreachable — try the next one
       }
+      // v1 snapshots predate the departure boards but still carry traffic,
+      // weather and tide, so they are accepted and simply offer less
+      if (!snap?.t || !(snap.v >= 1)) continue;
+      // never replace a fresher snapshot with a staler one
+      if (this.snapshot && Date.parse(snap.t) < Date.parse(this.snapshot.t)) return;
+      this.source = source;
+      if (snap.t !== this.lastT) {
+        this.lastT = snap.t;
+        this.snapshot = snap;
+        // Deliberately outside the fetch try/catch. Folding the handler into
+        // it meant a bug anywhere downstream looked exactly like an offline
+        // feed: the snapshot was dropped, the next source was tried, and the
+        // app sat there with no data and nothing in the console.
+        this.onUpdate(snap);
+      }
+      return;
     }
   }
 }

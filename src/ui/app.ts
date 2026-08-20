@@ -12,7 +12,7 @@ import { DroneViewer } from "../render/drone";
 import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
 import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
-import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline } from "./format";
+import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml } from "./format";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -50,7 +50,7 @@ export class App {
   paused = false;
   msgCount = 0;
   density = 5200;
-  track: { kind: "agent" | "transit"; id: number; label: string; missFrames: number } | null = null;
+  track: { kind: "agent" | "transit" | "liveTransit"; id: number; key?: string; label: string; missFrames: number } | null = null;
   lastFrame: { data: Float32Array; ids: Int32Array; speeds: Float32Array; count: number } | null = null;
   incidentEls: HTMLElement[] = [];
   incidentPts: { x: number; y: number }[] = [];
@@ -65,6 +65,11 @@ export class App {
   private liveCong: Float32Array | null = null;
   stationIdx: number | null = null;
   private stationCard!: HTMLElement;
+  private boardCard!: HTMLElement;
+  /** station key whose departure board is open */
+  private boardKey: string | null = null;
+  private live: import("../data/live").LiveSnapshot | null = null;
+  private liveFresh = true;
   // signal-program trial (A/B/C experiment)
   private trial: {
     stage: number;
@@ -93,7 +98,8 @@ export class App {
       districtLines: THREE.LineSegments;
       ndwLayer: NdwLayer;
       airLayer?: import("../render/dynamic").AirLayer;
-      fixesLayer?: import("../render/transit").LiveFixesLayer;
+      fixesLayer?: import("../render/transit").LiveTransitLayer;
+      stopsLayer?: import("../render/transit").LiveStopsLayer;
     },
     public worker: Worker
   ) {
@@ -106,6 +112,13 @@ export class App {
     this.stationCard = document.createElement("div");
     this.stationCard.id = "station-card";
     ui.hud.appendChild(this.stationCard);
+
+    this.boardCard = document.createElement("div");
+    this.boardCard.id = "board-card";
+    ui.hud.appendChild(this.boardCard);
+    this.boardCard.addEventListener("click", (e) => {
+      if ((e.target as HTMLElement).closest("#board-close")) this.closeBoard();
+    });
 
     // replay scrubber
     this.replayBar = document.createElement("div");
@@ -429,8 +442,45 @@ export class App {
     const cx = clientX - rect.left;
     const cy = clientY - rect.top;
     const RADIUS = 16;
-    let best: { kind: "agent" | "transit"; id: number; label: string } | null = null;
+    let best: { kind: "agent" | "transit" | "liveTransit"; id: number; key?: string; label: string } | null = null;
     let bd = RADIUS * RADIUS;
+
+    // Station vs. real vehicle: whichever is actually nearer the cursor wins.
+    //
+    // A blanket station priority reads well but fails against the data: OVapi
+    // reports metro positions at stop granularity, so a live train is nearly
+    // always sitting on top of a station marker. Giving stations the right of
+    // way made every metro in the city unclickable.
+    const stops = this.layers.stopsLayer;
+    const liveLayer = this.layers.fixesLayer;
+    let stationHit = -1;
+    let stationD2 = 14 * 14;
+    if (stops?.points.visible && this.live?.departures) {
+      for (let i = 0; i < stops.stations.length; i++) {
+        const st = stops.stations[i];
+        if (!this.scene.project(st.x, 6, st.z, this.tmpPt)) continue;
+        const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
+        if (d < stationD2) {
+          stationD2 = d;
+          stationHit = i;
+        }
+      }
+    }
+    let liveD2 = Infinity;
+    if (liveLayer?.group.visible) {
+      for (const v of liveLayer.vehicles) {
+        if (v.kind !== 0 && v.kind !== 1) continue;
+        if (!this.scene.project(v.x, 2, v.z, this.tmpPt)) continue;
+        const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
+        if (d < liveD2) liveD2 = d;
+      }
+    }
+    // ties go to the station: it is the larger, stationary target, and the
+    // board answers the more common question
+    if (stationHit >= 0 && stationD2 <= liveD2) {
+      this.openBoard(stops!.stations[stationHit].key);
+      return;
+    }
 
     // a precise click on a sensor diamond wins over nearby moving agents
     if (this.layers.ndwLayer.points.visible && this.data.ndw) {
@@ -482,6 +532,23 @@ export class App {
         }
       }
     }
+    // real vehicles are pickable too, and win ties against the simulated fleet
+    // at the same spot — if both are under the cursor, the real one is the one
+    // worth locking onto
+    const lt = this.layers.fixesLayer;
+    if (lt?.group.visible) {
+      for (let i = 0; i < lt.vehicles.length; i++) {
+        const v = lt.vehicles[i];
+        if (v.kind !== 0 && v.kind !== 1) continue; // trams and metros carry identity
+        if (!this.scene.project(v.x, 2, v.z, this.tmpPt)) continue;
+        const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
+        if (d <= bd) {
+          bd = d;
+          best = { kind: "liveTransit", id: i, key: v.key, label: `${v.label} · LIVE` };
+        }
+      }
+    }
+
     if (!best) {
       this.stationIdx = null;
       this.stationCard.classList.remove("open");
@@ -489,11 +556,96 @@ export class App {
     }
     this.stationIdx = null;
     this.stationCard.classList.remove("open");
+    this.closeBoard();
     this.track = { ...best, missFrames: 0 };
     this.trailPts.length = 0;
     this.trail.geometry.setDrawRange(0, 0);
     this.ui.trackChip.classList.add("on");
     this.log("ok", `TARGET ACQUIRED — ${best.label} UNDER CAMERA LOCK`);
+  }
+
+  // ---------- live departure boards ----------
+
+  /** Hand the app the newest live snapshot; refreshes an open board in place. */
+  setLive(snap: import("../data/live").LiveSnapshot, fresh: boolean) {
+    this.live = snap;
+    this.liveFresh = fresh;
+    if (this.boardKey) this.renderBoard();
+  }
+
+  closeBoard() {
+    this.boardKey = null;
+    this.boardCard.classList.remove("open");
+  }
+
+  private openBoard(key: string) {
+    this.boardKey = key;
+    this.stationIdx = null;
+    this.stationCard.classList.remove("open");
+    this.renderBoard();
+  }
+
+  /**
+   * The platform display: what is coming, when, and how late.
+   *
+   * Times are the timetable projected by each trip's live running delay, which
+   * is exactly how a real board works. Rows fed by a live delay are marked; a
+   * row still on the published schedule says so instead of implying a
+   * measurement that does not exist. If the whole feed has gone stale the
+   * board refuses to show times at all — a five-hour-old "due in 2 min" is
+   * worse than an empty board.
+   */
+  private renderBoard() {
+    const key = this.boardKey;
+    const dep = this.live?.departures;
+    if (!key || !dep) return;
+    const stop = dep.stops[key];
+    if (!stop) return;
+    const rows = dep.dep[key] ?? [];
+    // the snapshot fixed these countdowns at capture time, so age them
+    const drift = Math.max(0, (Date.now() - Date.parse(dep.t)) / 1000);
+    const KIND = ["TRAM", "METRO", "BUS", "TRAIN"];
+
+    const body = !this.liveFresh
+      ? `<div class="bd-stale">FEED STALE — ARRIVAL TIMES WITHHELD</div>`
+      : rows.length === 0
+        ? `<div class="bd-stale">NO SERVICES DUE</div>`
+        : rows
+            .map((r) => {
+              const [line, kind, dest, secs, delay, isLive] = r;
+              const due = secs - drift;
+              const mins = Math.round(due / 60);
+              const when = due < 30 ? "NOW" : mins < 1 ? "<1'" : `${mins}'`;
+              const late = Math.round(delay / 60);
+              const delayTxt =
+                !isLive
+                  ? `<span class="bd-sched" title="No live position for this trip yet — published timetable">SCHED</span>`
+                  : late > 0
+                    ? `<span class="bd-late">+${late}'</span>`
+                    : late < 0
+                      ? `<span class="bd-early">${late}'</span>`
+                      : `<span class="bd-ontime">ON TIME</span>`;
+              return `<div class="bd-row">
+                <span class="bd-line k${kind}">${String(line).toUpperCase()}</span>
+                <span class="bd-kind">${KIND[kind] ?? ""}</span>
+                <span class="bd-dest">${escapeHtml(dest || "—")}</span>
+                <span class="bd-when">${when}</span>
+                ${delayTxt}
+              </div>`;
+            })
+            .join("");
+
+    this.boardCard.innerHTML = `
+      <div class="bd-head">
+        <div>
+          <div class="bd-eyebrow">DEPARTURES</div>
+          <div class="bd-name">${escapeHtml(stop[0])}</div>
+        </div>
+        <button id="board-close" aria-label="Close departure board">✕</button>
+      </div>
+      <div class="bd-rows">${body}</div>
+      <div class="bd-foot">RET · OVAPI GTFS-RT + TIMETABLE · SNAPSHOT ${Math.round(drift)}S AGO</div>`;
+    this.boardCard.classList.add("open");
   }
 
   renderStationCard() {
@@ -550,6 +702,13 @@ export class App {
     if (tr.kind === "transit") {
       const info = this.layers.transit.vehicleInfo(tr.id);
       return info ? { x: info.x, z: info.z, speed: info.speed } : null;
+    }
+    if (tr.kind === "liveTransit") {
+      // vehicles[] is rebuilt on every snapshot, so re-find the train by its
+      // trip identity — an index would silently start following a different
+      // service the moment the fleet list reshuffles
+      const cur = this.layers.fixesLayer?.vehicles.find((v) => v.key === tr.key);
+      return cur ? { x: cur.x, z: cur.z, speed: 0 } : null;
     }
     const f = this.lastFrame;
     if (!f) return null;
@@ -608,7 +767,13 @@ export class App {
         break;
       case "sensors": this.layers.ndwLayer.points.visible = on; break;
       case "air": if (this.layers.airLayer) this.layers.airLayer.points.visible = on; break;
-      case "fixes": if (this.layers.fixesLayer) this.layers.fixesLayer.points.visible = on; break;
+      case "fixes":
+        // one control for the whole real-transit picture: the vehicles and the
+        // stations they are running to
+        if (this.layers.fixesLayer) this.layers.fixesLayer.group.visible = on;
+        if (this.layers.stopsLayer) this.layers.stopsLayer.points.visible = on;
+        if (!on) this.closeBoard();
+        break;
       case "signals": this.layers.signals.points.visible = on; break;
       case "vehicles":
         this.layers.vehicles.cars.mesh.visible = on;
@@ -714,7 +879,16 @@ export class App {
         this.scene.controls.target.add(this.trackVec);
         this.scene.camera.position.add(this.trackVec);
         const zone = this.zoneName(st.x, -st.z);
-        this.ui.trackLabel.textContent = `TRACKING ${this.track.label} · ${(st.speed * 3.6).toFixed(0)} KM/H · ${zone}`;
+        // GTFS-RT carries no speed for rail, so a real vehicle reports how old
+        // its position fix is instead of a speed it never measured
+        if (this.track.kind === "liveTransit") {
+          const cur = this.layers.fixesLayer?.vehicles.find((v) => v.key === this.track!.key);
+          const age = cur && cur.fixAge >= 0 ? `FIX ${cur.fixAge}S AGO` : "FIX AGE UNKNOWN";
+          this.ui.trackLabel.textContent =
+            `TRACKING ${this.track.label} · ${cur?.berthed ? "AT PLATFORM" : "IN TRANSIT"} · ${age} · ${zone}`;
+        } else {
+          this.ui.trackLabel.textContent = `TRACKING ${this.track.label} · ${(st.speed * 3.6).toFixed(0)} KM/H · ${zone}`;
+        }
 
         // breadcrumb trail
         const tp = this.trailPts;

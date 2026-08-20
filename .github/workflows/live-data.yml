@@ -1,0 +1,141 @@
+name: Live city data
+
+# Keeps the deployed platform fed with real Rotterdam state and folds every
+# snapshot into the historical archive.
+#
+# Why this is its own workflow, and why the job loops internally:
+#
+# The `schedule:` trigger previously lived in deploy.yml and never once fired —
+# across the workflow's whole life the run history contained zero `schedule`
+# events, so "refreshed every 5 minutes" was really "refreshed whenever someone
+# pressed the button", with observed gaps of up to five hours. GitHub does not
+# reliably arm cron for workflow files pushed by an integration, and a brand-new
+# workflow file is the documented way to get one registered.
+#
+# So the schedule is belt, and the loop is braces: each run refreshes on a
+# 60-second cadence for its whole duration instead of once and exiting. If cron
+# fires, the city is a minute fresh around the clock. If cron still refuses,
+# one `workflow_dispatch` with minutes=55 covers most of an hour, and the app
+# degrades honestly in the meantime — the header chip shows real snapshot age
+# and the client refuses to present a stale snapshot as live.
+
+on:
+  schedule:
+    # every 5 minutes; each run covers ~4 of those 5 minutes, so consecutive
+    # ticks tile into continuous coverage rather than overlapping
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long this run should keep refreshing (1-55)"
+        required: false
+        default: "55"
+
+permissions:
+  contents: write # force-pushes the `live` branch, commits to `archive`
+
+concurrency:
+  group: live-data
+  # never kill a running refresh loop — a queued tick simply takes over when
+  # the current one finishes, which is what keeps coverage continuous
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Check out the archive branch
+        run: |
+          set -euo pipefail
+          REPO="https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          if git clone --depth 1 --branch archive "$REPO" /tmp/archive 2>/dev/null; then
+            echo "archive branch checked out ($(du -sh /tmp/archive | cut -f1))"
+          else
+            echo "archive branch does not exist yet — starting one"
+            mkdir -p /tmp/archive
+            git -C /tmp/archive init -b archive --quiet
+          fi
+          git -C /tmp/archive config user.name "live-data bot"
+          git -C /tmp/archive config user.email "actions@github.com"
+
+      - name: Refresh loop
+        env:
+          MINUTES: ${{ github.event.inputs.minutes || '4' }}
+          REPO_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
+        run: |
+          set -uo pipefail
+          MINUTES=$(echo "$MINUTES" | tr -cd '0-9')
+          [ -z "$MINUTES" ] && MINUTES=4
+          [ "$MINUTES" -gt 55 ] && MINUTES=55
+          [ "$MINUTES" -lt 1 ] && MINUTES=1
+          END=$(( $(date +%s) + MINUTES * 60 ))
+          echo "refreshing every 60s for ${MINUTES} minute(s)"
+
+          mkdir -p /tmp/live-branch
+          ARCHIVE_PUSHED=$(date +%s)
+          OK=0
+          FAIL=0
+
+          push_archive() {
+            if [ -n "$(git -C /tmp/archive status --porcelain)" ]; then
+              git -C /tmp/archive add -A
+              git -C /tmp/archive commit -q -m "archive $(date -u +%Y-%m-%dT%H:%MZ)"
+              # the archive is append-mostly; a losing race just means the next
+              # push carries both sides, so rebase rather than force
+              git -C /tmp/archive pull --rebase -q origin archive 2>/dev/null || true
+              if git -C /tmp/archive push -q "$REPO_URL" archive 2>&1; then
+                echo "  archive pushed"
+              else
+                echo "  archive push failed (will retry next window)"
+              fi
+            fi
+          }
+
+          while [ "$(date +%s)" -lt "$END" ]; do
+            START=$(date +%s)
+            if node scripts/fetch-live.mjs --out /tmp/live.json; then
+              OK=$((OK + 1))
+              cp /tmp/live.json /tmp/live-branch/live.json
+              ( cd /tmp/live-branch
+                rm -rf .git
+                git init -b live --quiet
+                git config user.name "live-data bot"
+                git config user.email "actions@github.com"
+                git add live.json
+                git commit -q -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+                # one root commit, force-pushed: the live branch is a current
+                # value, not a log, so its history must never grow
+                git push -q --force "$REPO_URL" live ) || echo "  live push failed"
+              node scripts/archive-live.mjs --snapshot /tmp/live.json --dir /tmp/archive || true
+            else
+              FAIL=$((FAIL + 1))
+              echo "  fetch failed ($FAIL so far)"
+            fi
+
+            # push the archive on a slower clock than the snapshot so the
+            # branch collects one commit per ~10 min instead of one per minute
+            if [ $(( $(date +%s) - ARCHIVE_PUSHED )) -ge 600 ]; then
+              push_archive
+              ARCHIVE_PUSHED=$(date +%s)
+            fi
+
+            ELAPSED=$(( $(date +%s) - START ))
+            SLEEP=$(( 60 - ELAPSED ))
+            [ "$SLEEP" -lt 5 ] && SLEEP=5
+            [ "$(date +%s)" -ge "$END" ] && break
+            sleep "$SLEEP"
+          done
+
+          push_archive
+          echo "loop finished: $OK refreshed, $FAIL failed"
+          # a run where nothing succeeded is a real failure worth surfacing
+          [ "$OK" -gt 0 ]

@@ -7,27 +7,22 @@ on:
     branches:
       - main
   workflow_dispatch:
-  # Live city snapshot refresh (see the `live` job). Lives in this workflow
-  # because the Actions trigger index in this repo doesn't refresh from
-  # integration pushes (new workflow files never register), so the cron only
-  # arms via a user-authored commit touching this file — like this one.
-  schedule:
-    - cron: "*/5 * * * *"
 
 permissions:
-  contents: write # the live job force-pushes the `live` branch
+  contents: read
   pages: write
   id-token: write
 
 concurrency:
-  # Per-ref so a dev-branch build can't cancel an in-flight main deploy, and
-  # a separate group for schedule ticks so they can never cancel a deploy.
-  group: ${{ github.event_name == 'schedule' && 'live-data' || format('pages-{0}', github.ref) }}
+  # Per-ref so a dev-branch build can't cancel an in-flight main deploy. Note
+  # this is deliberately not keyed on event name: a push and a manual dispatch
+  # on the same ref build the same thing, and letting them share a group used
+  # to mean a dispatch would cancel the push mid-deploy.
+  group: pages-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,18 +32,18 @@ jobs:
           cache: "npm"
       - run: npm ci
       - run: npm run build
+      # No `enablement: true` here: Pages is enabled on the repo, and asking
+      # the action to enable it again is what failed the 08:25 run on 20 Aug,
+      # taking the whole build down with it.
       - uses: actions/configure-pages@v5
         if: github.ref == 'refs/heads/main'
-        with:
-          # Auto-enable Pages on the repo on first deploy so no manual setup is needed.
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         if: github.ref == 'refs/heads/main'
         with:
           path: dist
 
   deploy:
-    if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
+    if: github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -57,34 +52,3 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
-
-  # Refresh the live city snapshot (NDW traffic + bridges + incidents, OVapi
-  # transit, RWS water, Buienradar weather, Luchtmeetnet air) and publish it
-  # as the single file on the `live` branch, force-pushed as one root commit
-  # so its history never grows. The app polls it via raw.githubusercontent.com
-  # and falls back to the committed public/data/live/live.json when absent.
-  live:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    timeout-minutes: 8
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Fetch live snapshot
-        run: node scripts/fetch-live.mjs --out /tmp/live.json
-      - name: Publish to the live branch
-        run: |
-          mkdir /tmp/live-branch
-          cp /tmp/live.json /tmp/live-branch/live.json
-          cd /tmp/live-branch
-          git init -b live
-          git config user.name "live-data bot"
-          git config user.email "actions@github.com"
-          git add live.json
-          git commit -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live
-

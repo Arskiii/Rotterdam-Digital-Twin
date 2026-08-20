@@ -256,8 +256,39 @@ function* pbFields(b, start = 0, end = b.length) {
 // GTFS route_type → our kind: 0 tram, 1 metro, 2 bus, 3 train
 const KIND = { 0: 0, 1: 1, 3: 2, 2: 3 };
 
-async function fetchVehicles() {
-  const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
+// GTFS-RT VehiclePosition.current_status
+const STOPPED_AT = 1;
+
+/** VehicleDescriptor → its id (the RET fleet number for metros and trams). */
+function vehicleId(buf, off, len) {
+  for (const d of pbFields(buf, off, off + len)) {
+    if (d.field === 1 && d.wt === 2) return buf.toString("utf8", d.off, d.off + d.len);
+  }
+  return "";
+}
+
+/** StopTimeEvent → { delay, time } (both optional in the spec). */
+function stopTimeEvent(buf, off, len) {
+  let delay = null;
+  let time = null;
+  for (const a of pbFields(buf, off, off + len)) {
+    if (a.field === 1 && a.wt === 0) delay = Number(BigInt.asIntN(64, a.varint));
+    if (a.field === 2 && a.wt === 0) time = Number(BigInt.asIntN(64, a.varint));
+  }
+  return { delay, time };
+}
+
+/**
+ * Where every tram, metro, bus and train in the coverage area actually is,
+ * carrying the identity that makes a vehicle answerable: which line, which
+ * trip, which stop it is working toward, and whether it is berthed or moving.
+ *
+ * OVapi does not populate bearing or speed for rail vehicles (verified: 0 of
+ * 24 metros carry either), so neither is read — a synthesised heading would be
+ * a fabricated measurement. Direction of travel comes from the stop sequence
+ * instead, which is real.
+ */
+async function fetchVehicles(routes) {
   const buf = await getBuf("https://gtfs.ovapi.nl/nl/vehiclePositions.pb");
   const nowSec = Date.now() / 1000;
   const v = [];
@@ -265,31 +296,250 @@ async function fetchVehicles() {
     if (ent.field !== 2 || ent.wt !== 2) continue;
     for (const e of pbFields(buf, ent.off, ent.off + ent.len)) {
       if (e.field !== 4 || e.wt !== 2) continue; // VehiclePosition
-      let lat = null, lon = null, bearing = 0, routeId = "", ts = 0;
+      let lat = null, lon = null, routeId = "", tripId = "", ts = 0;
+      let seq = -1, status = -1, stopId = "", vid = "";
       for (const f of pbFields(buf, e.off, e.off + e.len)) {
+        if (f.field === 1 && f.wt === 2) {
+          for (const t of pbFields(buf, f.off, f.off + f.len)) {
+            if (t.field === 1 && t.wt === 2) tripId = buf.toString("utf8", t.off, t.off + t.len);
+            if (t.field === 5 && t.wt === 2) routeId = buf.toString("utf8", t.off, t.off + t.len);
+          }
+        }
         if (f.field === 2 && f.wt === 2) {
           for (const p of pbFields(buf, f.off, f.off + f.len)) {
             if (p.field === 1 && p.wt === 5) lat = buf.readFloatLE(p.off);
             if (p.field === 2 && p.wt === 5) lon = buf.readFloatLE(p.off);
-            if (p.field === 3 && p.wt === 5) bearing = buf.readFloatLE(p.off);
           }
         }
-        if (f.field === 1 && f.wt === 2) {
-          for (const t of pbFields(buf, f.off, f.off + f.len)) {
-            if (t.field === 5 && t.wt === 2) routeId = buf.toString("utf8", t.off, t.off + t.len);
-          }
-        }
+        if (f.field === 3 && f.wt === 0) seq = Number(f.varint);
+        if (f.field === 4 && f.wt === 0) status = Number(f.varint);
         if (f.field === 5 && f.wt === 0) ts = Number(f.varint);
+        if (f.field === 7 && f.wt === 2) stopId = buf.toString("utf8", f.off, f.off + f.len);
+        if (f.field === 8 && f.wt === 2) vid = vehicleId(buf, f.off, f.len);
       }
       if (lat === null || !inBbox(lat, lon)) continue;
       if (ts && nowSec - ts > 240) continue; // stale fix
       const r = routes[routeId];
       const kind = r ? KIND[r[2]] : undefined;
       if (kind === undefined) continue;
-      v.push([px(lon), py(lat), kind, Math.round(bearing), r[1] ?? ""]);
+      // [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec]
+      v.push([
+        px(lon), py(lat), kind, r[1] ?? "", tripId, seq,
+        status === STOPPED_AT ? 1 : 0, vid,
+        ts ? Math.round(nowSec - ts) : -1,
+      ]);
     }
   }
   return { t: new Date().toISOString(), v };
+}
+
+// ---------------- the RET timetable (data/ret-timetable.bin) ----------------
+
+let timetableCache = null;
+
+/** Parse the packed timetable once per process. */
+function loadTimetable() {
+  if (timetableCache) return timetableCache;
+  const buf = readFileSync(join(ROOT, "data", "ret-timetable.bin"));
+  let pos = 0;
+  const u8 = () => buf.readUInt8(pos++);
+  const u16 = () => { const v = buf.readUInt16LE(pos); pos += 2; return v; };
+  const u32 = () => { const v = buf.readUInt32LE(pos); pos += 4; return v; };
+  const str = () => { const n = u16(); const s = buf.toString("utf8", pos, pos + n); pos += n; return s; };
+  const strList = () => { const n = u32(); const a = new Array(n); for (let i = 0; i < n; i++) a[i] = str(); return a; };
+
+  if (buf.toString("ascii", 0, 4) !== "RTTT") throw new Error("ret-timetable.bin: bad magic");
+  pos = 4;
+  if (u16() !== 1) throw new Error("ret-timetable.bin: unsupported version");
+  const lines = strList();
+  const stops = strList();
+  const headsigns = strList();
+  const dateSetCount = u32();
+  const dateSets = new Array(dateSetCount);
+  for (let i = 0; i < dateSetCount; i++) {
+    const n = u32();
+    const s = new Set();
+    for (let k = 0; k < n; k++) s.add(u32());
+    dateSets[i] = s;
+  }
+  const tripCount = u32();
+  const trips = new Array(tripCount);
+  for (let i = 0; i < tripCount; i++) {
+    const id = str();
+    const line = u16();
+    const kind = u8();
+    const head = u16();
+    const dates = u16();
+    const n = u16();
+    const callStop = new Uint16Array(n);
+    const callSec = new Uint16Array(n);
+    for (let k = 0; k < n; k++) { callStop[k] = u16(); callSec[k] = u16(); }
+    trips[i] = { id, line, kind, head, dates, callStop, callSec };
+  }
+  timetableCache = { lines, stops, headsigns, dateSets, trips };
+  return timetableCache;
+}
+
+/** Offset of a timezone from UTC, in ms, at a given instant. */
+function tzOffsetMs(date, tz) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tz, hour12: false,
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    })
+      .formatToParts(date)
+      .map((x) => [x.type, x.value])
+  );
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - date.getTime();
+}
+
+/** Unix seconds at 00:00 Europe/Amsterdam on a YYYYMMDD service date. */
+function serviceMidnight(yyyymmdd) {
+  const y = Math.floor(yyyymmdd / 10000);
+  const m = Math.floor(yyyymmdd / 100) % 100;
+  const d = yyyymmdd % 100;
+  const guess = Date.UTC(y, m - 1, d, 0, 0, 0);
+  // one correction pass settles it except exactly at a DST boundary, where
+  // the timetable's own local clock is ambiguous anyway
+  const off = tzOffsetMs(new Date(guess), "Europe/Amsterdam");
+  return (guess - off) / 1000;
+}
+
+/** YYYYMMDD (as a number) for a date, in Amsterdam local terms. */
+function serviceDateNum(date) {
+  const p = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Amsterdam", year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(date)
+      .map((x) => [x.type, x.value])
+  );
+  return +`${p.year}${p.month}${p.day}`;
+}
+
+/**
+ * Live running delay per trip, from GTFS-RT tripUpdates.
+ *
+ * OVapi publishes stop updates for calls a trip has ALREADY made, so the last
+ * row is the freshest read on how late the vehicle is running. That delay is
+ * what gets carried forward onto its remaining scheduled calls — the same
+ * arithmetic a platform display does.
+ */
+async function fetchTripDelays() {
+  const buf = await getBuf("https://gtfs.ovapi.nl/nl/tripUpdates.pb");
+  const delays = new Map(); // tripId → { delay, cancelled }
+  for (const ent of pbFields(buf)) {
+    if (ent.field !== 2 || ent.wt !== 2) continue;
+    for (const e of pbFields(buf, ent.off, ent.off + ent.len)) {
+      if (e.field !== 3 || e.wt !== 2) continue; // TripUpdate
+      let tripId = "";
+      let cancelled = false;
+      let delay = null;
+      for (const f of pbFields(buf, e.off, e.off + e.len)) {
+        if (f.field === 1 && f.wt === 2) {
+          for (const t of pbFields(buf, f.off, f.off + f.len)) {
+            if (t.field === 1 && t.wt === 2) tripId = buf.toString("utf8", t.off, t.off + t.len);
+            if (t.field === 6 && t.wt === 0) cancelled = Number(t.varint) === 3; // CANCELED
+          }
+        }
+        if (f.field === 2 && f.wt === 2) {
+          let arr = null, dep = null;
+          for (const s of pbFields(buf, f.off, f.off + f.len)) {
+            if (s.field === 2 && s.wt === 2) arr = stopTimeEvent(buf, s.off, s.len);
+            if (s.field === 3 && s.wt === 2) dep = stopTimeEvent(buf, s.off, s.len);
+          }
+          const d = dep?.delay ?? arr?.delay;
+          if (d !== null && d !== undefined) delay = d; // keep the last one seen
+        }
+      }
+      if (tripId) delays.set(tripId, { delay: delay ?? 0, live: delay !== null, cancelled });
+    }
+  }
+  return delays;
+}
+
+/**
+ * The departure board: for every RET metro and tram station, the next few
+ * services with a predicted time.
+ *
+ * scheduled call (timetable) + running delay (GTFS-RT) = when it actually
+ * turns up. Trips with no RT row fall back to the schedule and are flagged so
+ * the UI can say so rather than implying a measurement it does not have.
+ *
+ * Buses are left out on purpose: they would multiply the snapshot several
+ * times over for a fleet the platform does not model.
+ */
+async function fetchDepartures() {
+  const tt = loadTimetable();
+  const stopTable = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
+  const delays = await fetchTripDelays();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const HORIZON = 45 * 60;
+  const PER_STOP = 6;
+
+  // A service day runs past midnight, so yesterday's late trips are still
+  // arriving; both dates are scanned against their own local midnight.
+  const now = new Date();
+  const days = [
+    serviceDateNum(new Date(now.getTime() - 86_400_000)),
+    serviceDateNum(now),
+  ].map((d) => ({ date: d, base: serviceMidnight(d) }));
+
+  /** stationKey → { name, x, y, rows } */
+  const stations = new Map();
+  const stationOf = (gtfsStopId) => {
+    const s = stopTable[gtfsStopId];
+    if (!s) return null;
+    const parent = s.p && stopTable[s.p] ? s.p : null;
+    const key = parent ?? gtfsStopId;
+    let st = stations.get(key);
+    if (!st) {
+      const src = parent ? stopTable[parent] : s;
+      stations.set(key, (st = { name: src.n || s.n, x: src.x, y: src.y, rows: [] }));
+    }
+    return st;
+  };
+
+  let liveTrips = 0;
+  for (const trip of tt.trips) {
+    const rt = delays.get(trip.id);
+    if (rt?.cancelled) continue;
+    const set = tt.dateSets[trip.dates];
+    const shift = rt?.delay ?? 0;
+    for (const day of days) {
+      if (!set.has(day.date)) continue;
+      // whole-trip window check before touching individual calls
+      const n = trip.callSec.length;
+      if (!n) continue;
+      const firstAt = day.base + trip.callSec[0] * 2 + shift;
+      const lastAt = day.base + trip.callSec[n - 1] * 2 + shift;
+      if (lastAt < nowSec - 60 || firstAt > nowSec + HORIZON) continue;
+      if (rt?.live) liveTrips++;
+      const dest = tt.headsigns[trip.head] || "";
+      for (let k = 0; k < n; k++) {
+        if (k === n - 1) continue; // nobody boards at the terminus
+        const at = day.base + trip.callSec[k] * 2 + shift;
+        if (at < nowSec - 60 || at > nowSec + HORIZON) continue;
+        const st = stationOf(tt.stops[trip.callStop[k]]);
+        if (!st) continue;
+        // [line, kind, destination, secondsUntil, delaySec, isLive, tripId]
+        st.rows.push([
+          tt.lines[trip.line], trip.kind, dest,
+          at - nowSec, shift, rt?.live ? 1 : 0, trip.id,
+        ]);
+      }
+      break; // a trip only runs once across the two candidate days
+    }
+  }
+
+  const stops = {};
+  const dep = {};
+  for (const [key, st] of stations) {
+    if (!st.rows.length) continue;
+    st.rows.sort((a, b) => a[3] - b[3]);
+    stops[key] = [st.name, st.x, st.y];
+    dep[key] = st.rows.slice(0, PER_STOP);
+  }
+  return { t: new Date().toISOString(), stops, dep, liveTrips };
 }
 
 // ---------------- 4. Maas water level (Rijkswaterstaat, Boompjes gauge) ----------------
@@ -395,7 +645,8 @@ async function fetchAir() {
 
 // ---------------- main ----------------
 async function main() {
-  const out = { v: 1, t: new Date().toISOString() };
+  const out = { v: 2, t: new Date().toISOString() };
+  const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
   const feeds = [
     ["traffic", fetchTraffic],
     [
@@ -407,7 +658,15 @@ async function main() {
         return `${bridges.length} bridges, ${incidents.length} incidents`;
       },
     ],
-    ["vehicles", fetchVehicles],
+    ["vehicles", () => fetchVehicles(routes)],
+    [
+      "departures",
+      async () => {
+        const d = await fetchDepartures();
+        out.departures = d;
+        return `${Object.keys(d.stops).length} stations, ${d.liveTrips} trips with a live delay`;
+      },
+    ],
     ["water", fetchWater],
     ["weather", fetchWeather],
     ["air", fetchAir],
@@ -416,7 +675,7 @@ async function main() {
   for (const [key, fn] of feeds) {
     try {
       const res = await fn();
-      if (key !== "situations") out[key] = res;
+      if (key !== "situations" && key !== "departures") out[key] = res;
       ok++;
       const n = typeof res === "string" ? res : Array.isArray(res) ? res.length : (res.s?.length ?? res.v?.length ?? "");
       console.log(`  + ${key}${n !== "" ? `: ${n}` : ""}`);
