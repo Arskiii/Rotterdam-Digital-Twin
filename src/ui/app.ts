@@ -13,7 +13,7 @@ import { DroneViewer } from "../render/drone";
 import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
 import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
-import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml } from "./format";
+import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml, fmtAge } from "./format";
 import { ArchiveReader, type ArchiveRecord } from "../data/archive";
 
 interface UnitRuntime {
@@ -573,6 +573,9 @@ export class App {
     if (!best) {
       this.stationIdx = null;
       this.stationCard.classList.remove("open");
+      // Tapping empty map releases the camera lock. Without this the only way
+      // out was the Release button or Escape — and a phone has no Escape.
+      if (this.track) this.releaseTrack("RELEASED BY OPERATOR");
       return;
     }
     this.stationIdx = null;
@@ -586,6 +589,20 @@ export class App {
   }
 
   // ---------- live departure boards ----------
+
+  /**
+   * True age of a live position fix, in seconds.
+   *
+   * The snapshot records how old each fix was *when it was captured*. Shown
+   * raw, that number never moves: a vehicle reported 74 s old still claimed
+   * 74 s ten minutes later, so the display under-stated staleness by the
+   * entire age of the snapshot. The age of the snapshot has to be added back.
+   */
+  liveFixAge(v: { fixAge: number }): number {
+    const captured = this.live?.vehicles?.t;
+    const since = captured ? Math.max(0, (Date.now() - Date.parse(captured)) / 1000) : 0;
+    return (v.fixAge >= 0 ? v.fixAge : 0) + since;
+  }
 
   /** Hand the app the newest live snapshot; refreshes an open board in place. */
   setLive(snap: import("../data/live").LiveSnapshot, fresh: boolean) {
@@ -1184,7 +1201,7 @@ export class App {
         // its position fix is instead of a speed it never measured
         if (this.track.kind === "liveTransit") {
           const cur = this.layers.fixesLayer?.vehicles.find((v) => v.key === this.track!.key);
-          const age = cur && cur.fixAge >= 0 ? `FIX ${cur.fixAge}S AGO` : "FIX AGE UNKNOWN";
+          const age = cur ? `FIX ${fmtAge(this.liveFixAge(cur))} AGO` : "FIX AGE UNKNOWN";
           this.ui.trackLabel.textContent =
             `TRACKING ${this.track.label} · ${cur?.berthed ? "AT PLATFORM" : "IN TRANSIT"} · ${age} · ${zone}`;
         } else {

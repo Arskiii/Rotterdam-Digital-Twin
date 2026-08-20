@@ -313,6 +313,13 @@ svg {
   top: 58px;
   left: 50%;
   transform: translateX(-50%);
+  /* Never wider than the screen. The label grew a lot when live vehicles
+     gained identity (line, status, fix age, district) and on a phone it pushed
+     the Release button off the right edge — leaving no way to stop following a
+     vehicle, since there is no Escape key on a phone and tapping the map did
+     not release either. */
+  max-width: calc(100vw - 20px);
+  box-sizing: border-box;
   display: none;
   align-items: center;
   gap: 9px;
@@ -332,8 +339,13 @@ svg {
 #track-chip #track-label {
   color: var(--text);
   white-space: nowrap;
+  /* the label is what gives way, never the button */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 #track-chip #track-release {
+  flex: none;
   border: 1px solid var(--line);
   padding: 3px 8px;
   font-size: 9px;
@@ -1822,6 +1834,14 @@ label {
     width: calc(100vw - 24px);
     bottom: 128px;
   }
+  #track-chip {
+    left: 6px;
+    right: 6px;
+    transform: none;
+    max-width: none;
+    padding: 6px 6px 6px 10px;
+  }
+  #track-chip #track-release { padding: 6px 10px; font-size: 10px; }
   #mode-switch { margin-left: 8px; }
   #history-bar { left: 6px; right: 6px; bottom: 8px; padding: 7px 9px; }
   .hb-read { gap: 10px; }

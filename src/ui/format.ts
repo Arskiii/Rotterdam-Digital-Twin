@@ -89,3 +89,11 @@ export function escapeHtml(s: string): string {
     c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;"
   );
 }
+
+/** Compact age for live readouts: seconds under a minute, then minutes. */
+export function fmtAge(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  if (s < 60) return `${s}S`;
+  const m = Math.round(s / 60);
+  return m < 60 ? `${m}M` : `${Math.round(m / 60)}H`;
+}
