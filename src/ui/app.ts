@@ -1595,7 +1595,7 @@ export class App {
       b.addEventListener("click", () => {
         $("su-dpr").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
         const v = +b.dataset.v!;
-        this.scene.renderer.setPixelRatio(v === 0 ? Math.min(devicePixelRatio, 2) : v);
+        this.scene.pixelRatioOverride = v === 0 ? null : v;
         this.scene.resize();
       })
     );
