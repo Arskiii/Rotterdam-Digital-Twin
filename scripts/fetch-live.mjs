@@ -263,6 +263,13 @@ const KIND = { 0: 0, 1: 1, 3: 2, 2: 3, 4: 4 };
 // GTFS-RT VehiclePosition.current_status
 const STOPPED_AT = 1;
 
+// How fast each kind can physically travel, m/s, indexed by our kind. Not a
+// realism target — a sanity bound, used only to catch a projected leg that no
+// vehicle of that type could run. RET metro lines B and E do 100 km/h on the
+// open sections out to Hoek van Holland and Den Haag, so the metro ceiling is
+// genuinely high.
+const TOP_SPEED = [22, 28, 25, 45, 20];
+
 /** VehicleDescriptor → its id (the RET fleet number for metros and trams). */
 function vehicleId(buf, off, len) {
   for (const d of pbFields(buf, off, off + len)) {
@@ -479,6 +486,11 @@ async function fetchDepartures() {
   const nowSec = Math.floor(Date.now() / 1000);
   const HORIZON = 45 * 60;
   const PER_STOP = 6;
+  // Waypoints per vehicle for the client to move along between position fixes.
+  // Six calls is a few minutes of runway — enough to keep a vehicle moving
+  // until the next snapshot lands, without carrying a whole trip.
+  const PLAN_STOPS = 6;
+  const PLAN_HORIZON = 20 * 60;
 
   // A service day runs past midnight, so yesterday's late trips are still
   // arriving; both dates are scanned against their own local midnight.
@@ -490,6 +502,8 @@ async function fetchDepartures() {
 
   /** stationKey → { name, x, y, rows } */
   const stations = new Map();
+  /** tripId → [[x, y, secondsFromSnapshot], …] — where this trip is due next */
+  const plans = {};
   const stationOf = (gtfsStopId) => {
     const s = stopTable[gtfsStopId];
     if (!s) return null;
@@ -519,6 +533,22 @@ async function fetchDepartures() {
       if (lastAt < nowSec - 60 || firstAt > nowSec + HORIZON) continue;
       if (rt?.live) liveTrips++;
       const dest = tt.headsigns[trip.head] || "";
+
+      // The path this trip is scheduled to take from here, shifted by the delay
+      // it is actually running. A vehicle's position between fixes is then a
+      // projection of the published timetable onto measured lateness — the same
+      // arithmetic as the departure board, not invented motion.
+      const wp = [];
+      for (let k = 0; k < n && wp.length < PLAN_STOPS; k++) {
+        const at = day.base + trip.callSec[k] * 2 + shift;
+        if (at < nowSec) continue; // already called there
+        if (at > nowSec + PLAN_HORIZON) break;
+        const stop = stopTable[tt.stops[trip.callStop[k]]];
+        if (!stop) continue;
+        wp.push([stop.x, stop.y, Math.round(at - nowSec)]);
+      }
+      if (wp.length) plans[trip.id] = wp;
+
       for (let k = 0; k < n; k++) {
         if (k === n - 1) continue; // nobody boards at the terminus
         const at = day.base + trip.callSec[k] * 2 + shift;
@@ -543,7 +573,9 @@ async function fetchDepartures() {
     stops[key] = [st.name, st.x, st.y];
     dep[key] = st.rows.slice(0, PER_STOP);
   }
-  return { t: new Date().toISOString(), stops, dep, liveTrips };
+  // planT, not t: the waypoint offsets are counted from the instant the
+  // timetable was walked, and the walk itself takes a second or two
+  return { t: new Date().toISOString(), planT: nowSec, stops, dep, liveTrips, plans };
 }
 
 // ---------------- 4. Maas water level (Rijkswaterstaat, Boompjes gauge) ----------------
@@ -667,8 +699,36 @@ async function main() {
       "departures",
       async () => {
         const d = await fetchDepartures();
-        out.departures = d;
-        return `${Object.keys(d.stops).length} stations, ${d.liveTrips} trips with a live delay`;
+        const { plans, planT, ...rest } = d;
+        out.departures = rest;
+        // The plans belong with the vehicles they steer, and vehicles is
+        // fetched first, so attach rather than nest — but rebase the offsets
+        // onto the vehicle snapshot's clock first. The client then has one
+        // timebase for both the fix age and the schedule, instead of two that
+        // drift apart by however long the timetable walk took.
+        if (out.vehicles) {
+          const shift = planT - Math.round(Date.parse(out.vehicles.t) / 1000);
+          if (shift) for (const id in plans) for (const w of plans[id]) w[2] += shift;
+          // A first leg that would need an impossible speed is proof the trip
+          // is running later than the operator's delay admits — the vehicle is
+          // measurably still 3 km short of a call it is supposedly due at in a
+          // minute. Believing the schedule there would fling it across the map
+          // at 137 km/h, so the whole plan slides later instead: the route and
+          // its relative timings are kept, the vehicle is simply later than
+          // claimed. The next snapshot re-anchors it either way.
+          const lagged = new Set();
+          for (const v of out.vehicles.v) {
+            const p = plans[v[4]];
+            if (!p || lagged.has(v[4])) continue; // one shift per trip
+            lagged.add(v[4]);
+            const need = Math.hypot(p[0][0] - v[0], p[0][1] - v[1]) / (TOP_SPEED[v[2]] ?? 25);
+            const lag = Math.ceil(need - (p[0][2] + (v[8] >= 0 ? v[8] : 0)));
+            if (lag > 0) for (const w of p) w[2] += lag;
+          }
+          out.vehicles.plan = plans;
+        }
+        const planned = out.vehicles ? Object.keys(out.vehicles.v).filter((i) => plans[out.vehicles.v[i][4]]).length : 0;
+        return `${Object.keys(d.stops).length} stations, ${d.liveTrips} live delays, ${planned} vehicles with a path`;
       },
     ],
     ["water", fetchWater],

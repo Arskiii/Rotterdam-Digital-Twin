@@ -16,7 +16,16 @@ export interface LiveSnapshot {
   traffic?: { t: string; todMin: number; s: [number, number, number][] }; // [stationIdx, veh/h, km/h]
   bridges?: { name: string; x: number; y: number; edges: number[]; until: string }[];
   incidents?: { x: number; y: number; kind: number; edge: number; name: string; until: string }[];
-  vehicles?: { t: string; v: LiveVehicle[] };
+  vehicles?: {
+    t: string;
+    v: LiveVehicle[];
+    /**
+     * tripId → the trip's remaining calls as [x, y, secondsAfter `t`], already
+     * shifted by the delay that trip is running. Lets the client keep a vehicle
+     * moving between fixes on the timetable's own arithmetic.
+     */
+    plan?: Record<string, [number, number, number][]>;
+  };
   departures?: {
     t: string;
     /** stationKey → [name, x, y] */

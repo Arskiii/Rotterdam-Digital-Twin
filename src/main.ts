@@ -208,7 +208,10 @@ async function boot() {
       }
       ndwLayer.setLive(ratios);
     }
-    if (snap.vehicles) fixesLayer.set(snap.vehicles.v);
+    if (snap.vehicles) {
+      const at = Date.parse(snap.vehicles.t);
+      fixesLayer.set(snap.vehicles.v, snap.vehicles.plan, Number.isFinite(at) ? at : undefined);
+    }
     if (snap.departures) stopsLayer.set(snap.departures.stops, snap.departures.dep);
     if (snap.air) airLayer.set(snap.air.s);
     if (snap.weather) {
@@ -240,7 +243,7 @@ async function boot() {
     transit.update(app.paused ? 0 : realDt * app.simSpeed);
     // live vehicles run on real time, never on the sim clock: a snapshot is a
     // measurement of now, so it must not be scrubbed, paused or compressed
-    fixesLayer.update(realDt);
+    fixesLayer.update(); // real positions run on wall clock, never on sim time
     scene.update();
     syncFog(scene.fog);
     // sim-clock daylight: dawn ~06:00, dusk ~21:30 (subtle, keeps the night-ops look)
