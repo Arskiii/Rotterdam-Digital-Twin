@@ -1,28 +1,26 @@
-name: Live city data
+name: Live snapshot refresh
 
 # Keeps the deployed platform fed with real Rotterdam state and folds every
 # snapshot into the historical archive.
 #
-# Why this is its own workflow, and why the job loops internally:
+# This is the ONLY publisher of the `live` and `archive` branches. That matters:
+# deploy.yml used to carry a second `live` job on its own */5 schedule, and the
+# two raced. Each force-pushes the branch as a fresh root commit, so whichever
+# went last decided the tree — and deploy.yml's version wrote no vercel.json,
+# which meant Vercel's git integration tried to build a branch holding one JSON
+# file and no app. Every such tick produced a failed deployment. The schedule
+# and the live job are gone from deploy.yml; do not reintroduce them.
 #
-# The `schedule:` trigger previously lived in deploy.yml and never once fired —
-# across the workflow's whole life the run history contained zero `schedule`
-# events, so "refreshed every 5 minutes" was really "refreshed whenever someone
-# pressed the button", with observed gaps of up to five hours. GitHub does not
-# reliably arm cron for workflow files pushed by an integration, and a brand-new
-# workflow file is the documented way to get one registered.
-#
-# So the schedule is belt, and the loop is braces: each run refreshes on a
-# 60-second cadence for its whole duration instead of once and exiting. If cron
-# fires, the city is a minute fresh around the clock. If cron still refuses,
-# one `workflow_dispatch` with minutes=55 covers most of an hour, and the app
-# degrades honestly in the meantime — the header chip shows real snapshot age
-# and the client refuses to present a stale snapshot as live.
+# Why the job loops internally rather than fetching once and exiting: a single
+# tick gives a snapshot that is already a minute old by the time anyone loads
+# the page. Refreshing on a 60-second cadence for the whole run means the city
+# is a minute fresh continuously, and one manual dispatch with minutes=55 still
+# covers most of an hour if the scheduler misbehaves.
 
 on:
   schedule:
-    # every 5 minutes; each run covers ~4 of those 5 minutes, so consecutive
-    # ticks tile into continuous coverage rather than overlapping
+    # every 5 minutes; each run covers ~4 of those 5, so consecutive ticks tile
+    # into continuous coverage rather than overlapping
     - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
@@ -32,16 +30,16 @@ on:
         default: "55"
 
 permissions:
-  contents: write # force-pushes the `live` branch, commits to `archive`
+  contents: write # force-pushes `live`, commits to `archive`
 
 concurrency:
-  group: live-data
-  # never kill a running refresh loop — a queued tick simply takes over when
-  # the current one finishes, which is what keeps coverage continuous
+  group: live-refresh
+  # never kill a running refresh loop — a queued tick takes over when the
+  # current one finishes, which is what keeps coverage continuous
   cancel-in-progress: false
 
 jobs:
-  refresh:
+  live:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -80,7 +78,14 @@ jobs:
           END=$(( $(date +%s) + MINUTES * 60 ))
           echo "refreshing every 60s for ${MINUTES} minute(s)"
 
+          # Both published branches carry data, not an app. Without this Vercel
+          # builds them on every push and fails, which is what filled the
+          # dashboard with Error deployments.
+          VERCEL_LIVE='{"git":{"deploymentEnabled":{"live":false}}}'
+          VERCEL_ARCHIVE='{"git":{"deploymentEnabled":{"archive":false}}}'
+
           mkdir -p /tmp/live-branch
+          printf '%s' "$VERCEL_ARCHIVE" > /tmp/archive/vercel.json
           ARCHIVE_PUSHED=$(date +%s)
           OK=0
           FAIL=0
@@ -89,8 +94,8 @@ jobs:
             if [ -n "$(git -C /tmp/archive status --porcelain)" ]; then
               git -C /tmp/archive add -A
               git -C /tmp/archive commit -q -m "archive $(date -u +%Y-%m-%dT%H:%MZ)"
-              # the archive is append-mostly; a losing race just means the next
-              # push carries both sides, so rebase rather than force
+              # append-mostly, so a losing race just means the next push carries
+              # both sides — rebase rather than force
               git -C /tmp/archive pull --rebase -q origin archive 2>/dev/null || true
               if git -C /tmp/archive push -q "$REPO_URL" archive 2>&1; then
                 echo "  archive pushed"
@@ -105,12 +110,13 @@ jobs:
             if node scripts/fetch-live.mjs --out /tmp/live.json; then
               OK=$((OK + 1))
               cp /tmp/live.json /tmp/live-branch/live.json
+              printf '%s' "$VERCEL_LIVE" > /tmp/live-branch/vercel.json
               ( cd /tmp/live-branch
                 rm -rf .git
                 git init -b live --quiet
                 git config user.name "live-data bot"
                 git config user.email "actions@github.com"
-                git add live.json
+                git add live.json vercel.json
                 git commit -q -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
                 # one root commit, force-pushed: the live branch is a current
                 # value, not a log, so its history must never grow
@@ -121,8 +127,8 @@ jobs:
               echo "  fetch failed ($FAIL so far)"
             fi
 
-            # push the archive on a slower clock than the snapshot so the
-            # branch collects one commit per ~10 min instead of one per minute
+            # push the archive on a slower clock than the snapshot so the branch
+            # collects one commit per ~10 min instead of one per minute
             if [ $(( $(date +%s) - ARCHIVE_PUSHED )) -ge 600 ]; then
               push_archive
               ARCHIVE_PUSHED=$(date +%s)
