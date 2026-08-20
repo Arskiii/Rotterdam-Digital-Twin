@@ -39,6 +39,27 @@ async function resolveDataBase(): Promise<string> {
   return DATA_FALLBACK;
 }
 
+/**
+ * Stand-in for a sim core that would not start.
+ *
+ * The app posts parameter changes from seventeen places and reads frames from
+ * onmessage; none of it is load-bearing for the live map, and its metrics and
+ * frame fields are already nullable. Swallowing the messages keeps every one
+ * of those call sites honest without a null check apiece.
+ */
+function inertWorker(): Worker {
+  return {
+    postMessage() {},
+    addEventListener() {},
+    removeEventListener() {},
+    terminate() {},
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    dispatchEvent: () => false,
+  } as unknown as Worker;
+}
+
 async function boot() {
   const scene = new SceneCtx(ui.sceneCanvas);
 
@@ -64,8 +85,14 @@ async function boot() {
         }
       };
       w.addEventListener("message", h);
-      w.addEventListener("error", (e) => reject(new Error(`sim core failed to start — ${e.message || "see console"}`)));
-      w.addEventListener("messageerror", () => reject(new Error("sim core failed to start — message decode error")));
+      // A worker that dies from memory pressure reports an empty message — the
+      // common case on phones, where the graph and its derived tables are a
+      // lot to hold beside a 3D scene. Saying "see console" there is useless:
+      // the device that fails is the one with no console.
+      w.addEventListener("error", (e) =>
+        reject(new Error(e.message || "out of memory, or workers are blocked in this browser"))
+      );
+      w.addEventListener("messageerror", () => reject(new Error("message decode error")));
     });
     simReady.catch(() => {}); // surfaced at the await below
     const graphCopy = graphBuffer.slice(0);
@@ -111,12 +138,31 @@ async function boot() {
   const liveIncidentsLayer = new LiveIncidentsLayer();
   scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.group, stopsLayer.points, liveIncidentsLayer.points);
 
-  // the engine has been initializing since graph.bin arrived — usually done
-  await simReady!;
-  paintBoot("sim", 1);
-  const sim = worker!;
+  // The engine has been initializing since graph.bin arrived — usually done.
+  //
+  // A failure here used to end the boot with BOOT FAILURE and a blank city,
+  // which is the wrong trade: the simulation is only needed for SIMULATION
+  // mode. Everything a live map shows — real transit, departure boards,
+  // sensor congestion, incidents, weather, tide — is main-thread and comes
+  // from the snapshot. On a phone, where the sim core is most likely to be
+  // refused, the live map is also the only thing anyone wants. So the app
+  // carries on without it and says what is missing.
+  let simError: string | null = null;
+  try {
+    await simReady!;
+    paintBoot("sim", 1);
+  } catch (err) {
+    simError = (err as Error)?.message ?? String(err);
+    // `worker` is only ever assigned inside startSim's closure, so control-flow
+    // analysis still has it as null here — the annotation restores the truth
+    (worker as Worker | null)?.terminate();
+    worker = null;
+    paintBoot("sim", 1);
+  }
+  const sim = (worker as Worker | null) ?? inertWorker();
 
   const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer, stopsLayer }, sim);
+  if (simError) app.disableSim(simError);
 
   // feed the NDW snapshot into the sim's calibration loop
   if (data.ndw?.stations.length) {

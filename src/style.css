@@ -1650,6 +1650,13 @@ label {
 #mode-switch button:hover { color: var(--text); }
 #mode-switch button.on { background: var(--bg-active); color: var(--text); }
 #mode-switch button[data-mode="live"].on { color: #6fe39a; }
+/* a mode the device cannot run reads as withdrawn, not merely unselected */
+#mode-switch button.unavailable {
+  opacity: 0.35;
+  cursor: not-allowed;
+  text-decoration: line-through;
+}
+#mode-switch button.unavailable:hover { color: var(--text-dim); }
 #mode-switch button[data-mode="history"].on { color: #7abeff; }
 
 /* ---------- history scrubber ------------------------------- */
