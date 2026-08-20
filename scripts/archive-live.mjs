@@ -187,32 +187,61 @@ function writeCoarse(path, hourEpoch, prev, slot, city, districts) {
 
 const KIND_NAME = ["accident", "obstruction", "jam", "closure", "roadworks"];
 
+/**
+ * Append incidents and bridge openings, one entry per real-world occurrence.
+ *
+ * The identity of an occurrence is its kind and its position — deliberately
+ * not its end time. NDW revises `until` as an incident develops, so keying on
+ * it logged the same accident again every time the estimate moved, and a
+ * morning of roadworks became dozens of rows. Instead an entry is extended:
+ * `t` is when it was first seen, `until` tracks the latest estimate, and
+ * `seen` is the last snapshot it appeared in.
+ *
+ * A gap longer than REOPEN_MS starts a new entry, so a bridge that opens twice
+ * in a day is two openings rather than one very long one.
+ */
+const REOPEN_MS = 2 * 3_600_000;
+
 function appendEvents(path, snap, stampIso) {
   const existing = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : [];
-  const seen = new Set(existing.map((e) => e.k));
+  const byKey = new Map();
+  for (const e of existing) {
+    const prev = byKey.get(e.k);
+    // keep the most recent occurrence of each key as the extendable one
+    if (!prev || Date.parse(e.seen ?? e.t) > Date.parse(prev.seen ?? prev.t)) byKey.set(e.k, e);
+  }
+  const now = Date.parse(stampIso);
   let added = 0;
-  const push = (key, row) => {
-    if (seen.has(key)) return;
-    seen.add(key);
-    existing.push({ k: key, ...row });
+  let extended = 0;
+  const record = (key, row) => {
+    const open = byKey.get(key);
+    if (open && now - Date.parse(open.seen ?? open.t) <= REOPEN_MS) {
+      open.seen = stampIso;
+      if (row.until) open.until = row.until;
+      extended++;
+      return;
+    }
+    const entry = { k: key, seen: stampIso, ...row };
+    existing.push(entry);
+    byKey.set(key, entry);
     added++;
   };
   for (const inc of snap.incidents ?? []) {
-    const key = `i:${inc.kind}:${Math.round(inc.x)}:${Math.round(inc.y)}:${inc.until ?? ""}`;
-    push(key, {
+    record(`i:${inc.kind}:${Math.round(inc.x)}:${Math.round(inc.y)}`, {
       t: stampIso, type: KIND_NAME[inc.kind] ?? String(inc.kind),
       name: inc.name ?? "", x: inc.x, y: inc.y, until: inc.until ?? null,
     });
   }
   for (const b of snap.bridges ?? []) {
-    const key = `b:${Math.round(b.x)}:${Math.round(b.y)}:${b.until ?? ""}`;
-    push(key, { t: stampIso, type: "bridge-open", name: b.name ?? "", x: b.x, y: b.y, until: b.until ?? null });
+    record(`b:${Math.round(b.x)}:${Math.round(b.y)}`, {
+      t: stampIso, type: "bridge-open", name: b.name ?? "", x: b.x, y: b.y, until: b.until ?? null,
+    });
   }
-  if (added) {
+  if (added || extended) {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, JSON.stringify(existing));
   }
-  return added;
+  return { added, extended };
 }
 
 // ---------------- retention ----------------
@@ -322,13 +351,13 @@ function main() {
   const wroteCoarse = !coarseSlots(prevCoarse).has(slot);
   if (wroteCoarse) writeCoarse(coarsePath, hourEpoch, prevCoarse, slot, city, districts);
 
-  const events = appendEvents(join(DIR, "e", `${y}-${mo}.json`), snap, at.toISOString());
+  const ev = appendEvents(join(DIR, "e", `${y}-${mo}.json`), snap, at.toISOString());
   const pruned = prune(DIR, PRUNE_DAYS);
 
   console.log(
     `archive ${y}-${mo}-${d} ${h}:${String(slot).padStart(2, "0")}Z — ` +
       `fine ${wroteFine ? "+1" : "skip"}, coarse ${wroteCoarse ? "+1" : "skip"}, ` +
-      `events +${events}${pruned ? `, pruned ${pruned}` : ""}`
+      `events +${ev.added}~${ev.extended}${pruned ? `, pruned ${pruned}` : ""}`
   );
 }
 
