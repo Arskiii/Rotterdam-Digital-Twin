@@ -11,11 +11,16 @@ on:
       minutes:
         description: "How long the live job should keep refreshing (1-55)"
         required: false
-        default: "55"
+        default: "25"
   # The live refresh rides in this workflow because this is the only file in
   # this repo whose cron actually fires. live-refresh.yml was added as its own
   # workflow and its schedule never armed; deploy.yml's has been firing all
   # along. Keep the job here until that changes.
+  #
+  # "*/5" is aspirational and always was: GitHub throttles short crons hard, and
+  # the observed firings were 09:00, 09:40, 10:04 — twenty to forty minutes
+  # apart, not five. That is why the `live` job loops for the length of its run
+  # instead of fetching once per firing.
   schedule:
     - cron: "*/5 * * * *"
 
@@ -28,7 +33,11 @@ concurrency:
   # Schedule ticks get their own group so a refresh can never cancel a deploy,
   # and a push can never kill a refresh mid-write.
   group: ${{ github.event_name == 'schedule' && 'live-data' || format('pages-{0}', github.ref) }}
-  cancel-in-progress: true
+  # A newer push should replace an older in-flight deploy, but a refresh loop
+  # must never be killed by the next tick — with firings this sparse that is
+  # the difference between continuous coverage and none. A queued tick takes
+  # over when the running loop ends.
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   build:
@@ -80,7 +89,7 @@ jobs:
   live:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 32
     steps:
       - uses: actions/checkout@v4
         with:
@@ -105,16 +114,23 @@ jobs:
 
       - name: Refresh loop
         env:
-          MINUTES: ${{ github.event.inputs.minutes || '4' }}
+          MINUTES: ${{ github.event.inputs.minutes || '25' }}
           REPO_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git
         run: |
           set -uo pipefail
           MINUTES=$(echo "$MINUTES" | tr -cd '0-9')
-          [ -z "$MINUTES" ] && MINUTES=4
+          [ -z "$MINUTES" ] && MINUTES=25
           [ "$MINUTES" -gt 55 ] && MINUTES=55
           [ "$MINUTES" -lt 1 ] && MINUTES=1
           END=$(( $(date +%s) + MINUTES * 60 ))
-          echo "refreshing every 60s for ${MINUTES} minute(s)"
+          # 120s, not 60s: raw.githubusercontent.com serves the live branch with
+          # cache-control max-age=300, and a cache-busting query string does not
+          # get past it (verified — x-cache: HIT either way, identical body).
+          # Five minutes is a hard floor on how fresh the browser can see this,
+          # so publishing faster buys nothing downstream and only doubles the
+          # load on NDW and OVapi, who serve these feeds for free.
+          CADENCE=120
+          echo "refreshing every ${CADENCE}s for ${MINUTES} minute(s)"
 
           VERCEL_LIVE='{"git":{"deploymentEnabled":{"live":false}}}'
           VERCEL_ARCHIVE='{"git":{"deploymentEnabled":{"archive":false}}}'
@@ -168,7 +184,7 @@ jobs:
             fi
 
             ELAPSED=$(( $(date +%s) - START ))
-            SLEEP=$(( 60 - ELAPSED ))
+            SLEEP=$(( CADENCE - ELAPSED ))
             [ "$SLEEP" -lt 5 ] && SLEEP=5
             [ "$(date +%s)" -ge "$END" ] && break
             sleep "$SLEEP"

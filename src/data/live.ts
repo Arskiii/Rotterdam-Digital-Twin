@@ -31,17 +31,25 @@ export interface LiveSnapshot {
 }
 
 const LIVE_BRANCH_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/live/live.json";
-const POLL_MS = 45_000;
+// The live branch is served with cache-control max-age=300 and a cache-busting
+// query string does not get past it, so five minutes is a hard floor on how
+// fresh this data can be however often the workflow publishes. Polling faster
+// than the source cadence just re-reads the same cached object.
+const POLL_MS = 120_000;
 
 /**
- * Past this age a snapshot stops being "live" in any useful sense — the
- * refresh loop publishes every 60 s, so ten minutes means the pipeline is
- * down. The UI degrades to LAGGING/STALE rather than presenting old traffic as
- * current, which matters most for the departure boards: a five-hour-old
- * "due in 2 min" is worse than no board at all.
+ * Thresholds are set against what the delivery path can actually achieve, not
+ * against the publish cadence. The CDN caps freshness at five minutes, so a
+ * perfectly healthy feed routinely reads as four or five minutes old; marking
+ * that "lagging" would leave the chip amber almost permanently and teach the
+ * operator to ignore it.
+ *
+ * Past the stale threshold the UI stops presenting old traffic as current,
+ * which matters most for the departure boards: an hours-old "due in 2 min" is
+ * worse than no board at all.
  */
-export const LIVE_STALE_MIN = 10;
-export const LIVE_LAGGING_MIN = 3;
+export const LIVE_STALE_MIN = 20;
+export const LIVE_LAGGING_MIN = 9;
 
 export type LiveHealth = "live" | "lagging" | "stale" | "offline";
 

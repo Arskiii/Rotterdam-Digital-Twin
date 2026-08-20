@@ -78,7 +78,7 @@ all three honestly:
 - **HISTORY** — the archive, scrubbed. Congestion over the last day, week or
   month with incident ticks, reading out the moment you land on.
 
-**Live city feeds** (refreshed every 60 s by `.github/workflows/deploy.yml`
+**Live city feeds** (refreshed every 2 minutes by `.github/workflows/deploy.yml`
 onto the `live` branch; the app polls it and falls back to the committed
 snapshot — the header chip shows the snapshot's real age, and once it goes
 stale the app says so instead of presenting old traffic as current):
@@ -142,8 +142,17 @@ one wrote the guard, each force-push replaced the other's tree and the
 failures came back intermittently. Any future publisher of these branches must
 write that file.
 
-Within a run the job loops on a 60-second cadence rather than fetching once
-and exiting, so the city stays a minute fresh instead of five.
+Within a run the job loops rather than fetching once and exiting, so the
+snapshot stays current between sparse firings instead of ageing out.
+
+The cadence is two minutes rather than one because
+`raw.githubusercontent.com` serves the live branch with `cache-control:
+max-age=300`, and a cache-busting query string does not get past it (verified
+— `x-cache: HIT` either way, identical body). Five minutes is a hard floor on
+how fresh this data can reach a browser, so publishing faster buys nothing
+downstream and only doubles the load on NDW and OVapi, who serve these feeds
+for free. The freshness chip is calibrated to that floor: a healthy feed reads
+as a few minutes old, and only genuine outages show amber or red.
 
 **Calibration & validation against official data:**
 
