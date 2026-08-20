@@ -3,10 +3,10 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Rotterdam Intelligence Platform — city-wide 3D traffic simulation on the real OSM street network",
+  "description": "Rotterdam Intelligence Platform \u2014 city-wide 3D traffic simulation on the real OSM street network",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "node scripts/check-publish-guards.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "fetch-data": "node scripts/fetch-osm.mjs",
     "build-data": "node scripts/build-data.mjs",
@@ -15,7 +15,8 @@
     "fetch-heights": "NODE_USE_ENV_PROXY=1 node scripts/fetch-heights.mjs",
     "fetch-roofs": "NODE_USE_ENV_PROXY=1 node scripts/fetch-lod2.mjs",
     "apply-heights": "node scripts/apply-heights.mjs",
-    "audit-buildings": "node scripts/audit-buildings.mjs"
+    "audit-buildings": "node scripts/audit-buildings.mjs",
+    "check-workflows": "node scripts/check-publish-guards.mjs"
   },
   "dependencies": {
     "earcut": "^3.2.3",
