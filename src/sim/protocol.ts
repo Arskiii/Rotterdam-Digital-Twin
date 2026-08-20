@@ -42,7 +42,7 @@ export interface NdwMsg {
 // update clears them.
 export interface LiveBridgesMsg {
   type: "liveBridges";
-  bridges: { name: string; edges: number[] }[];
+  bridges: { name: string; edges: number[]; x?: number; y?: number }[];
 }
 
 // Real incidents from the NDW situation feed. kind: 0 accident, 1 obstruction,
@@ -124,6 +124,11 @@ export interface EventMsg {
   type: "event";
   level: "info" | "warn" | "crit" | "ok";
   text: string;
+  // optional world anchor: gives the message log a fly-to link; `live` marks
+  // events derived from a real-world feed and adds an external map link
+  x?: number;
+  y?: number;
+  live?: boolean;
 }
 
 export type WorkerToMain = ReadyMsg | InitProgressMsg | FrameMsg | MetricsMsg | CongestionMsg | EventMsg;

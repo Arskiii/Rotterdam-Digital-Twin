@@ -377,6 +377,7 @@ function emitPrisms(tile: BuildingTile, skip: Set<number> | null, apos: number[]
     const nv = tile.nVerts[b];
     const off = tile.vertOff[b];
     const h = tile.heights[b];
+    if (h === 0) continue; // removed artifact (e.g. bridge structure polygons)
     const base = apos.length / 3;
     for (let k = 0; k < nv; k++) {
       const x = tile.verts[(off + k) * 2];

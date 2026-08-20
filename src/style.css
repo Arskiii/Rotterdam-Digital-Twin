@@ -1225,6 +1225,21 @@ table.district td:first-child {
 .msg .lvl.warn { color: var(--amber); border-color: #55431a; }
 .msg .lvl.crit { color: var(--red); border-color: #5c2626; }
 .msg .lvl.ok { color: var(--green); border-color: #1e4a2a; }
+.msg .msg-fly,
+.msg .msg-src {
+  margin-left: 7px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: #6ea8c9;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.msg .msg-fly:hover,
+.msg .msg-src:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
 
 /* ---------- full pages (BRIEF / SETUP) --------------------- */
 

@@ -759,7 +759,19 @@ let partCount = 0;
     return { cx: cx / pts.length, cy: cy / pts.length, area: Math.abs(ringAreaXY(pts)) };
   };
 
+  /** Bridge structures (pylons, piers, arches, lift towers) carry building
+   *  tags in OSM but are infrastructure, not buildings — extruding their
+   *  outlines drops black slabs on the bridge decks and the river. */
+  const isBridgeStructure = (tags) =>
+    !!tags &&
+    (tags.building === "bridge" ||
+    tags.man_made === "bridge" ||
+    (tags.bridge && tags.bridge !== "no") ||
+    tags["bridge:support"] ||
+    tags["seamark:type"] === "bridge");
+
   function addFootprint(ringLatLon, tags, id) {
+    if (isBridgeStructure(tags)) return;
     const pts = toPts(ringLatLon);
     if (!pts) return;
     const { cx, cy, area } = withCentroid(pts);
