@@ -45,6 +45,28 @@ export const LIVE_LAGGING_MIN = 3;
 
 export type LiveHealth = "live" | "lagging" | "stale" | "offline";
 
+/**
+ * Bring a v1 snapshot up to the v2 vehicle shape, in place.
+ *
+ * v1 published [x, y, kind, bearing, line]; v2 publishes
+ * [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAge]. Read raw,
+ * a v1 tuple puts the bearing where the line belongs and the line where the
+ * trip id belongs — and since vehicles are keyed by trip, every bus on the
+ * same route collapsed into one. A v1 feed rendered 76 vehicles instead of
+ * 228 without erroring, which is the kind of wrong that goes unnoticed.
+ *
+ * Old snapshots carry no trip identity at all, so each vehicle is keyed by its
+ * position instead. They cannot be followed across refreshes, which is honest:
+ * v1 never knew which vehicle was which.
+ */
+function upgradeV1(snap: LiveSnapshot) {
+  const raw = snap.vehicles?.v as unknown as [number, number, number, number, string][] | undefined;
+  if (!raw) return;
+  snap.vehicles!.v = raw.map(([x, y, kind, , line], i) => [
+    x, y, kind, line ?? "", `v1:${i}`, -1, 0, "", -1,
+  ]);
+}
+
 export class LiveFeed {
   snapshot: LiveSnapshot | null = null;
   source: "branch" | "local" | null = null;
@@ -96,6 +118,7 @@ export class LiveFeed {
       // v1 snapshots predate the departure boards but still carry traffic,
       // weather and tide, so they are accepted and simply offer less
       if (!snap?.t || !(snap.v >= 1)) continue;
+      if (snap.v < 2) upgradeV1(snap);
       // never replace a fresher snapshot with a staler one
       if (this.snapshot && Date.parse(snap.t) < Date.parse(this.snapshot.t)) return;
       this.source = source;
