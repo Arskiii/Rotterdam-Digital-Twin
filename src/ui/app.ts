@@ -1197,13 +1197,23 @@ export class App {
         this.scene.controls.target.add(this.trackVec);
         this.scene.camera.position.add(this.trackVec);
         const zone = this.zoneName(st.x, -st.z);
-        // GTFS-RT carries no speed for rail, so a real vehicle reports how old
-        // its position fix is instead of a speed it never measured
+        // GTFS-RT carries no speed for rail. A vehicle running to a known
+        // timetable can still report the speed that timetable implies —
+        // labelled SCHED, because it is arithmetic, not a measurement — and
+        // every one of them reports how old its last real fix is.
         if (this.track.kind === "liveTransit") {
           const cur = this.layers.fixesLayer?.vehicles.find((v) => v.key === this.track!.key);
           const age = cur ? `FIX ${fmtAge(this.liveFixAge(cur))} AGO` : "FIX AGE UNKNOWN";
+          const state = !cur
+            ? "IN TRANSIT"
+            : cur.plan
+              ? cur.speed < 0.5 ? "AT PLATFORM" : `${(cur.speed * 3.6).toFixed(0)} KM/H SCHED`
+              : cur.berthed ? "AT PLATFORM" : "IN TRANSIT";
+          // "· LIVE" is dropped here though the toast keeps it: on a phone the
+          // chip has room for about four fields, and a fix age in seconds says
+          // this is a real vehicle far better than the word does
           this.ui.trackLabel.textContent =
-            `TRACKING ${this.track.label} · ${cur?.berthed ? "AT PLATFORM" : "IN TRANSIT"} · ${age} · ${zone}`;
+            `TRACKING ${cur?.label ?? this.track.label} · ${state} · ${age} · ${zone}`;
         } else {
           this.ui.trackLabel.textContent = `TRACKING ${this.track.label} · ${(st.speed * 3.6).toFixed(0)} KM/H · ${zone}`;
         }

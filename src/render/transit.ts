@@ -4,7 +4,7 @@
 
 import * as THREE from "three";
 import type { TransitRoute } from "../data/loader";
-import type { LiveVehicle } from "../data/live";
+import { LIVE_STALE_MIN, type LiveVehicle } from "../data/live";
 
 const VMAX = [11, 21]; // m/s: tram, metro
 const ACC = [1.0, 0.9];
@@ -284,6 +284,20 @@ const FIX_COLORS: [number, number, number][] = [
 ];
 const KIND_LABEL = ["TRAM", "METRO", "BUS", "TRAIN", "FERRY"];
 
+/**
+ * How far past its snapshot the projection may run, in seconds.
+ *
+ * Tied to the staleness threshold on purpose: past it the app stops presenting
+ * live readings as current, and a projected position is exactly the reading
+ * that should stop first. Beyond this the fleet reverts to the last positions
+ * actually measured — which is also what an offline load of the shipped
+ * fallback snapshot gets, instead of a day-old timetable run forward.
+ */
+const MAX_PROJECT_S = LIVE_STALE_MIN * 60;
+
+/** Seconds the drawn position takes to glide onto a corrected projection. */
+const EASE_S = 1.5;
+
 /** One live vehicle, tracked across snapshots so it can be followed. */
 export interface LiveVeh {
   key: string;
@@ -293,15 +307,22 @@ export interface LiveVeh {
   seq: number;
   berthed: boolean;
   fixAge: number;
-  /** reported position */
+  /** last observed position — the measurement everything else is anchored to */
+  fx: number;
+  fz: number;
+  /** where the vehicle is projected to be right now */
   tx: number;
   tz: number;
-  /** displayed position, eased toward the reported one */
+  /** displayed position, eased toward the projection */
   x: number;
   z: number;
-  /** heading derived from successive real fixes, not from the feed */
+  /** heading along the path it is currently running */
   hx: number;
   hz: number;
+  /** upcoming calls as [x, y, secondsFromSnapshot], from timetable + delay */
+  plan: [number, number, number][] | null;
+  /** m/s along the leg it is currently projected to be running, 0 without a path */
+  speed: number;
   label: string;
 }
 
@@ -315,6 +336,9 @@ export class LiveTransitLayer {
   tramIdx: number[] = [];
   metroIdx: number[] = [];
   private byKey = new Map<string, LiveVeh>();
+  /** epoch ms the current snapshot's clock is anchored to */
+  private t0 = Date.now();
+  private lastFrame = performance.now();
   private cap = 400;
   private pos: Float32Array;
   private col: Uint8Array;
@@ -387,8 +411,21 @@ export class LiveTransitLayer {
    * derived from where it actually moved. OVapi publishes no bearing for rail
    * — inventing one would be a fabricated measurement, so the direction shown
    * is only ever the direction the vehicle was observed to travel.
+   *
+   * `plans` carries each trip's remaining scheduled calls, already shifted by
+   * the delay it is measured to be running; `snapshotMs` is the instant those
+   * two are timed against. Both are optional — a feed without them still
+   * renders, it just stands still between fixes.
    */
-  set(vehicles: LiveVehicle[]) {
+  set(
+    vehicles: LiveVehicle[],
+    plans?: Record<string, [number, number, number][]>,
+    snapshotMs?: number
+  ) {
+    // A snapshot dated in the future (a skewed clock on either end) would
+    // project everything backwards, so it is treated as "now".
+    this.t0 = snapshotMs && Number.isFinite(snapshotMs) ? Math.min(snapshotMs, Date.now()) : Date.now();
+    const tNow = (Date.now() - this.t0) / 1000;
     const seen = new Set<string>();
     const next: LiveVeh[] = [];
     for (const v of vehicles) {
@@ -396,29 +433,41 @@ export class LiveTransitLayer {
       const key = `${tripId || "?"}:${vehId || ""}:${kind}`;
       if (seen.has(key)) continue; // duplicate fix for one trip
       seen.add(key);
+      const plan = (tripId && plans?.[tripId]) || null;
       let veh = this.byKey.get(key);
       if (!veh) {
         veh = {
           key, kind, line, tripId, seq, berthed: !!berthed, fixAge,
-          tx: x, tz: -y, x, z: -y, hx: 1, hz: 0, label: "",
+          fx: x, fz: -y, tx: x, tz: -y, x, z: -y, hx: 1, hz: 0,
+          plan, speed: 0, label: "",
         };
         this.byKey.set(key, veh);
+        // a new vehicle appears where it is projected to be, not where it was
+        // last seen — otherwise it darts across the map on its first frame
+        this.project(veh, tNow);
+        veh.x = veh.tx;
+        veh.z = veh.tz;
       } else {
-        const dx = x - veh.tx;
-        const dz = -y - veh.tz;
-        // only a real move sets a heading; a berthed vehicle keeps the last one
+        const dx = x - veh.fx;
+        const dz = -y - veh.fz;
+        // With no path to follow, heading is the only thing a pair of fixes
+        // can still tell you: the direction the vehicle was observed to move.
         const len = Math.hypot(dx, dz);
-        if (len > 6) {
+        if (!plan && len > 6) {
           veh.hx = dx / len;
           veh.hz = dz / len;
         }
-        veh.tx = x;
-        veh.tz = -y;
+        veh.fx = x;
+        veh.fz = -y;
         veh.kind = kind;
         veh.line = line;
         veh.seq = seq;
         veh.berthed = !!berthed;
         veh.fixAge = fixAge;
+        veh.plan = plan;
+        // the new measurement re-anchors the projection; update() eases the
+        // drawn position onto it over about a second and a half
+        this.project(veh, tNow);
       }
       veh.label = `${KIND_LABEL[kind] ?? "TRANSIT"} ${String(line || "").toUpperCase()}`;
       next.push(veh);
@@ -428,19 +477,87 @@ export class LiveTransitLayer {
   }
 
   /**
-   * Ease the drawn positions toward the reported ones.
+   * Where a vehicle is right now, projected from its last fix.
    *
-   * Fixes land about once a minute and are already ~95 s old when they do, so
-   * this is a short cosmetic glide (not dead reckoning) — it removes the jump
-   * without pretending to know where the vehicle went in between.
+   * The path is a polyline through time: the observed position at the moment
+   * it was measured, then each remaining scheduled call at the time the
+   * timetable says it is due, offset by the delay the operator is reporting
+   * for that trip. Walking it by wall clock keeps a metro moving between
+   * fixes at the speed its own timetable implies — not an invented speed —
+   * and every new snapshot re-anchors the whole polyline, so a vehicle that
+   * falls behind its schedule is pulled back onto the measurement rather than
+   * drifting further ahead.
+   *
+   * Past the last known call it stops. Nothing is published about where it
+   * goes next, and coasting on a guess is how a display starts lying.
    */
-  update(dtReal: number) {
-    const k = Math.min(1, dtReal / 1.5);
+  private project(v: LiveVeh, tNow: number) {
+    const plan = v.plan;
+    if (!plan || !plan.length || tNow > MAX_PROJECT_S) {
+      v.tx = v.fx;
+      v.tz = v.fz;
+      v.speed = 0;
+      return;
+    }
+    // the fix is `fixAge` seconds older than the snapshot clock everything
+    // else is timed against, so it sits at a negative time
+    let ax = v.fx;
+    let az = v.fz;
+    let at = -(v.fixAge >= 0 ? v.fixAge : 0);
+    for (let i = 0; i < plan.length; i++) {
+      const bx = plan[i][0];
+      const bz = -plan[i][1];
+      const bt = plan[i][2];
+      if (tNow < bt) {
+        const span = bt - at;
+        const f = span > 0.5 ? Math.min(1, Math.max(0, (tNow - at) / span)) : 1;
+        const dx = bx - ax;
+        const dz = bz - az;
+        v.tx = ax + dx * f;
+        v.tz = az + dz * f;
+        const len = Math.hypot(dx, dz);
+        v.speed = span > 0.5 ? len / span : 0;
+        if (len > 1) {
+          v.hx = dx / len;
+          v.hz = dz / len;
+        }
+        return;
+      }
+      ax = bx;
+      az = bz;
+      at = bt;
+    }
+    v.tx = ax;
+    v.tz = az;
+    v.speed = 0;
+  }
+
+  /**
+   * Advance the projection and ease the drawn positions onto it.
+   *
+   * The projection moves every frame; the ease is a short glide that absorbs
+   * the correction when a fresh fix lands, so a vehicle slides onto its new
+   * position instead of teleporting.
+   *
+   * The step is measured here rather than passed in, and deliberately not
+   * clamped the way the simulation's is. Fed a clamped step, the glide runs on
+   * simulated time instead of wall clock: at a low frame rate every vehicle
+   * trails its own projection permanently, and a tab restored after five
+   * minutes takes another minute to catch up. Past the glide length the drawn
+   * position simply is the projection.
+   */
+  update() {
+    const now = performance.now();
+    const dt = (now - this.lastFrame) / 1000;
+    this.lastFrame = now;
+    const k = dt >= EASE_S ? 1 : dt / EASE_S;
+    const tNow = (Date.now() - this.t0) / 1000;
     let ti = 0;
     let mi = 0;
     this.roadCount = 0;
     for (let i = 0; i < this.vehicles.length; i++) {
       const v = this.vehicles[i];
+      this.project(v, tNow);
       v.x += (v.tx - v.x) * k;
       v.z += (v.tz - v.z) * k;
       if (v.kind === 0 || v.kind === 1) {
@@ -451,8 +568,10 @@ export class LiveTransitLayer {
         this.dummy.updateMatrix();
         mesh.setMatrixAt(idx, this.dummy.matrix);
         const c = FIX_COLORS[v.kind];
-        // a berthed vehicle dims slightly so a platform stop reads at a glance
-        const dim = v.berthed ? 0.65 : 1;
+        // a standing vehicle dims slightly so a platform stop reads at a
+        // glance — from the projection where there is one, from the reported
+        // door state where there is not
+        const dim = (v.plan ? v.speed < 0.5 : v.berthed) ? 0.65 : 1;
         this.color.setRGB((c[0] / 255) * dim, (c[1] / 255) * dim, (c[2] / 255) * dim);
         mesh.setColorAt(idx, this.color);
         if (v.kind === 0) this.tramIdx[ti++] = i;
@@ -486,7 +605,7 @@ export class LiveTransitLayer {
   vehicleInfo(index: number): { x: number; z: number; speed: number; label: string } | null {
     const v = this.vehicles[index];
     if (!v) return null;
-    return { x: v.x, z: v.z, speed: 0, label: v.label };
+    return { x: v.x, z: v.z, speed: v.speed, label: v.label };
   }
 }
 
