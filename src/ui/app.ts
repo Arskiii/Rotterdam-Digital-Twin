@@ -8,6 +8,7 @@ import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
 import type { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "../render/dynamic";
 import type { TransitLayer } from "../render/transit";
+import { LiveTransitLayer } from "../render/transit";
 import { DroneViewer } from "../render/drone";
 import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
@@ -485,7 +486,7 @@ export class App {
     let liveD2 = Infinity;
     if (liveLayer?.group.visible) {
       for (const v of liveLayer.vehicles) {
-        if (v.kind !== 0 && v.kind !== 1) continue;
+        if (!LiveTransitLayer.PICKABLE.has(v.kind)) continue;
         if (!this.scene.project(v.x, 2, v.z, this.tmpPt)) continue;
         const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
         if (d < liveD2) liveD2 = d;
@@ -555,7 +556,7 @@ export class App {
     if (lt?.group.visible) {
       for (let i = 0; i < lt.vehicles.length; i++) {
         const v = lt.vehicles[i];
-        if (v.kind !== 0 && v.kind !== 1) continue; // trams and metros carry identity
+        if (!LiveTransitLayer.PICKABLE.has(v.kind)) continue; // carries a line
         if (!this.scene.project(v.x, 2, v.z, this.tmpPt)) continue;
         const d = (this.tmpPt.x - cx) ** 2 + (this.tmpPt.y - cy) ** 2;
         if (d <= bd) {

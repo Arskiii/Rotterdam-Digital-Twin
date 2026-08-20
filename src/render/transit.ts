@@ -252,6 +252,9 @@ export class TransitLayer {
   }
 
   /** Current world position of a vehicle (for camera tracking). */
+  /** Kinds that carry enough identity to be worth following. */
+  static readonly PICKABLE = new Set([0, 1, 4]); // tram, metro, ferry
+
   vehicleInfo(index: number): { x: number; z: number; speed: number; label: string } | null {
     const veh = this.vehicles[index];
     if (!veh) return null;
@@ -277,8 +280,9 @@ const FIX_COLORS: [number, number, number][] = [
   [235, 96, 84], // 1 metro
   [235, 186, 92], // 2 bus
   [238, 238, 238], // 3 train
+  [96, 190, 235], // 4 ferry — the Waterbus, on the water
 ];
-const KIND_LABEL = ["TRAM", "METRO", "BUS", "TRAIN"];
+const KIND_LABEL = ["TRAM", "METRO", "BUS", "TRAIN", "FERRY"];
 
 /** One live vehicle, tracked across snapshots so it can be followed. */
 export interface LiveVeh {
@@ -475,6 +479,9 @@ export class LiveTransitLayer {
     (geo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
     (geo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
   }
+
+  /** Kinds that carry enough identity to be worth following. */
+  static readonly PICKABLE = new Set([0, 1, 4]); // tram, metro, ferry
 
   vehicleInfo(index: number): { x: number; z: number; speed: number; label: string } | null {
     const v = this.vehicles[index];

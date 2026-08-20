@@ -253,8 +253,12 @@ function* pbFields(b, start = 0, end = b.length) {
   }
 }
 
-// GTFS route_type → our kind: 0 tram, 1 metro, 2 bus, 3 train
-const KIND = { 0: 0, 1: 1, 3: 2, 2: 3 };
+// GTFS route_type → our kind: 0 tram, 1 metro, 2 bus, 3 train, 4 ferry.
+// Ferries matter here in a way they would not in most cities: route_type 4 in
+// this bbox is the Waterbus, genuine vessel traffic on the Maas. It is the
+// only live shipping the open feeds carry — Dutch AIS is not published openly,
+// so cargo movements in the port remain out of reach.
+const KIND = { 0: 0, 1: 1, 3: 2, 2: 3, 4: 4 };
 
 // GTFS-RT VehiclePosition.current_status
 const STOPPED_AT = 1;
