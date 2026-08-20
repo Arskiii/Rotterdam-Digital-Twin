@@ -90,3 +90,4 @@ jobs:
           git add live.json
           git commit -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
           git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live
+
