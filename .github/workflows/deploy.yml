@@ -7,19 +7,27 @@ on:
     branches:
       - main
   workflow_dispatch:
+  # The live refresh rides in this workflow because this is the only file in
+  # this repo whose cron actually fires. live-refresh.yml was added as its own
+  # workflow and its schedule never armed; deploy.yml's has been firing all
+  # along. Keep the job here until that changes.
+  schedule:
+    - cron: "*/5 * * * *"
 
 permissions:
-  contents: read
+  contents: write # the live job force-pushes the `live` branch
   pages: write
   id-token: write
 
 concurrency:
-  # Per-ref so a dev-branch build can't cancel an in-flight main deploy.
-  group: pages-${{ github.ref }}
+  # Schedule ticks get their own group so a refresh can never cancel a deploy,
+  # and a push can never kill a refresh mid-write.
+  group: ${{ github.event_name == 'schedule' && 'live-data' || format('pages-{0}', github.ref) }}
   cancel-in-progress: true
 
 jobs:
   build:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +48,7 @@ jobs:
           path: dist
 
   deploy:
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && github.event_name != 'schedule'
     needs: build
     runs-on: ubuntu-latest
     environment:
@@ -49,3 +57,37 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # Publish the live city snapshot to the `live` branch, force-pushed as one
+  # root commit so its history never grows.
+  #
+  # The vercel.json is not optional. `live` holds data, not an app, so without
+  # it Vercel's git integration builds the branch on every push and fails —
+  # that is what produced a failed deployment every five minutes on 20 Aug.
+  # Any future publisher of this branch must write it too.
+  live:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Fetch live snapshot
+        run: node scripts/fetch-live.mjs --out /tmp/live.json
+      - name: Publish to the live branch
+        run: |
+          set -euo pipefail
+          mkdir /tmp/live-branch
+          cp /tmp/live.json /tmp/live-branch/live.json
+          printf '{"git":{"deploymentEnabled":{"live":false}}}' > /tmp/live-branch/vercel.json
+          cd /tmp/live-branch
+          git init -b live --quiet
+          git config user.name "live-data bot"
+          git config user.email "actions@github.com"
+          git add live.json vercel.json
+          git commit -q -m "live snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" live
