@@ -7,7 +7,7 @@
 //   node scripts/fetch-live.mjs [--out path]     (npm run fetch-live)
 //
 // Writes public/data/live/live.json by default. Designed to run every few
-// minutes from .github/workflows/live-data.yml (which publishes to the `live`
+// minutes from .github/workflows/deploy.yml (which publishes to the `live`
 // branch for the deployed app) and on demand locally. Each feed fails soft:
 // a broken source drops its section, everything else still updates.
 //

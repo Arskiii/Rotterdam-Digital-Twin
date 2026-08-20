@@ -78,7 +78,7 @@ all three honestly:
 - **HISTORY** — the archive, scrubbed. Congestion over the last day, week or
   month with incident ticks, reading out the moment you land on.
 
-**Live city feeds** (refreshed every 60 s by `.github/workflows/live-data.yml`
+**Live city feeds** (refreshed every 60 s by `.github/workflows/deploy.yml`
 onto the `live` branch; the app polls it and falls back to the committed
 snapshot — the header chip shows the snapshot's real age, and once it goes
 stale the app says so instead of presenting old traffic as current):
@@ -124,17 +124,26 @@ was doing last Tuesday at 08:20:
 - `e/YYYY-MM.json` — incidents and bridge openings, deduped
 - Appends are idempotent, so a re-run over the same snapshot changes nothing
 
-**Why the refresh loop looks the way it does.** The `schedule:` trigger used to
-live in `deploy.yml` and never once fired — the run history contained zero
-`schedule` events across the workflow's entire life, and observed refresh gaps
-reached five hours, so "every 5 minutes" was really "whenever someone pressed
-the button". GitHub does not reliably arm cron for workflow files pushed by an
-integration, and a new workflow file is the documented way to get one
-registered. The schedule is therefore belt and the internal loop is braces:
-each run refreshes on a 60-second cadence for its whole duration rather than
-once and exiting, so a single trigger covers real time either way. Scheduled
-workflows only run from the default branch, so the cron arms once this is on
-`main`.
+**Why the refresh job looks the way it does.** For most of this repo's life
+the `schedule:` trigger never fired at all — zero `schedule` events in the run
+history, and observed refresh gaps of up to five hours, so "every 5 minutes"
+really meant "whenever someone pressed the button". It now fires reliably from
+`deploy.yml`, and only from there: a second workflow added later with the same
+cron never armed once. Two lessons are baked in as a result.
+
+The job stays in `deploy.yml` because that is the file whose cron demonstrably
+works in this repo. Moving it out stopped the refresh dead.
+
+There is exactly one publisher of `live` and `archive`, and it writes a
+`vercel.json` onto each. Both branches hold data, not an app, so Vercel's git
+integration otherwise builds them on every push and fails — one failed
+deployment every five minutes. When two workflows published `live` and only
+one wrote the guard, each force-push replaced the other's tree and the
+failures came back intermittently. Any future publisher of these branches must
+write that file.
+
+Within a run the job loops on a 60-second cadence rather than fetching once
+and exiting, so the city stays a minute fresh instead of five.
 
 **Calibration & validation against official data:**
 

@@ -1,7 +1,7 @@
 // Live city state produced by scripts/fetch-live.mjs: NDW traffic flows, open
 // bascule bridges, real transit positions and departure boards, Maas water
 // level, weather and air quality. The snapshot is refreshed on a 60-second
-// cadence by .github/workflows/live-data.yml onto the repo's `live` branch; a
+// cadence by .github/workflows/deploy.yml onto the repo's `live` branch; a
 // local copy ships as a fallback so the app works offline and in dev.
 
 /** [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec] */
