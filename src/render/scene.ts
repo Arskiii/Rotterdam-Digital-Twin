@@ -16,10 +16,16 @@ export class SceneCtx {
   onScaleChange?: (s: ScaleName) => void;
   private lastScale: ScaleName = "city";
   fog: THREE.Fog;
+  // SETUP render-scale override; null tracks the display's ratio (capped at 2)
+  pixelRatioOverride: number | null = null;
+
+  private desiredPixelRatio() {
+    return this.pixelRatioOverride ?? Math.min(window.devicePixelRatio, 2);
+  }
 
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(this.desiredPixelRatio());
     this.renderer.setClearColor(0x0a0a0b, 1);
 
     this.scene = new THREE.Scene();
@@ -49,6 +55,7 @@ export class SceneCtx {
     const el = this.renderer.domElement;
     const w = el.clientWidth || el.parentElement?.clientWidth || 800;
     const h = el.clientHeight || el.parentElement?.clientHeight || 600;
+    this.renderer.setPixelRatio(this.desiredPixelRatio());
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
@@ -95,6 +102,9 @@ export class SceneCtx {
   }
 
   update() {
+    // browser zoom and monitor moves change devicePixelRatio without a
+    // reliable event — one comparison per frame keeps the canvas sharp
+    if (this.renderer.getPixelRatio() !== this.desiredPixelRatio()) this.resize();
     if (this.flyFrom) {
       const f = this.flyFrom;
       const t = Math.min(1, (performance.now() - f.t0) / f.dur);

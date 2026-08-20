@@ -1,14 +1,11 @@
 name: Deploy to GitHub Pages
 
-# Build on every push to main or the active dev branch so we always know
-# the build is healthy. Only publish to Pages from `main` — the dev branch
-# can't deploy unless its branch is added under
-#   Settings -> Environments -> github-pages -> Deployment branches.
+# Build on every push to main so we always know the build is healthy; only
+# `main` publishes to Pages.
 on:
   push:
     branches:
       - main
-      - claude/rotterdam-traffic-simulation-PL88s
   workflow_dispatch:
   # Live city snapshot refresh (see the `live` job). Lives in this workflow
   # because the Actions trigger index in this repo doesn't refresh from
