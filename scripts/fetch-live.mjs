@@ -337,7 +337,7 @@ async function fetchVehicles(routes) {
   return { t: new Date().toISOString(), v };
 }
 
-// ---------------- the RET timetable (data/ret-timetable.bin) ----------------
+// ---------------- the Rotterdam timetable (data/ret-timetable.bin) ----------------
 
 let timetableCache = null;
 
@@ -480,9 +480,12 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
   const HORIZON = 45 * 60;
   const PER_STOP = 6;
   // Waypoints per vehicle for the client to move along between position fixes.
-  // Six calls is a few minutes of runway — enough to keep a vehicle moving
-  // until the next snapshot lands, without carrying a whole trip.
-  const PLAN_STOPS = 6;
+  // A path has to outlast the delivery path: the CDN in front of the live
+  // branch caps freshness at five minutes, so anything shorter than about
+  // seven runs out before the next snapshot arrives. Bus stops are a few
+  // hundred metres apart, which is roughly ten calls; rail rarely reaches ten
+  // inside the horizon at all.
+  const PLAN_STOPS = 10;
   const PLAN_HORIZON = 20 * 60;
 
   // A service day runs past midnight, so yesterday's late trips are still
@@ -544,13 +547,22 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
         const stop = stopTable[tt.stops[trip.callStop[k]]];
         if (!stop) continue;
         // only the most recent past call is kept: it is where this leg began
-        if (at < 0) { prevCall = [stop.x, stop.y, at]; continue; }
+        // whole metres: sub-metre precision on a projected position is noise,
+        // and it is noise repeated a few thousand times per snapshot
+        const call = [Math.round(stop.x), Math.round(stop.y), at];
+        if (at < 0) { prevCall = call; continue; }
         if (at > PLAN_HORIZON || wp.length >= PLAN_STOPS) break;
-        wp.push([stop.x, stop.y, at]);
+        wp.push(call);
       }
       if (wp.length) plans[trip.id] = prevCall ? [prevCall, ...wp] : wp;
 
-      for (let k = 0; k < n; k++) {
+      // Buses get a path but never a board row: RET runs 80 bus routes to 17
+      // rail ones, and putting every bus stop on the departure boards would
+      // multiply the station list — and the snapshot — several times over for
+      // a question the platform is not trying to answer. Metro, tram and the
+      // Waterbus piers do get boards; twelve piers is a rounding error next to
+      // 215 stations, and "when is the next sailing" is the same question.
+      for (let k = 0; k < n && trip.kind !== 2; k++) {
         if (k === n - 1) continue; // nobody boards at the terminus
         const at = day.base + trip.callSec[k] * 2 + shift;
         if (at < nowSec - 60 || at > nowSec + HORIZON) continue;
