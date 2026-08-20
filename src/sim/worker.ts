@@ -120,8 +120,9 @@ let completedLog: { t: number; wait: number }[] = [];
 const incidents: { dEdge: number; until: number; x: number; y: number }[] = [];
 let weatherFactor = 1; // live-weather speed multiplier for motorized modes
 const liveBridges = new Map<string, number[]>(); // open bascule bridge → blocked directed edges
+const liveBridgeXY = new Map<string, [number, number]>(); // bridge → world anchor for log links
 // real NDW incidents: key edge:kind → affected directed edges with saved speeds
-const liveIncidents = new Map<string, { blocked: number[]; slowed: { d: number; orig: number }[] }>();
+const liveIncidents = new Map<string, { blocked: number[]; slowed: { d: number; orig: number }[]; x: number; y: number }>();
 
 // per-mode free-flow speed on a directed edge
 function modeSpeed(d: number, mode: number): number {
@@ -832,6 +833,8 @@ function maybeInject() {
       type: "event",
       level: "warn",
       text: `SIGNAL CLUSTER ${String(c).padStart(3, "0")} FAULT (${zoneName(G.clusters.xy[c * 2], G.clusters.xy[c * 2 + 1])}) — ALL-RED FALLBACK`,
+      x: G.clusters.xy[c * 2],
+      y: G.clusters.xy[c * 2 + 1],
     });
   }
   for (let i = incidents.length - 1; i >= 0; i--) {
@@ -840,7 +843,7 @@ function maybeInject() {
       dBlocked[inc.dEdge] = 0;
       if (dExists[inc.dEdge ^ 1]) dBlocked[inc.dEdge ^ 1] = 0;
       incidents.splice(i, 1);
-      post({ type: "event", level: "ok", text: `INCIDENT CLEARED — SEGMENT REOPENED` });
+      post({ type: "event", level: "ok", text: `INCIDENT CLEARED — SEGMENT REOPENED`, x: inc.x, y: inc.y });
     }
   }
 }
@@ -860,6 +863,8 @@ function injectIncident() {
       type: "event",
       level: "crit",
       text: `TRAFFIC INCIDENT IN ${zoneName(x, y)} — SEGMENT CLOSED, TRACKS REROUTING`,
+      x,
+      y,
     });
     return;
   }
@@ -918,7 +923,7 @@ function startScenario(kind: string) {
       if (dExists[e * 2 + 1]) { dBlocked[e * 2 + 1] = 1; blocked.push(e * 2 + 1); }
     }
     scenario = { kind, until: simTime + 260, blockedEdges: blocked, speedEdges: [] };
-    post({ type: "event", level: "crit", text: "ERASMUSBRUG DECK RAISED — SPAN CLOSED, ALL TRACKS REROUTING VIA WILLEMSBRUG / MAASTUNNEL" });
+    post({ type: "event", level: "crit", text: "ERASMUSBRUG DECK RAISED — SPAN CLOSED, ALL TRACKS REROUTING VIA WILLEMSBRUG / MAASTUNNEL", x: 446, y: -1254 });
   } else if (kind === "roadworks") {
     const es = edgesByName("'s-Gravendijkwal");
     if (!es.length) {
@@ -940,12 +945,12 @@ function startScenario(kind: string) {
     const walkEdges = spawnEdgesNear(2, 2960, -2886, 950);
     burst = { edges, walkEdges, carsLeft: 700, walkLeft: 1500, truckChance: 0.02 };
     scenario = { kind, until: simTime + 420, blockedEdges: [], speedEdges: [] };
-    post({ type: "event", level: "warn", text: "DE KUIP MATCH EGRESS — 2,200 TRACKS SURGING FROM STADIONPARK" });
+    post({ type: "event", level: "warn", text: "DE KUIP MATCH EGRESS — 2,200 TRACKS SURGING FROM STADIONPARK", x: 2960, y: -2886 });
   } else if (kind === "freight") {
     const edges = spawnEdgesNear(0, -4258, -3317, 1300);
     burst = { edges, walkEdges: Int32Array.of(), carsLeft: 520, walkLeft: 0, truckChance: 0.8 };
     scenario = { kind, until: simTime + 420, blockedEdges: [], speedEdges: [] };
-    post({ type: "event", level: "warn", text: "WAALHAVEN FREIGHT SURGE — HEAVY CONVOY RELEASING ONTO THE RING" });
+    post({ type: "event", level: "warn", text: "WAALHAVEN FREIGHT SURGE — HEAVY CONVOY RELEASING ONTO THE RING", x: -4258, y: -3317 });
   }
 }
 
@@ -1211,17 +1216,22 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
         ds.push(e * 2);
         if (dExists[e * 2 + 1]) ds.push(e * 2 + 1);
       }
-      if (ds.length) next.set(b.name, ds);
+      if (ds.length) {
+        next.set(b.name, ds);
+        if (b.x !== undefined && b.y !== undefined) liveBridgeXY.set(b.name, [b.x, b.y]);
+      }
     }
     for (const [name, ds] of liveBridges) {
       if (next.has(name)) continue;
       for (const d of ds) dBlocked[d] = 0;
-      post({ type: "event", level: "ok", text: `${name.toUpperCase()} DECK DOWN — SPAN REOPENED TO ROAD TRAFFIC` });
+      const at = liveBridgeXY.get(name);
+      post({ type: "event", level: "ok", text: `${name.toUpperCase()} DECK DOWN — SPAN REOPENED TO ROAD TRAFFIC`, x: at?.[0], y: at?.[1], live: true });
     }
     for (const [name, ds] of next) {
       if (liveBridges.has(name)) continue;
       for (const d of ds) dBlocked[d] = 1;
-      post({ type: "event", level: "crit", text: `${name.toUpperCase()} OPEN FOR SHIPPING (LIVE NDW) — SPAN CLOSED, TRACKS REROUTING` });
+      const at = liveBridgeXY.get(name);
+      post({ type: "event", level: "crit", text: `${name.toUpperCase()} OPEN FOR SHIPPING (LIVE NDW) — SPAN CLOSED, TRACKS REROUTING`, x: at?.[0], y: at?.[1], live: true });
     }
     liveBridges.clear();
     for (const [name, ds] of next) liveBridges.set(name, ds);
@@ -1234,7 +1244,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
       const key = `${inc.edge}:${inc.kind}`;
       next.add(key);
       if (liveIncidents.has(key)) continue;
-      const entry: { blocked: number[]; slowed: { d: number; orig: number }[] } = { blocked: [], slowed: [] };
+      const entry: { blocked: number[]; slowed: { d: number; orig: number }[]; x: number; y: number } = { blocked: [], slowed: [], x: inc.x, y: inc.y };
       for (const d of [inc.edge * 2, inc.edge * 2 + 1]) {
         if (!dExists[d]) continue;
         if (inc.kind === 3) {
@@ -1251,6 +1261,9 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
         type: "event",
         level: inc.kind === 0 ? "crit" : "warn",
         text: `${KINDLBL[inc.kind] ?? "INCIDENT"} (LIVE NDW) — ${where}${inc.kind === 3 ? ", SEGMENT SEVERED" : inc.kind === 4 ? ", LANES CLOSED" : ", CAPACITY REDUCED"}`,
+        x: inc.x,
+        y: inc.y,
+        live: true,
       });
     }
     for (const [key, entry] of liveIncidents) {
@@ -1258,7 +1271,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
       for (const d of entry.blocked) dBlocked[d] = 0;
       for (const { d, orig } of entry.slowed) dSpeed[d] = orig;
       liveIncidents.delete(key);
-      post({ type: "event", level: "ok", text: "LIVE INCIDENT CLEARED — SEGMENT RESTORED" });
+      post({ type: "event", level: "ok", text: "LIVE INCIDENT CLEARED — SEGMENT RESTORED", x: entry.x, y: entry.y, live: true });
     }
   } else if (msg.type === "ndw") {
     ndwEdgeFlow = new Map();

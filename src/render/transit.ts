@@ -8,7 +8,11 @@ import type { TransitRoute } from "../data/loader";
 const VMAX = [11, 21]; // m/s: tram, metro
 const ACC = [1.0, 0.9];
 const DWELL = [13, 22]; // s at a stop
-const SPACING = [1500, 2600]; // one vehicle per N meters of route
+const SPACING = [1700, 3800]; // one vehicle per N meters of route
+// same-kind separation: a vehicle closing on another one ahead on the same
+// heading brakes like a block signal, so fleets can't bunch nose-to-tail —
+// also across the parallel OSM relation variants that share physical track
+const MIN_GAP = [70, 140]; // m: tram, metro
 
 interface Veh {
   route: number;
@@ -17,6 +21,11 @@ interface Veh {
   dwellUntil: number; // sim-relative seconds
   seg: number; // cached polyline segment
   stopIdx: number;
+  // last sampled world pose (for cross-route separation)
+  px: number;
+  pz: number;
+  dx: number; // normalized world heading
+  dz: number;
 }
 
 export class TransitLayer {
@@ -62,14 +71,21 @@ export class TransitLayer {
       this.cum.push(cum);
       const len = cum[n - 1];
       const count = Math.max(1, Math.min(9, Math.round(len / SPACING[r.kind])));
+      // deterministic per-route phase so near-identical relation variants
+      // (directions, short-turn services) don't seed lockstep twins
+      const phase = (((ri + 1) * 2654435761) >>> 0) % 97 / 97;
       for (let k = 0; k < count; k++) {
         this.vehicles.push({
           route: ri,
-          s: (len * (k + 0.3)) / count,
+          s: (len * ((k + phase) / count)) % len,
           v: VMAX[r.kind] * 0.6,
           dwellUntil: 0,
           seg: 0,
           stopIdx: 0,
+          px: NaN,
+          pz: NaN,
+          dx: 0,
+          dz: 0,
         });
       }
     });
@@ -127,6 +143,38 @@ export class TransitLayer {
     this.time += dt;
     let ti = 0;
     let mi = 0;
+    // spatial hash of last-frame poses per kind (cell 120 m) for separation
+    const CELL = 120;
+    const hash = new Map<string, number[]>();
+    for (let vIdx = 0; vIdx < this.vehicles.length; vIdx++) {
+      const veh = this.vehicles[vIdx];
+      if (Number.isNaN(veh.px)) continue;
+      const k = `${this.routes[veh.route].kind}:${Math.floor(veh.px / CELL)},${Math.floor(veh.pz / CELL)}`;
+      let cell = hash.get(k);
+      if (!cell) hash.set(k, (cell = []));
+      cell.push(vIdx);
+    }
+    const gapAhead = (vIdx: number): number => {
+      const veh = this.vehicles[vIdx];
+      if (Number.isNaN(veh.px)) return Infinity;
+      const kind = this.routes[veh.route].kind;
+      const cx = Math.floor(veh.px / CELL), cz = Math.floor(veh.pz / CELL);
+      let best = Infinity;
+      for (let gx = cx - 1; gx <= cx + 1; gx++)
+        for (let gz = cz - 1; gz <= cz + 1; gz++)
+          for (const oIdx of hash.get(`${kind}:${gx},${gz}`) ?? []) {
+            if (oIdx === vIdx) continue;
+            const o = this.vehicles[oIdx];
+            const ddx = o.px - veh.px, ddz = o.pz - veh.pz;
+            const d = Math.hypot(ddx, ddz);
+            if (d >= best || d > 2 * MIN_GAP[kind]) continue;
+            // only vehicles ahead on a similar heading count (not oncoming passes)
+            if (ddx * veh.dx + ddz * veh.dz <= 0) continue;
+            if (o.dx * veh.dx + o.dz * veh.dz < 0.3) continue;
+            best = d;
+          }
+      return best;
+    };
     for (let vIdx = 0; vIdx < this.vehicles.length; vIdx++) {
       if (vIdx % 20 >= this.serviceLevel * 20) continue; // parked overnight
       const veh = this.vehicles[vIdx];
@@ -137,19 +185,29 @@ export class TransitLayer {
       const acc = ACC[r.kind];
 
       if (dt > 0 && this.time >= veh.dwellUntil) {
-        // next stop ahead
-        while (veh.stopIdx < r.stops.length && r.stops[veh.stopIdx] <= veh.s + 1) veh.stopIdx++;
+        // next stop ahead — only skip stops clearly behind us; a pending stop
+        // less than a meter ahead is still a stop (the old +1 m tolerance let
+        // a braking vehicle creep into the window and lose its stop entirely)
+        while (veh.stopIdx < r.stops.length && r.stops[veh.stopIdx] < veh.s - 0.5) veh.stopIdx++;
         const nextStop = veh.stopIdx < r.stops.length ? r.stops[veh.stopIdx] : Infinity;
         const distToStop = nextStop - veh.s;
         const brakeV = Math.sqrt(2 * acc * Math.max(0, distToStop));
-        const target = Math.min(vmax, brakeV);
+        const gap = gapAhead(vIdx);
+        const sepCap = gap === Infinity ? vmax : vmax * Math.min(1, Math.max(0, (gap - 28) / MIN_GAP[r.kind]));
+        const target = Math.min(vmax, brakeV, sepCap);
         veh.v += Math.max(-acc * 1.6, Math.min(acc, target - veh.v)) * dt;
         veh.v = Math.max(0, veh.v);
-        veh.s += veh.v * dt;
-        if (distToStop <= 1 && veh.v < 0.6) {
+        const advanced = veh.s + veh.v * dt;
+        if (advanced >= nextStop - 0.6) {
+          // arrival capture must be frame-rate independent: crossing the stop
+          // in one integration step still means the service calls there, so
+          // snap to the platform instead of sailing through on a large dt
+          veh.s = nextStop;
           veh.v = 0;
           veh.dwellUntil = this.time + DWELL[r.kind] * (0.8 + Math.random() * 0.5);
           veh.stopIdx++;
+        } else {
+          veh.s = advanced;
         }
         if (veh.s >= len - 2) {
           veh.s = 0.1;
@@ -161,6 +219,11 @@ export class TransitLayer {
       }
 
       const p = this.sample(r, cum, veh.s, veh);
+      veh.px = p.x;
+      veh.pz = p.z;
+      const hl = Math.hypot(p.hx, p.hy) || 1;
+      veh.dx = p.hx / hl;
+      veh.dz = -p.hy / hl;
       this.dummy.position.set(p.x, 0.55, p.z);
       this.dummy.rotation.set(0, Math.atan2(p.hy, p.hx), 0);
       this.dummy.updateMatrix();

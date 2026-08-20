@@ -402,6 +402,16 @@ export class App {
     });
     ui.trackRelease.addEventListener("click", () => this.releaseTrack("RELEASED BY OPERATOR"));
     ui.ucClose.addEventListener("click", () => this.dismissUnitCard());
+    // fly-to links in the message log
+    ui.msgList.addEventListener("click", (e) => {
+      const btn = (e.target as HTMLElement).closest?.(".msg-fly") as HTMLElement | null;
+      if (!btn) return;
+      const x = parseFloat(btn.dataset.x ?? "");
+      const y = parseFloat(btn.dataset.y ?? "");
+      if (Number.isNaN(x) || Number.isNaN(y)) return;
+      this.setPage("map");
+      this.scene.flyTo(new THREE.Vector3(x, 0, -y), Math.min(2600, Math.max(1200, this.scene.distance)), 1000);
+    });
     window.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         if (this.track) this.releaseTrack("RELEASED BY OPERATOR");
@@ -664,7 +674,7 @@ export class App {
         break;
       }
       case "event":
-        this.log(msg.level, msg.text);
+        this.log(msg.level, msg.text, msg.x !== undefined && msg.y !== undefined ? { x: msg.x, y: msg.y, live: msg.live } : undefined);
         if (msg.level === "crit" || msg.level === "warn") this.toast(msg.level, msg.text);
         break;
       case "ready":
@@ -1241,10 +1251,22 @@ export class App {
   }
 
   // ---------- messages ----------
-  log(level: "info" | "warn" | "crit" | "ok", text: string) {
+  log(level: "info" | "warn" | "crit" | "ok", text: string, loc?: { x: number; y: number; live?: boolean }) {
     const el = document.createElement("div");
     el.className = "msg";
-    el.innerHTML = `<span class="t">${fmtTimestamp(new Date(), TIMEZONE)}</span><span class="lvl ${level}">${level.toUpperCase()}</span><span>${text}</span>`;
+    let links = "";
+    if (loc) {
+      // fly the camera to where it happened; live events also link the real
+      // location on OpenStreetMap (the NDW feed has no per-incident page)
+      links = ` <button class="msg-fly" data-x="${loc.x.toFixed(1)}" data-y="${loc.y.toFixed(1)}">◎ VIEW</button>`;
+      if (loc.live) {
+        const org = this.data.meta.origin;
+        const lat = org.lat + loc.y / 110574;
+        const lon = org.lon + loc.x / (111320 * Math.cos((org.lat * Math.PI) / 180));
+        links += ` <a class="msg-src" href="https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}#map=17/${lat.toFixed(5)}/${lon.toFixed(5)}" target="_blank" rel="noopener">MAP ↗</a>`;
+      }
+    }
+    el.innerHTML = `<span class="t">${fmtTimestamp(new Date(), TIMEZONE)}</span><span class="lvl ${level}">${level.toUpperCase()}</span><span>${text}${links}</span>`;
     this.ui.msgList.prepend(el);
     while (this.ui.msgList.children.length > 220) this.ui.msgList.lastChild?.remove();
     this.msgCount++;

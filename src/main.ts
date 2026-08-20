@@ -142,7 +142,7 @@ async function boot() {
     }
     sim.postMessage({
       type: "liveBridges",
-      bridges: (snap.bridges ?? []).map((b) => ({ name: b.name, edges: b.edges })),
+      bridges: (snap.bridges ?? []).map((b) => ({ name: b.name, edges: b.edges, x: b.x, y: b.y })),
     });
     // real incidents: markers for all, physics for accidents/obstructions/closures
     liveIncidentsLayer.set(snap.incidents ?? []);
