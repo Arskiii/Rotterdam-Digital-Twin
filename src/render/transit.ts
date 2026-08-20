@@ -307,7 +307,7 @@ export interface LiveVeh {
   seq: number;
   berthed: boolean;
   fixAge: number;
-  /** last observed position — the measurement everything else is anchored to */
+  /** last observed position — where a vehicle with no timetable is drawn */
   fx: number;
   fz: number;
   /** where the vehicle is projected to be right now */
@@ -319,7 +319,11 @@ export interface LiveVeh {
   /** heading along the path it is currently running */
   hx: number;
   hz: number;
-  /** upcoming calls as [x, y, secondsFromSnapshot], from timetable + delay */
+  /**
+   * This trip's calls as [x, y, secondsFromSnapshot] — the one it has already
+   * made (negative) followed by those ahead, at their scheduled times plus any
+   * delay the operator reports for it.
+   */
   plan: [number, number, number][] | null;
   /** m/s along the leg it is currently projected to be running, 0 without a path */
   speed: number;
@@ -412,10 +416,10 @@ export class LiveTransitLayer {
    * — inventing one would be a fabricated measurement, so the direction shown
    * is only ever the direction the vehicle was observed to travel.
    *
-   * `plans` carries each trip's remaining scheduled calls, already shifted by
-   * the delay it is measured to be running; `snapshotMs` is the instant those
-   * two are timed against. Both are optional — a feed without them still
-   * renders, it just stands still between fixes.
+   * `plans` carries each trip's calls at their scheduled times, shifted by any
+   * delay the operator reports for it; `snapshotMs` is the instant those times
+   * are counted from. Both are optional — a feed without them still renders,
+   * it just stands still between fixes.
    */
   set(
     vehicles: LiveVehicle[],
@@ -465,8 +469,9 @@ export class LiveTransitLayer {
         veh.berthed = !!berthed;
         veh.fixAge = fixAge;
         veh.plan = plan;
-        // the new measurement re-anchors the projection; update() eases the
-        // drawn position onto it over about a second and a half
+        // the refreshed schedule carries whatever delay the operator has since
+        // reported; update() eases the drawn position onto it over about a
+        // second and a half rather than snapping
         this.project(veh, tNow);
       }
       veh.label = `${KIND_LABEL[kind] ?? "TRANSIT"} ${String(line || "").toUpperCase()}`;
@@ -477,19 +482,24 @@ export class LiveTransitLayer {
   }
 
   /**
-   * Where a vehicle is right now, projected from its last fix.
+   * Where a vehicle is right now, according to the schedule it is running.
    *
-   * The path is a polyline through time: the observed position at the moment
-   * it was measured, then each remaining scheduled call at the time the
-   * timetable says it is due, offset by the delay the operator is reporting
-   * for that trip. Walking it by wall clock keeps a metro moving between
-   * fixes at the speed its own timetable implies — not an invented speed —
-   * and every new snapshot re-anchors the whole polyline, so a vehicle that
-   * falls behind its schedule is pulled back onto the measurement rather than
-   * drifting further ahead.
+   * The path is a polyline through time: the call the trip has already made,
+   * then each call still ahead of it, each at the time the timetable says —
+   * offset by the delay the operator reports for that trip, and by nothing
+   * else. Walking it by wall clock drives the vehicle at exactly the pace its
+   * own timetable sets. A service nobody reports as late runs on time.
    *
-   * Past the last known call it stops. Nothing is published about where it
-   * goes next, and coasting on a guess is how a display starts lying.
+   * The last position fix is deliberately not an anchor here. It is at least a
+   * minute old, published at stop granularity, and reconciling it would mean
+   * making an on-time metro crawl or sprint to reach a measurement the
+   * schedule does not support — lateness invented from a stale coordinate.
+   * The fix positions vehicles with no timetable, and its age is reported on
+   * the tracking chip so nobody mistakes a projection for a sighting.
+   *
+   * Before the first call it waits at its origin; past the last known call it
+   * stops. Nothing is published about where it goes next, and coasting on a
+   * guess is how a display starts lying.
    */
   private project(v: LiveVeh, tNow: number) {
     const plan = v.plan;
@@ -499,12 +509,10 @@ export class LiveTransitLayer {
       v.speed = 0;
       return;
     }
-    // the fix is `fixAge` seconds older than the snapshot clock everything
-    // else is timed against, so it sits at a negative time
-    let ax = v.fx;
-    let az = v.fz;
-    let at = -(v.fixAge >= 0 ? v.fixAge : 0);
-    for (let i = 0; i < plan.length; i++) {
+    let ax = plan[0][0];
+    let az = -plan[0][1];
+    let at = plan[0][2];
+    for (let i = 1; i < plan.length; i++) {
       const bx = plan[i][0];
       const bz = -plan[i][1];
       const bt = plan[i][2];
@@ -516,7 +524,9 @@ export class LiveTransitLayer {
         v.tx = ax + dx * f;
         v.tz = az + dz * f;
         const len = Math.hypot(dx, dz);
-        v.speed = span > 0.5 ? len / span : 0;
+        // 0 before departure, so a service waiting at its origin reads as
+        // standing rather than as running its first leg at no speed
+        v.speed = span > 0.5 && tNow > at ? len / span : 0;
         if (len > 1) {
           v.hx = dx / len;
           v.hz = dz / len;
