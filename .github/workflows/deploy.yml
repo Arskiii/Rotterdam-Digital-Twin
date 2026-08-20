@@ -58,6 +58,21 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
+  # One-shot housekeeping, dispatched on the dev branch only: the git proxy
+  # cannot delete refs, the Actions token can. Removed from this file after use.
+  cleanup:
+    if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete retired branches
+        run: |
+          for b in claude/rotterdam-traffic-simulation-PL88s claude/rotterdam-intelligence-platform-ecd308 claude/evaluate-project-structure-FwyNF; do
+            code=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE \
+              -H "Authorization: Bearer ${{ github.token }}" \
+              "https://api.github.com/repos/${{ github.repository }}/git/refs/heads/$b")
+            echo "$b -> HTTP $code"
+          done
+
   # Refresh the live city snapshot (NDW traffic + bridges + incidents, OVapi
   # transit, RWS water, Buienradar weather, Luchtmeetnet air) and publish it
   # as the single file on the `live` branch, force-pushed as one root commit
