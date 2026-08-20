@@ -7,6 +7,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      minutes:
+        description: "How long the live job should keep refreshing (1-55)"
+        required: false
+        default: "25"
   # The live refresh rides in this workflow because this is the only file in
   # this repo whose cron actually fires. live-refresh.yml was added as its own
   # workflow and its schedule never armed; deploy.yml's has been firing all
