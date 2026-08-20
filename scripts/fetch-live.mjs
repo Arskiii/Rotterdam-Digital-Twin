@@ -263,13 +263,6 @@ const KIND = { 0: 0, 1: 1, 3: 2, 2: 3, 4: 4 };
 // GTFS-RT VehiclePosition.current_status
 const STOPPED_AT = 1;
 
-// How fast each kind can physically travel, m/s, indexed by our kind. Not a
-// realism target — a sanity bound, used only to catch a projected leg that no
-// vehicle of that type could run. RET metro lines B and E do 100 km/h on the
-// open sections out to Hoek van Holland and Den Haag, so the metro ceiling is
-// genuinely high.
-const TOP_SPEED = [22, 28, 25, 45, 20];
-
 /** VehicleDescriptor → its id (the RET fleet number for metros and trams). */
 function vehicleId(buf, off, len) {
   for (const d of pbFields(buf, off, off + len)) {
@@ -479,11 +472,11 @@ async function fetchTripDelays() {
  * Buses are left out on purpose: they would multiply the snapshot several
  * times over for a fleet the platform does not model.
  */
-async function fetchDepartures() {
+async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
   const tt = loadTimetable();
   const stopTable = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
   const delays = await fetchTripDelays();
-  const nowSec = Math.floor(Date.now() / 1000);
+  const nowSec = atSec;
   const HORIZON = 45 * 60;
   const PER_STOP = 6;
   // Waypoints per vehicle for the client to move along between position fixes.
@@ -494,7 +487,7 @@ async function fetchDepartures() {
 
   // A service day runs past midnight, so yesterday's late trips are still
   // arriving; both dates are scanned against their own local midnight.
-  const now = new Date();
+  const now = new Date(nowSec * 1000);
   const days = [
     serviceDateNum(new Date(now.getTime() - 86_400_000)),
     serviceDateNum(now),
@@ -534,20 +527,28 @@ async function fetchDepartures() {
       if (rt?.live) liveTrips++;
       const dest = tt.headsigns[trip.head] || "";
 
-      // The path this trip is scheduled to take from here, shifted by the delay
-      // it is actually running. A vehicle's position between fixes is then a
-      // projection of the published timetable onto measured lateness — the same
-      // arithmetic as the departure board, not invented motion.
+      // The path this trip is scheduled to run, shifted by the delay the
+      // operator reports for it — and by nothing else. A trip nobody reports
+      // as late drives its published timetable exactly.
+      //
+      // It starts at the call the trip has ALREADY made, so the leg it is on
+      // right now is bounded by the timetable at both ends. Anchoring that leg
+      // to the last position fix instead would make an on-time service crawl
+      // or sprint to reconcile a measurement that is already two minutes old
+      // and reported at stop granularity — lateness the operator never
+      // reported and the schedule does not support.
       const wp = [];
-      for (let k = 0; k < n && wp.length < PLAN_STOPS; k++) {
-        const at = day.base + trip.callSec[k] * 2 + shift;
-        if (at < nowSec) continue; // already called there
-        if (at > nowSec + PLAN_HORIZON) break;
+      let prevCall = null;
+      for (let k = 0; k < n; k++) {
+        const at = Math.round(day.base + trip.callSec[k] * 2 + shift - nowSec);
         const stop = stopTable[tt.stops[trip.callStop[k]]];
         if (!stop) continue;
-        wp.push([stop.x, stop.y, Math.round(at - nowSec)]);
+        // only the most recent past call is kept: it is where this leg began
+        if (at < 0) { prevCall = [stop.x, stop.y, at]; continue; }
+        if (at > PLAN_HORIZON || wp.length >= PLAN_STOPS) break;
+        wp.push([stop.x, stop.y, at]);
       }
-      if (wp.length) plans[trip.id] = wp;
+      if (wp.length) plans[trip.id] = prevCall ? [prevCall, ...wp] : wp;
 
       for (let k = 0; k < n; k++) {
         if (k === n - 1) continue; // nobody boards at the terminus
@@ -681,7 +682,7 @@ async function fetchAir() {
 
 // ---------------- main ----------------
 async function main() {
-  const out = { v: 2, t: new Date().toISOString() };
+  const out = { v: 3, t: new Date().toISOString() };
   const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
   const feeds = [
     ["traffic", fetchTraffic],
@@ -709,22 +710,6 @@ async function main() {
         if (out.vehicles) {
           const shift = planT - Math.round(Date.parse(out.vehicles.t) / 1000);
           if (shift) for (const id in plans) for (const w of plans[id]) w[2] += shift;
-          // A first leg that would need an impossible speed is proof the trip
-          // is running later than the operator's delay admits — the vehicle is
-          // measurably still 3 km short of a call it is supposedly due at in a
-          // minute. Believing the schedule there would fling it across the map
-          // at 137 km/h, so the whole plan slides later instead: the route and
-          // its relative timings are kept, the vehicle is simply later than
-          // claimed. The next snapshot re-anchors it either way.
-          const lagged = new Set();
-          for (const v of out.vehicles.v) {
-            const p = plans[v[4]];
-            if (!p || lagged.has(v[4])) continue; // one shift per trip
-            lagged.add(v[4]);
-            const need = Math.hypot(p[0][0] - v[0], p[0][1] - v[1]) / (TOP_SPEED[v[2]] ?? 25);
-            const lag = Math.ceil(need - (p[0][2] + (v[8] >= 0 ? v[8] : 0)));
-            if (lag > 0) for (const w of p) w[2] += lag;
-          }
           out.vehicles.plan = plans;
         }
         const planned = out.vehicles ? Object.keys(out.vehicles.v).filter((i) => plans[out.vehicles.v[i][4]]).length : 0;
@@ -753,7 +738,14 @@ async function main() {
   console.log(`live snapshot → ${OUT} (${ok}/${feeds.length} feeds)`);
 }
 
-main().catch((e) => {
-  console.error(e);
-  process.exit(1);
-});
+// Run when invoked directly; stay importable so the departure/plan builder can
+// be exercised at a chosen hour. Rotterdam runs one tram at 01:40, which is a
+// poor time to find out whether the timetable projection is right.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch((e) => {
+    console.error(e);
+    process.exit(1);
+  });
+}
+
+export { fetchDepartures };

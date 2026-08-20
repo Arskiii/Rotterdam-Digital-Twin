@@ -136,6 +136,13 @@ export class LiveFeed {
       // weather and tide, so they are accepted and simply offer less
       if (!snap?.t || !(snap.v >= 1)) continue;
       if (snap.v < 2) upgradeV1(snap);
+      // v2 vehicle paths listed only the calls still ahead; v3 starts each one
+      // at the call already made, so the leg a vehicle is on has a scheduled
+      // start as well as an end. Read as v3, a v2 path would park every
+      // vehicle on the platform it is heading for. There is no upgrade for
+      // this — the missing call is not in the file — so the paths are dropped
+      // and those vehicles sit at their last fix, as they did under v2.
+      if (snap.v < 3 && snap.vehicles) delete snap.vehicles.plan;
       // never replace a fresher snapshot with a staler one
       if (this.snapshot && Date.parse(snap.t) < Date.parse(this.snapshot.t)) return;
       this.source = source;
