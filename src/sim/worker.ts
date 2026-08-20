@@ -38,10 +38,10 @@ let dExists: Uint8Array;
 let dBlocked: Uint8Array;
 let outOff: Uint32Array;
 let outList: Uint32Array;
-let nodeSignal: Int32Array;
+let nodeSignal: Int16Array;
 // FIFO queues: cars at [d], bikes at [M + d]
-let qHead: Int32Array;
-let qTail: Int32Array;
+let qHead: Int16Array;
+let qTail: Int16Array;
 let edgeCong: Float32Array;
 let edgeVSum: Float32Array;
 let edgeVN: Uint16Array;
@@ -69,8 +69,8 @@ let vEdge: Int32Array;
 let vS: Float32Array;
 let vV: Float32Array;
 let vV0f: Float32Array;
-let vAhead: Int32Array;
-let vBehind: Int32Array;
+let vAhead: Int16Array;
+let vBehind: Int16Array;
 let vWait: Float32Array;
 let vRouteIdx: Int32Array;
 const vRoutes: Int32Array[] = [];
@@ -153,8 +153,13 @@ function init(buf: ArrayBuffer) {
   dSpeed = new Float32Array(M);
   dExists = new Uint8Array(M);
   dBlocked = new Uint8Array(M);
-  qHead = new Int32Array(M * 2).fill(-1);
-  qTail = new Int32Array(M * 2).fill(-1);
+  // The lane queues are the single biggest allocation in this worker: two
+  // bands (car/truck, bike) over every directed edge. They hold vehicle ids,
+  // which top out at MAXV, so Int16 is the honest width — Int32 was costing
+  // 3 MB to store numbers below 22,000. The guard below keeps that true.
+  if (MAXV > 32767) throw new Error(`MAXV ${MAXV} exceeds the Int16 vehicle-id range used by the lane queues`);
+  qHead = new Int16Array(M * 2).fill(-1);
+  qTail = new Int16Array(M * 2).fill(-1);
   edgeCong = new Float32Array(E);
   edgeVSum = new Float32Array(E);
   edgeVN = new Uint16Array(E);
@@ -185,7 +190,9 @@ function init(buf: ArrayBuffer) {
   }
 
   post({ type: "initProgress", frac: 0.6 });
-  nodeSignal = new Int32Array(N).fill(-1);
+  // signal index per node — 4,349 heads today, nowhere near the Int16 ceiling
+  if (G.signals.count + G.aux.count > 32767) throw new Error("signal count exceeds the Int16 range used by nodeSignal");
+  nodeSignal = new Int16Array(N).fill(-1);
   for (let s = 0; s < G.signals.count; s++) nodeSignal[G.signals.nodeIdx[s]] = s;
 
   sigState = new Uint8Array(G.signals.count + G.aux.count).fill(3);
@@ -202,8 +209,9 @@ function init(buf: ArrayBuffer) {
   vS = new Float32Array(MAXV);
   vV = new Float32Array(MAXV);
   vV0f = new Float32Array(MAXV);
-  vAhead = new Int32Array(MAXV).fill(-1);
-  vBehind = new Int32Array(MAXV).fill(-1);
+  // same linked list as qHead/qTail, so the same width
+  vAhead = new Int16Array(MAXV).fill(-1);
+  vBehind = new Int16Array(MAXV).fill(-1);
   vWait = new Float32Array(MAXV);
   vRouteIdx = new Int32Array(MAXV);
   for (let i = 0; i < MAXV; i++) vRoutes.push(new Int32Array(0));
