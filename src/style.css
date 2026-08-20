@@ -1626,6 +1626,83 @@ label {
 .bd-stale { color: var(--text-faint); padding: 10px 0; text-align: center; letter-spacing: 0.1em; }
 .bd-foot { font-size: 8px; letter-spacing: 0.1em; color: var(--text-faint); border-top: 1px solid rgba(61,61,61,0.45); padding-top: 6px; }
 
+/* ---------- mode switch (live / simulation / history) ------- */
+/* The platform's primary question: are you looking at the city as measured,
+   at a model of it, or at what it did earlier. Everything else — which layers
+   are on, whether the clock can be scrubbed, whether variables can be moved —
+   follows from this one control, so it sits in the chrome, not the HUD. */
+#mode-switch {
+  display: flex;
+  border: 1px solid var(--line);
+  background: rgba(13, 13, 13, 0.92);
+  padding: 2px;
+  gap: 2px;
+  margin-left: 18px;
+}
+#mode-switch button {
+  padding: 4px 11px;
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  transition: color 100ms, background 100ms;
+}
+#mode-switch button:hover { color: var(--text); }
+#mode-switch button.on { background: var(--bg-active); color: var(--text); }
+#mode-switch button[data-mode="live"].on { color: #6fe39a; }
+#mode-switch button[data-mode="history"].on { color: #7abeff; }
+
+/* ---------- history scrubber ------------------------------- */
+/* Sits above the dock in HISTORY mode: a congestion timeline for the chosen
+   window, amber ticks where incidents were recorded, and a readout of the
+   scrubbed moment. */
+#history-bar {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.96);
+  padding: 8px 12px 9px;
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  z-index: 17;
+}
+#history-bar.open { display: flex; }
+.hb-top { display: flex; align-items: center; gap: 14px; }
+.hb-title { font-size: 9px; letter-spacing: 0.18em; color: var(--text-faint); }
+.hb-windows { display: flex; gap: 2px; border: 1px solid var(--line); padding: 2px; }
+.hb-windows button {
+  padding: 3px 9px;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+}
+.hb-windows button.on { background: var(--bg-active); color: #7abeff; }
+.hb-at { margin-left: auto; font-size: 10px; letter-spacing: 0.08em; color: var(--text); }
+#hb-canvas { width: 100%; height: 46px; display: block; }
+#hb-range { width: 100%; }
+.hb-read { display: flex; flex-wrap: wrap; gap: 16px; font-size: 9.5px; letter-spacing: 0.06em; }
+.hb-cell { display: flex; gap: 6px; align-items: baseline; }
+.hb-cell i { font-style: normal; color: var(--text-faint); }
+.hb-cell b { color: var(--text); font-weight: 700; }
+.hb-worst b { color: var(--amber); }
+.hb-empty { color: var(--text-faint); letter-spacing: 0.1em; }
+
+/* SETUP is a simulation control; outside SIMULATION it reads as inert */
+#setup-mode-note:empty { display: none; }
+#setup-mode-note {
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--amber);
+  padding: 8px 11px;
+  margin-bottom: 14px;
+  font-size: 10.5px;
+  color: var(--text-dim);
+  letter-spacing: 0.03em;
+}
+.page.mode-locked #setup-grid { opacity: 0.42; pointer-events: none; }
+
 @media (max-width: 780px) {
   #app {
     grid-template-columns: 1fr;
@@ -1738,6 +1815,10 @@ label {
     width: calc(100vw - 24px);
     bottom: 128px;
   }
+  #mode-switch { margin-left: 8px; }
+  #history-bar { left: 6px; right: 6px; bottom: 8px; padding: 7px 9px; }
+  .hb-read { gap: 10px; }
+  #mode-switch button { padding: 4px 7px; font-size: 9px; letter-spacing: 0.04em; }
   #station-card {
     left: 6px;
     bottom: 148px;

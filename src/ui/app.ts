@@ -13,6 +13,7 @@ import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
 import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
 import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml } from "./format";
+import { ArchiveReader, type ArchiveRecord } from "../data/archive";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -68,6 +69,13 @@ export class App {
   private boardCard!: HTMLElement;
   /** station key whose departure board is open */
   private boardKey: string | null = null;
+  mode: "live" | "sim" | "history" = "live";
+  private historyBar!: HTMLElement;
+  private archive = new ArchiveReader();
+  private historyRecords: ArchiveRecord[] = [];
+  private historyHours = 24;
+  private historyIdx = 0;
+  private historyLoading = false;
   private live: import("../data/live").LiveSnapshot | null = null;
   private liveFresh = true;
   // signal-program trial (A/B/C experiment)
@@ -119,6 +127,14 @@ export class App {
     this.boardCard.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest("#board-close")) this.closeBoard();
     });
+
+    this.buildHistoryBar();
+    ui.modeBtns.forEach((b) =>
+      b.addEventListener("click", () => {
+        this.setMode(b.dataset.mode as "live" | "sim" | "history");
+        this.saveSetting("mode", this.mode);
+      })
+    );
 
     // replay scrubber
     this.replayBar = document.createElement("div");
@@ -725,6 +741,245 @@ export class App {
     this.ui.ucTabPerf.classList.toggle("on", t === "perf");
     this.ui.ucTabHealth.classList.toggle("on", t === "health");
     this.startPerfLoading();
+  }
+
+  // ---------- live / simulation / history ----------
+
+  /**
+   * Which city you are looking at.
+   *
+   *   live      what the sensors and feeds actually report, right now
+   *   sim       a model of the city you can push on: fleet size, demand,
+   *             signal timing, injected incidents
+   *   history   what the city did earlier, replayed from the archive
+   *
+   * The distinction is the point: a simulated car is not a measurement, so
+   * LIVE does not draw the synthetic fleet — it shows real transit vehicles
+   * over sensor-measured congestion, and leaves the roads honest rather than
+   * populating them with traffic nobody observed. The sim keeps running
+   * underneath either way, because the telemetry panels are built on it.
+   */
+  setMode(m: "live" | "sim" | "history") {
+    this.mode = m;
+    this.ui.modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+    document.body.dataset.mode = m;
+
+    const sim = m === "sim";
+    const live = m === "live";
+    const history = m === "history";
+
+    // synthetic agents belong to the model, not to the measured city
+    const showSynthetic = sim;
+    this.setBox("vehicles", showSynthetic);
+    this.setBox("bikes", showSynthetic);
+    this.setBox("pedestrians", showSynthetic);
+    this.setBox("transit", showSynthetic);
+    // real transit is the live picture; in the model it would be two fleets
+    // of the same trams on the same track
+    this.setBox("fixes", live);
+    // measured congestion is the whole content of the live map
+    this.setBox("sensors", live || sim);
+    this.setBox("congestion", history ? false : live);
+
+    if (!live) this.closeBoard();
+    if (history) {
+      this.releaseTrack("HISTORY MODE");
+      void this.openHistory();
+    } else {
+      this.closeHistory();
+    }
+
+    // SETUP alters model variables; in LIVE and HISTORY there is nothing to
+    // alter, and pretending otherwise would imply the sliders change the city
+    this.ui.pageSetup.classList.toggle("mode-locked", !sim);
+    const note = document.getElementById("setup-mode-note");
+    if (note) {
+      note.textContent = sim
+        ? ""
+        : `Variables are a simulation control. Switch to SIMULATION to change fleet density, demand, signal timing or inject incidents.`;
+    }
+    this.log(
+      "info",
+      live
+        ? "LIVE MODE — MEASURED CITY: REAL TRANSIT, SENSOR CONGESTION, REAL INCIDENTS"
+        : sim
+          ? "SIMULATION MODE — MODELLED CITY: VARIABLES UNLOCKED"
+          : "HISTORY MODE — REPLAYING THE ARCHIVE"
+    );
+  }
+
+  // ---------- history: replaying the archive ----------
+
+  private buildHistoryBar() {
+    this.historyBar = document.createElement("div");
+    this.historyBar.id = "history-bar";
+    this.historyBar.innerHTML = `
+      <div class="hb-top">
+        <span class="hb-title">ARCHIVE</span>
+        <div class="hb-windows">
+          <button data-hours="24" class="on">24H</button>
+          <button data-hours="168">7D</button>
+          <button data-hours="720">30D</button>
+        </div>
+        <span class="hb-at" id="hb-at">—</span>
+      </div>
+      <canvas id="hb-canvas"></canvas>
+      <input id="hb-range" type="range" min="0" max="0" value="0" />
+      <div class="hb-read" id="hb-read"></div>`;
+    this.ui.hud.appendChild(this.historyBar);
+    this.historyBar.querySelectorAll<HTMLButtonElement>(".hb-windows button").forEach((b) =>
+      b.addEventListener("click", () => {
+        this.historyHours = +(b.dataset.hours ?? "24");
+        this.historyBar.querySelectorAll(".hb-windows button").forEach((o) => o.classList.toggle("on", o === b));
+        void this.openHistory();
+      })
+    );
+    (this.historyBar.querySelector("#hb-range") as HTMLInputElement).addEventListener("input", (e) => {
+      this.historyIdx = +(e.target as HTMLInputElement).value;
+      this.paintHistory();
+    });
+  }
+
+  /**
+   * Load the selected window from the archive and show it.
+   *
+   * A window with no data is a normal outcome, not an error: the archive only
+   * contains what the refresh loop actually captured, so an empty result says
+   * so plainly rather than drawing a flat line that looks like measured calm.
+   */
+  private async openHistory() {
+    this.historyBar.classList.add("open");
+    this.historyLoading = true;
+    this.renderHistoryMessage("READING ARCHIVE…");
+    const to = new Date();
+    const from = new Date(to.getTime() - this.historyHours * 3_600_000);
+    let recs: ArchiveRecord[] = [];
+    try {
+      recs = await this.archive.range(from, to);
+    } catch {
+      recs = [];
+    }
+    this.historyLoading = false;
+    this.historyRecords = recs;
+    const range = this.historyBar.querySelector("#hb-range") as HTMLInputElement;
+    range.max = String(Math.max(0, recs.length - 1));
+    range.value = String(Math.max(0, recs.length - 1));
+    this.historyIdx = Math.max(0, recs.length - 1);
+    if (!recs.length) {
+      this.renderHistoryMessage(
+        "NO ARCHIVE FOR THIS WINDOW — THE REFRESH LOOP WRITES ONE RECORD EVERY 5 MIN ONCE IT IS RUNNING ON MAIN"
+      );
+      return;
+    }
+    this.paintHistory();
+  }
+
+  private closeHistory() {
+    this.historyBar?.classList.remove("open");
+  }
+
+  private renderHistoryMessage(msg: string) {
+    const read = this.historyBar.querySelector("#hb-read") as HTMLElement;
+    read.innerHTML = `<span class="hb-empty">${escapeHtml(msg)}</span>`;
+    const at = this.historyBar.querySelector("#hb-at") as HTMLElement;
+    at.textContent = "—";
+    const cv = this.historyBar.querySelector("#hb-canvas") as HTMLCanvasElement;
+    const ctx = cv.getContext("2d");
+    if (ctx) ctx.clearRect(0, 0, cv.width, cv.height);
+  }
+
+  /** Draw the congestion timeline and read out the scrubbed moment. */
+  private paintHistory() {
+    const recs = this.historyRecords;
+    if (!recs.length || this.historyLoading) return;
+    const cv = this.historyBar.querySelector("#hb-canvas") as HTMLCanvasElement;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = cv.clientWidth || 520;
+    const h = cv.clientHeight || 46;
+    if (cv.width !== w * dpr || cv.height !== h * dpr) {
+      cv.width = w * dpr;
+      cv.height = h * dpr;
+    }
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+
+    const cityCong = (r: ArchiveRecord) => {
+      // districts with no reporting station contribute nothing rather than a
+      // zero, which would read as "free flowing" when it means "unmeasured"
+      const seen = r.districts.filter((d) => d.speed > 0);
+      return seen.length ? seen.reduce((p, c) => p + c.congestion, 0) / seen.length : 0;
+    };
+
+    // congestion area
+    ctx.beginPath();
+    ctx.moveTo(0, h);
+    recs.forEach((r, i) => {
+      const x = (i / Math.max(1, recs.length - 1)) * w;
+      ctx.lineTo(x, h - cityCong(r) * h * 0.92);
+    });
+    ctx.lineTo(w, h);
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, 0, h);
+    grad.addColorStop(0, "rgba(238,68,68,0.55)");
+    grad.addColorStop(1, "rgba(238,68,68,0.05)");
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // incident ticks along the bottom
+    ctx.fillStyle = "rgba(210,160,24,0.85)";
+    recs.forEach((r, i) => {
+      if (!r.incidents) return;
+      const x = (i / Math.max(1, recs.length - 1)) * w;
+      ctx.fillRect(x, h - 3, 1, 3);
+    });
+
+    // scrub head
+    const sx = (this.historyIdx / Math.max(1, recs.length - 1)) * w;
+    ctx.strokeStyle = "#7abeff";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sx + 0.5, 0);
+    ctx.lineTo(sx + 0.5, h);
+    ctx.stroke();
+
+    const r = recs[Math.min(this.historyIdx, recs.length - 1)];
+    const at = this.historyBar.querySelector("#hb-at") as HTMLElement;
+    at.textContent = fmtTimestamp(new Date(r.t), TIMEZONE);
+
+    const worst = r.districts
+      .map((d, i) => ({ d, name: DISTRICTS[i]?.name ?? `D${i}` }))
+      .filter((x) => x.d.speed > 0)
+      .sort((a, b) => b.d.congestion - a.d.congestion)
+      .slice(0, 3);
+    const cell = (k: string, v: string) => `<span class="hb-cell"><i>${k}</i><b>${v}</b></span>`;
+    const read = this.historyBar.querySelector("#hb-read") as HTMLElement;
+    read.innerHTML =
+      cell("CONGESTION", `${Math.round(cityCong(r) * 100)}%`) +
+      cell("INCIDENTS", String(r.incidents)) +
+      cell("BRIDGES", String(r.bridges)) +
+      cell("TRANSIT", String(r.transit)) +
+      cell("TEMP", `${r.temp.toFixed(1)}°C`) +
+      cell("RAIN", `${r.rain.toFixed(1)}MM/H`) +
+      cell("MAAS", `${r.waterCm >= 0 ? "+" : ""}${r.waterCm}CM`) +
+      (worst.length
+        ? `<span class="hb-cell hb-worst"><i>WORST</i><b>${worst
+            .map((x) => `${escapeHtml(x.name)} ${Math.round(x.d.congestion * 100)}%`)
+            .join(" · ")}</b></span>`
+        : "");
+  }
+
+  /** Flip a layer checkbox and apply it, keeping the UI honest about state. */
+  private setBox(layer: string, on: boolean) {
+    const box = this.ui.layerBoxes.find((b) => b.dataset.layer === layer);
+    if (!box) return;
+    if (box.checked !== on) {
+      box.checked = on;
+      this.applyLayer(layer, on);
+    } else {
+      this.applyLayer(layer, on);
+    }
   }
 
   setPage(p: typeof this.page) {
@@ -1612,6 +1867,7 @@ export class App {
     p.innerHTML = `
       <h1>Setup</h1>
       <div class="sub">SIMULATION CORE · OBSERVATION GRID · SYSTEM</div>
+      <div id="setup-mode-note"></div>
       <div id="setup-grid">
         <div class="panel">
           <div class="p-title">Simulation core</div>
@@ -1877,6 +2133,11 @@ export class App {
         }
       }
     }
+    // Mode last, and deliberately after the saved layers: it owns only the
+    // seven layers that distinguish a measured city from a modelled one, so
+    // personal choices about buildings, water, labels and the rest survive.
+    const saved = this.loadSetting<string>("mode");
+    this.setMode(saved === "sim" || saved === "history" ? saved : "live");
   }
 
   persistLayerStates() {
