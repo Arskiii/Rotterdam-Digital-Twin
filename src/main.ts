@@ -5,7 +5,7 @@ import { SceneCtx } from "./render/scene";
 import { buildCity, buildDistrictBounds, syncFog, setAmbient, RoofStreamer } from "./render/city";
 import type { RoofIndex } from "./data/loader";
 import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveIncidentsLayer } from "./render/dynamic";
-import { TransitLayer, LiveFixesLayer } from "./render/transit";
+import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
 import { LiveFeed, type LiveSnapshot } from "./data/live";
 import { App } from "./ui/app";
@@ -106,16 +106,17 @@ async function boot() {
   const districtLines = buildDistrictBounds(data.districtBounds);
   const ndwLayer = new NdwLayer(data.ndw?.stations ?? []);
   const airLayer = new AirLayer();
-  const fixesLayer = new LiveFixesLayer();
+  const fixesLayer = new LiveTransitLayer();
+  const stopsLayer = new LiveStopsLayer();
   const liveIncidentsLayer = new LiveIncidentsLayer();
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.points, liveIncidentsLayer.points);
+  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.group, stopsLayer.points, liveIncidentsLayer.points);
 
   // the engine has been initializing since graph.bin arrived — usually done
   await simReady!;
   paintBoot("sim", 1);
   const sim = worker!;
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer }, sim);
+  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer, stopsLayer }, sim);
 
   // feed the NDW snapshot into the sim's calibration loop
   if (data.ndw?.stations.length) {
@@ -162,6 +163,7 @@ async function boot() {
       ndwLayer.setLive(ratios);
     }
     if (snap.vehicles) fixesLayer.set(snap.vehicles.v);
+    if (snap.departures) stopsLayer.set(snap.departures.stops, snap.departures.dep);
     if (snap.air) airLayer.set(snap.air.s);
     if (snap.weather) {
       // wet roads slow motorized traffic
@@ -169,6 +171,7 @@ async function boot() {
       sim.postMessage({ type: "params", speedFactor: rain > 2 ? 0.85 : rain > 0.2 ? 0.93 : 1 });
     }
     if (snap.water) liveWater = snap.water;
+    app.setLive(snap, live.fresh);
   };
   const live = new LiveFeed(dataBase, applyLive);
 
@@ -189,6 +192,9 @@ async function boot() {
     const realDt = Math.min(0.1, (now - lastNow) / 1000);
     lastNow = now;
     transit.update(app.paused ? 0 : realDt * app.simSpeed);
+    // live vehicles run on real time, never on the sim clock: a snapshot is a
+    // measurement of now, so it must not be scrubbed, paused or compressed
+    fixesLayer.update(realDt);
     scene.update();
     syncFog(scene.fog);
     // sim-clock daylight: dawn ~06:00, dusk ~21:30 (subtle, keeps the night-ops look)
@@ -228,20 +234,28 @@ async function boot() {
       const age = live.ageMin();
       if (live.snapshot) {
         ui.liveChip.style.display = "";
-        const fresh = age < 12;
-        ui.liveDot.style.background = fresh ? "#3ddc84" : "#666";
+        // the chip states the real age of the data rather than a green light:
+        // a snapshot the pipeline stopped feeding should look wrong, not fine
+        const health = live.health();
+        ui.liveDot.style.background =
+          health === "live" ? "#3ddc84" : health === "lagging" ? "#e3b23c" : "#d0453c";
         const w = live.snapshot.weather;
-        const parts = [`LIVE ${age < 1 ? "<1" : Math.round(age)}M`];
-        if (w?.temp != null) parts.push(`${Math.round(w.temp)}°C`);
-        if (liveWater) parts.push(`MAAS ${liveWater.cm >= 0 ? "+" : ""}${liveWater.cm}CM`);
-        const all = live.snapshot.incidents ?? [];
-        const nWrk = all.filter((i) => i.kind === 4).length;
-        const nInc = all.length - nWrk;
-        const nBridge = live.snapshot.bridges?.length ?? 0;
-        if (nInc) parts.push(`${nInc} INC`);
-        if (nWrk) parts.push(`${nWrk} WRK`);
-        if (nBridge) parts.push(`${nBridge} BRUG`);
-        ui.liveText.textContent = fresh ? parts.join(" · ") : `LIVE STALE (${Math.round(age)}M)`;
+        const ageTxt = age < 1 ? "<1M" : `${Math.round(age)}M`;
+        if (health === "stale") {
+          ui.liveText.textContent = `FEED STALE — ${ageTxt} OLD`;
+        } else {
+          const parts = [`LIVE ${ageTxt}`];
+          if (w?.temp != null) parts.push(`${Math.round(w.temp)}°C`);
+          if (liveWater) parts.push(`MAAS ${liveWater.cm >= 0 ? "+" : ""}${liveWater.cm}CM`);
+          const all = live.snapshot.incidents ?? [];
+          const nWrk = all.filter((i) => i.kind === 4).length;
+          const nInc = all.length - nWrk;
+          const nBridge = live.snapshot.bridges?.length ?? 0;
+          if (nInc) parts.push(`${nInc} INC`);
+          if (nWrk) parts.push(`${nWrk} WRK`);
+          if (nBridge) parts.push(`${nBridge} BRUG`);
+          ui.liveText.textContent = parts.join(" · ");
+        }
       }
     }
     app.frame(now);

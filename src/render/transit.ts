@@ -4,6 +4,7 @@
 
 import * as THREE from "three";
 import type { TransitRoute } from "../data/loader";
+import type { LiveVehicle } from "../data/live";
 
 const VMAX = [11, 21]; // m/s: tram, metro
 const ACC = [1.0, 0.9];
@@ -251,6 +252,9 @@ export class TransitLayer {
   }
 
   /** Current world position of a vehicle (for camera tracking). */
+  /** Kinds that carry enough identity to be worth following. */
+  static readonly PICKABLE = new Set([0, 1, 4]); // tram, metro, ferry
+
   vehicleInfo(index: number): { x: number; z: number; speed: number; label: string } | null {
     const veh = this.vehicles[index];
     if (!veh) return null;
@@ -265,26 +269,75 @@ export class TransitLayer {
   }
 }
 
-// ---------------- live vehicle fixes (OVapi GTFS-RT) ----------------
-// Last-known real positions of trams, metros, buses and trains from the
-// national GTFS-RT feed — rendered as glowing diamonds over the simulated
-// fleet: the sim animates, the fixes are ground truth.
+// ---------------- live transit (OVapi GTFS-RT) ----------------
+// Where the real trams, metros, buses and trains actually are, with the
+// identity that makes one answerable: line, trip, destination, and how old the
+// position fix is. The simulated fleet above animates the city; this layer is
+// the city.
 
 const FIX_COLORS: [number, number, number][] = [
   [95, 216, 141], // 0 tram
   [235, 96, 84], // 1 metro
   [235, 186, 92], // 2 bus
   [238, 238, 238], // 3 train
+  [96, 190, 235], // 4 ferry — the Waterbus, on the water
 ];
+const KIND_LABEL = ["TRAM", "METRO", "BUS", "TRAIN", "FERRY"];
 
-export class LiveFixesLayer {
-  points: THREE.Points;
-  count = 0;
-  private cap = 600;
+/** One live vehicle, tracked across snapshots so it can be followed. */
+export interface LiveVeh {
+  key: string;
+  kind: number;
+  line: string;
+  tripId: string;
+  seq: number;
+  berthed: boolean;
+  fixAge: number;
+  /** reported position */
+  tx: number;
+  tz: number;
+  /** displayed position, eased toward the reported one */
+  x: number;
+  z: number;
+  /** heading derived from successive real fixes, not from the feed */
+  hx: number;
+  hz: number;
+  label: string;
+}
+
+export class LiveTransitLayer {
+  group = new THREE.Group();
+  trams: THREE.InstancedMesh;
+  metros: THREE.InstancedMesh;
+  road: THREE.Points; // buses and trains stay as markers
+  vehicles: LiveVeh[] = [];
+  /** instance index → vehicles[] index, for picking */
+  tramIdx: number[] = [];
+  metroIdx: number[] = [];
+  private byKey = new Map<string, LiveVeh>();
+  private cap = 400;
   private pos: Float32Array;
   private col: Uint8Array;
+  private roadCount = 0;
+  private dummy = new THREE.Object3D();
+  private color = new THREE.Color();
 
   constructor() {
+    const mk = (w: number, h: number, d: number, cap: number) => {
+      const geo = new THREE.BoxGeometry(w, h, d);
+      geo.translate(0, h / 2 + 0.5, 0);
+      const mesh = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ fog: true }), cap);
+      mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+      mesh.instanceColor.setUsage(THREE.DynamicDrawUsage);
+      mesh.count = 0;
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 9;
+      return mesh;
+    };
+    this.trams = mk(27, 3.2, 2.6, 200);
+    this.metros = mk(56, 3.7, 3.0, 200);
+
     this.pos = new Float32Array(this.cap * 3);
     this.col = new Uint8Array(this.cap * 3);
     const geo = new THREE.BufferGeometry();
@@ -313,26 +366,209 @@ export class LiveFixesLayer {
           gl_FragColor = vec4(vC, 0.5 + 0.45 * ring);
         }`,
     });
-    this.points = new THREE.Points(geo, mat);
-    this.points.frustumCulled = false;
-    this.points.renderOrder = 8;
-    // starts empty (drawRange 0); the layer checkbox controls visibility
+    this.road = new THREE.Points(geo, mat);
+    this.road.frustumCulled = false;
+    this.road.renderOrder = 8;
+    this.group.add(this.trams, this.metros, this.road);
+    // Starts empty (instance counts 0, draw range 0) rather than hidden: the
+    // layer checkbox ships checked and applyLayer only fires on change, so a
+    // layer that hides itself here would never come back on.
   }
 
-  /** vehicles: [x, y, kind, bearing, line] in projected data coords. */
-  set(vehicles: [number, number, number, number, string][]) {
-    const n = Math.min(this.cap, vehicles.length);
-    for (let i = 0; i < n; i++) {
-      const [x, y, kind] = vehicles[i];
-      this.pos[i * 3] = x;
-      this.pos[i * 3 + 1] = 8;
-      this.pos[i * 3 + 2] = -y;
-      const c = FIX_COLORS[kind] ?? FIX_COLORS[2];
-      this.col[i * 3] = c[0];
-      this.col[i * 3 + 1] = c[1];
-      this.col[i * 3 + 2] = c[2];
+  get count() {
+    return this.vehicles.length;
+  }
+
+  /**
+   * Take a new snapshot of real positions.
+   *
+   * A vehicle is identified by its trip (plus fleet number when the operator
+   * publishes one), so it survives across snapshots and its heading can be
+   * derived from where it actually moved. OVapi publishes no bearing for rail
+   * — inventing one would be a fabricated measurement, so the direction shown
+   * is only ever the direction the vehicle was observed to travel.
+   */
+  set(vehicles: LiveVehicle[]) {
+    const seen = new Set<string>();
+    const next: LiveVeh[] = [];
+    for (const v of vehicles) {
+      const [x, y, kind, line, tripId, seq, berthed, vehId, fixAge] = v;
+      const key = `${tripId || "?"}:${vehId || ""}:${kind}`;
+      if (seen.has(key)) continue; // duplicate fix for one trip
+      seen.add(key);
+      let veh = this.byKey.get(key);
+      if (!veh) {
+        veh = {
+          key, kind, line, tripId, seq, berthed: !!berthed, fixAge,
+          tx: x, tz: -y, x, z: -y, hx: 1, hz: 0, label: "",
+        };
+        this.byKey.set(key, veh);
+      } else {
+        const dx = x - veh.tx;
+        const dz = -y - veh.tz;
+        // only a real move sets a heading; a berthed vehicle keeps the last one
+        const len = Math.hypot(dx, dz);
+        if (len > 6) {
+          veh.hx = dx / len;
+          veh.hz = dz / len;
+        }
+        veh.tx = x;
+        veh.tz = -y;
+        veh.kind = kind;
+        veh.line = line;
+        veh.seq = seq;
+        veh.berthed = !!berthed;
+        veh.fixAge = fixAge;
+      }
+      veh.label = `${KIND_LABEL[kind] ?? "TRANSIT"} ${String(line || "").toUpperCase()}`;
+      next.push(veh);
     }
-    this.count = n;
+    for (const key of this.byKey.keys()) if (!seen.has(key)) this.byKey.delete(key);
+    this.vehicles = next;
+  }
+
+  /**
+   * Ease the drawn positions toward the reported ones.
+   *
+   * Fixes land about once a minute and are already ~95 s old when they do, so
+   * this is a short cosmetic glide (not dead reckoning) — it removes the jump
+   * without pretending to know where the vehicle went in between.
+   */
+  update(dtReal: number) {
+    const k = Math.min(1, dtReal / 1.5);
+    let ti = 0;
+    let mi = 0;
+    this.roadCount = 0;
+    for (let i = 0; i < this.vehicles.length; i++) {
+      const v = this.vehicles[i];
+      v.x += (v.tx - v.x) * k;
+      v.z += (v.tz - v.z) * k;
+      if (v.kind === 0 || v.kind === 1) {
+        const mesh = v.kind === 0 ? this.trams : this.metros;
+        const idx = v.kind === 0 ? ti : mi;
+        this.dummy.position.set(v.x, 0.9, v.z);
+        this.dummy.rotation.set(0, Math.atan2(-v.hz, v.hx), 0);
+        this.dummy.updateMatrix();
+        mesh.setMatrixAt(idx, this.dummy.matrix);
+        const c = FIX_COLORS[v.kind];
+        // a berthed vehicle dims slightly so a platform stop reads at a glance
+        const dim = v.berthed ? 0.65 : 1;
+        this.color.setRGB((c[0] / 255) * dim, (c[1] / 255) * dim, (c[2] / 255) * dim);
+        mesh.setColorAt(idx, this.color);
+        if (v.kind === 0) this.tramIdx[ti++] = i;
+        else this.metroIdx[mi++] = i;
+      } else if (this.roadCount < this.cap) {
+        const p = this.roadCount++;
+        this.pos[p * 3] = v.x;
+        this.pos[p * 3 + 1] = 8;
+        this.pos[p * 3 + 2] = v.z;
+        const c = FIX_COLORS[v.kind] ?? FIX_COLORS[2];
+        this.col[p * 3] = c[0];
+        this.col[p * 3 + 1] = c[1];
+        this.col[p * 3 + 2] = c[2];
+      }
+    }
+    this.trams.count = ti;
+    this.metros.count = mi;
+    this.trams.instanceMatrix.needsUpdate = true;
+    this.metros.instanceMatrix.needsUpdate = true;
+    if (this.trams.instanceColor) this.trams.instanceColor.needsUpdate = true;
+    if (this.metros.instanceColor) this.metros.instanceColor.needsUpdate = true;
+    const geo = this.road.geometry;
+    geo.setDrawRange(0, this.roadCount);
+    (geo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;
+    (geo.getAttribute("color") as THREE.BufferAttribute).needsUpdate = true;
+  }
+
+  /** Kinds that carry enough identity to be worth following. */
+  static readonly PICKABLE = new Set([0, 1, 4]); // tram, metro, ferry
+
+  vehicleInfo(index: number): { x: number; z: number; speed: number; label: string } | null {
+    const v = this.vehicles[index];
+    if (!v) return null;
+    return { x: v.x, z: v.z, speed: 0, label: v.label };
+  }
+}
+
+// ---------------- live stations (departure boards) ----------------
+// Every RET metro and tram station with a service due. These are the objects a
+// passenger actually cares about: click one and the platform tells you what is
+// coming, when, and how late it is running.
+
+export interface LiveStation {
+  key: string;
+  name: string;
+  x: number;
+  y: number;
+  /** world-space z (= -y) */
+  z: number;
+  /** true when at least one metro calls here */
+  metro: boolean;
+}
+
+export class LiveStopsLayer {
+  points: THREE.Points;
+  stations: LiveStation[] = [];
+  private cap = 700;
+  private pos: Float32Array;
+  private col: Uint8Array;
+
+  constructor() {
+    this.pos = new Float32Array(this.cap * 3);
+    this.col = new Uint8Array(this.cap * 3);
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", new THREE.BufferAttribute(this.pos, 3));
+    geo.setAttribute("color", new THREE.BufferAttribute(this.col, 3, true));
+    geo.setDrawRange(0, 0);
+    const mat = new THREE.ShaderMaterial({
+      transparent: true,
+      depthWrite: false,
+      vertexShader: /* glsl */ `
+        attribute vec3 color;
+        varying vec3 vC;
+        void main() {
+          vC = color;
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_PointSize = clamp(3400.0 / -mv.z, 4.0, 13.0);
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: /* glsl */ `
+        varying vec3 vC;
+        void main() {
+          // a hollow ring, so a station reads as somewhere you stand rather
+          // than as another vehicle
+          float d = length(gl_PointCoord - 0.5);
+          if (d > 0.5) discard;
+          float ring = smoothstep(0.5, 0.42, d) * smoothstep(0.22, 0.30, d);
+          if (ring < 0.04) discard;
+          gl_FragColor = vec4(vC, ring);
+        }`,
+    });
+    this.points = new THREE.Points(geo, mat);
+    this.points.frustumCulled = false;
+    this.points.renderOrder = 10;
+    // same as the vehicle layer above: empty, not hidden
+  }
+
+  set(stops: Record<string, [string, number, number]>, dep: Record<string, unknown[][]>) {
+    this.stations.length = 0;
+    let n = 0;
+    for (const key of Object.keys(stops)) {
+      if (n >= this.cap) break;
+      const [name, x, y] = stops[key];
+      const rows = dep[key] ?? [];
+      const metro = rows.some((r) => r[1] === 1);
+      this.stations.push({ key, name, x, y, z: -y, metro });
+      this.pos[n * 3] = x;
+      this.pos[n * 3 + 1] = 6;
+      this.pos[n * 3 + 2] = -y;
+      // metro interchanges read brighter than tram stops
+      const c = metro ? [122, 190, 255] : [128, 150, 160];
+      this.col[n * 3] = c[0];
+      this.col[n * 3 + 1] = c[1];
+      this.col[n * 3 + 2] = c[2];
+      n++;
+    }
     const geo = this.points.geometry;
     geo.setDrawRange(0, n);
     (geo.getAttribute("position") as THREE.BufferAttribute).needsUpdate = true;

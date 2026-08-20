@@ -81,3 +81,11 @@ export function drawSparkline(
     ctx.fill();
   }
 }
+
+/** Escape text destined for innerHTML. Live feeds carry operator-authored
+ *  strings (stop names, destinations, street names) — none of it is ours. */
+export function escapeHtml(s: string): string {
+  return String(s).replace(/[&<>"']/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : c === '"' ? "&quot;" : "&#39;"
+  );
+}

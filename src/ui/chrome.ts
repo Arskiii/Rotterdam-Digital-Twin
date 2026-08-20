@@ -29,6 +29,11 @@ export function buildChrome(root: HTMLElement) {
   <div id="stage">
     <header id="topbar" class="brk">${TICKS}
       <div id="brand">${icons.logo()} <span>${BRAND}</span></div>
+      <div id="mode-switch" title="What the map is showing">
+        <button data-mode="live" class="on">Live</button>
+        <button data-mode="sim">Simulation</button>
+        <button data-mode="history">History</button>
+      </div>
       <nav id="topnav">
         <button class="nav-btn" data-page="brief">Brief</button>
         <button class="nav-btn on" data-page="map">Unit&nbsp;Map</button>
@@ -200,6 +205,7 @@ export function buildChrome(root: HTMLElement) {
     liveDot: $("#live-dot"),
     liveText: $("#live-text"),
     navBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#topnav .nav-btn")),
+    modeBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#mode-switch button")),
     sceneCanvas: $<HTMLCanvasElement>("#scene-canvas"),
     viewport: $("#viewport"),
     hud: $("#hud"),
