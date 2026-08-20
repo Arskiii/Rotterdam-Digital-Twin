@@ -71,6 +71,8 @@ export class App {
   /** station key whose departure board is open */
   private boardKey: string | null = null;
   mode: "live" | "sim" | "history" = "live";
+  /** false when the sim worker refused to start; LIVE and HISTORY still work */
+  simAvailable = true;
   private historyBar!: HTMLElement;
   private archive = new ArchiveReader();
   private historyRecords: ArchiveRecord[] = [];
@@ -760,7 +762,36 @@ export class App {
    * populating them with traffic nobody observed. The sim keeps running
    * underneath either way, because the telemetry panels are built on it.
    */
+  /**
+   * Carry on without a simulation core.
+   *
+   * The worker is refused often enough on phones — where the graph and its
+   * derived tables are a lot to hold beside a 3D scene — that losing the whole
+   * app to it is the wrong trade. Nothing the live map shows comes from the
+   * sim, so LIVE and HISTORY keep working; only SIMULATION is withdrawn, and
+   * it says why rather than sitting there dead.
+   */
+  disableSim(reason: string) {
+    this.simAvailable = false;
+    const btn = this.ui.modeBtns.find((b) => b.dataset.mode === "sim");
+    if (btn) {
+      btn.disabled = true;
+      btn.classList.add("unavailable");
+      btn.title = `Simulation unavailable on this device — ${reason}`;
+    }
+    if (this.mode === "sim") this.setMode("live");
+    this.log("warn", `SIM CORE UNAVAILABLE — ${reason.toUpperCase()} · LIVE AND HISTORY UNAFFECTED`);
+    const note = document.getElementById("setup-mode-note");
+    if (note) {
+      note.textContent =
+        `The simulation core could not start on this device (${reason}). ` +
+        `Live and History are unaffected — they read measured data and need no simulation.`;
+    }
+  }
+
   setMode(m: "live" | "sim" | "history") {
+    // a mode that cannot run is not a mode
+    if (m === "sim" && !this.simAvailable) m = "live";
     this.mode = m;
     this.ui.modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
     document.body.dataset.mode = m;
@@ -794,7 +825,7 @@ export class App {
     // alter, and pretending otherwise would imply the sliders change the city
     this.ui.pageSetup.classList.toggle("mode-locked", !sim);
     const note = document.getElementById("setup-mode-note");
-    if (note) {
+    if (note && this.simAvailable) {
       note.textContent = sim
         ? ""
         : `Variables are a simulation control. Switch to SIMULATION to change fleet density, demand, signal timing or inject incidents.`;
