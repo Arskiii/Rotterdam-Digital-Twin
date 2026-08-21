@@ -27,80 +27,10 @@
 import { writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createInflateRaw } from "node:zlib";
-import { Readable } from "node:stream";
-import { createInterface } from "node:readline";
+import { zipIndex, entryLines, splitCsv, header } from "./lib/gtfs-zip.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "data", "ret-timetable.bin");
-const URL_ZIP = "https://gtfs.ovapi.nl/nl/gtfs-nl.zip";
-const UA = { "User-Agent": "rotterdam-intelligence-platform/1.0 (research; contact via github)" };
-
-// ---------------- zip plumbing (range reads, no full download) ----------------
-
-async function range(from, to, asStream = false) {
-  const res = await fetch(URL_ZIP, {
-    headers: { ...UA, Range: `bytes=${from}-${to}` },
-    signal: AbortSignal.timeout(1_800_000),
-  });
-  if (res.status !== 206) throw new Error(`range ${from}-${to}: HTTP ${res.status}`);
-  return asStream ? Readable.fromWeb(res.body) : Buffer.from(await res.arrayBuffer());
-}
-
-async function zipIndex() {
-  const head = await fetch(URL_ZIP, { method: "HEAD", headers: UA, signal: AbortSignal.timeout(60_000) });
-  const size = Number(head.headers.get("content-length"));
-  if (!Number.isFinite(size)) throw new Error("no content-length on the zip");
-  const tail = await range(size - Math.min(size, 66_000), size - 1);
-  const i = tail.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  if (i === -1) throw new Error("no end-of-central-directory record");
-  const cdSize = tail.readUInt32LE(i + 12);
-  const cdOff = tail.readUInt32LE(i + 16);
-  const count = tail.readUInt16LE(i + 10);
-  const cd = await range(cdOff, cdOff + cdSize - 1);
-  const entries = new Map();
-  let p = 0;
-  for (let k = 0; k < count; k++) {
-    const method = cd.readUInt16LE(p + 10);
-    const compSize = cd.readUInt32LE(p + 20);
-    const nameLen = cd.readUInt16LE(p + 28);
-    const extraLen = cd.readUInt16LE(p + 30);
-    const commentLen = cd.readUInt16LE(p + 32);
-    const localOff = cd.readUInt32LE(p + 42);
-    entries.set(cd.toString("utf8", p + 46, p + 46 + nameLen), { method, compSize, localOff });
-    p += 46 + nameLen + extraLen + commentLen;
-  }
-  return entries;
-}
-
-/** Yield each line of one zip entry without ever buffering the whole thing. */
-async function* entryLines(entry) {
-  const head = await range(entry.localOff, entry.localOff + 29);
-  const dataOff = entry.localOff + 30 + head.readUInt16LE(26) + head.readUInt16LE(28);
-  const body = await range(dataOff, dataOff + entry.compSize - 1, true);
-  const stream = entry.method === 8 ? body.pipe(createInflateRaw()) : body;
-  yield* createInterface({ input: stream, crlfDelay: Infinity });
-}
-
-function splitCsv(line) {
-  const out = [];
-  let cur = "";
-  let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (q) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; } else q = false;
-      } else cur += c;
-    } else if (c === '"') q = true;
-    else if (c === ",") { out.push(cur); cur = ""; }
-    else cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
-const header = (line) => splitCsv(line.replace(/^﻿/, "").trim());
 
 /**
  * The nth comma-separated field, without allocating an array for the rest.

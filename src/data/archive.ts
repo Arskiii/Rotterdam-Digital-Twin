@@ -104,6 +104,8 @@ export class ArchiveReader {
   private hours = new Map<string, ArchiveRecord[] | null>();
   private inflight = new Map<string, Promise<ArchiveRecord[] | null>>();
   private basePromise: Promise<string | null> | null = null;
+  /** month key → its events, so a re-render costs nothing */
+  private eventsByMonth = new Map<string, ArchiveEvent[]>();
 
   /**
    * Pick the archive source once, not per hour.
@@ -198,16 +200,26 @@ export class ArchiveReader {
 
   /** Recorded incidents and bridge openings for a month (YYYY-MM). */
   async events(year: number, month: number): Promise<ArchiveEvent[]> {
-    for (const base of ARCHIVE_SOURCES) {
-      try {
-        const res = await fetch(`${base}/e/${year}-${pad(month)}.json`, { cache: "default", signal: AbortSignal.timeout(8000) });
-        if (!res.ok) continue;
-        const raw = (await res.json()) as ArchiveEvent[];
-        if (Array.isArray(raw)) return raw;
-      } catch {
-        /* try the next source */
-      }
+    const key = `${year}-${pad(month)}`;
+    const cached = this.eventsByMonth.get(key);
+    if (cached) return cached;
+    const path = `e/${key}.json`;
+    // Through resolveBase, not its own walk of the source list: the hours have
+    // already settled which host is serving this archive, and re-deciding here
+    // meant every call paid the full timeout of a source known to be dead.
+    // Measured against an unreachable branch, one month of events took 22
+    // seconds to arrive that way and sometimes timed out entirely.
+    const base = await this.resolveBase(path);
+    if (!base) return [];
+    try {
+      const res = await fetch(`${base}/${path}`, { cache: "default", signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return [];
+      const raw = (await res.json()) as ArchiveEvent[];
+      if (!Array.isArray(raw)) return [];
+      this.eventsByMonth.set(key, raw);
+      return raw;
+    } catch {
+      return [];
     }
-    return [];
   }
 }

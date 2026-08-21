@@ -14,7 +14,8 @@ import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
 import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
 import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml, fmtAge } from "./format";
-import { ArchiveReader, type ArchiveRecord } from "../data/archive";
+import { ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/archive";
+import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -69,6 +70,8 @@ export class App {
   stationIdx: number | null = null;
   private stationCard!: HTMLElement;
   private boardCard!: HTMLElement;
+  private patternsCard!: HTMLElement;
+  private patternsOpen = false;
   /** station key whose departure board is open */
   private boardKey: string | null = null;
   mode: "live" | "sim" | "history" = "live";
@@ -130,6 +133,9 @@ export class App {
     this.boardCard = document.createElement("div");
     this.boardCard.id = "board-card";
     ui.hud.appendChild(this.boardCard);
+    this.patternsCard = document.createElement("div");
+    this.patternsCard.id = "patterns-card";
+    ui.hud.appendChild(this.patternsCard);
     this.boardCard.addEventListener("click", (e) => {
       if ((e.target as HTMLElement).closest("#board-close")) this.closeBoard();
     });
@@ -946,6 +952,7 @@ export class App {
           <button data-hours="168">7D</button>
           <button data-hours="720">30D</button>
         </div>
+        <button id="hb-patterns" title="What keeps happening, across the whole window">PATTERNS</button>
         <span class="hb-at" id="hb-at">—</span>
       </div>
       <canvas id="hb-canvas"></canvas>
@@ -959,6 +966,12 @@ export class App {
         void this.openHistory();
       })
     );
+    (this.historyBar.querySelector("#hb-patterns") as HTMLButtonElement).addEventListener("click", () => {
+      this.patternsOpen = !this.patternsOpen;
+      this.patternsCard.classList.toggle("open", this.patternsOpen);
+      (this.historyBar.querySelector("#hb-patterns") as HTMLElement).classList.toggle("on", this.patternsOpen);
+      if (this.patternsOpen) void this.renderPatterns();
+    });
     (this.historyBar.querySelector("#hb-range") as HTMLInputElement).addEventListener("input", (e) => {
       this.historyIdx = +(e.target as HTMLInputElement).value;
       this.paintHistory();
@@ -990,6 +1003,7 @@ export class App {
     range.max = String(Math.max(0, recs.length - 1));
     range.value = String(Math.max(0, recs.length - 1));
     this.historyIdx = Math.max(0, recs.length - 1);
+    if (this.patternsOpen) void this.renderPatterns();
     if (!recs.length) {
       this.renderHistoryMessage(
         "NO ARCHIVE FOR THIS WINDOW — THE REFRESH LOOP WRITES ONE RECORD EVERY 5 MIN ONCE IT IS RUNNING ON MAIN"
@@ -999,8 +1013,147 @@ export class App {
     this.paintHistory();
   }
 
+  // ---------- patterns: what the archive says keeps happening ----------
+
+  /**
+   * Six steps of one hue, dark surface upward.
+   *
+   * Congestion is a magnitude, so it gets a sequential ramp rather than the
+   * green-amber-red of a live gauge: on this scale "not very congested" is not
+   * a different state deserving a different hue, it is less of the same thing.
+   * Red because that is already what this product means by slow.
+   */
+  private static CONG_RAMP = ["#1b1113", "#3d191c", "#6d2327", "#9d2d31", "#c8383c", "#ee4444"];
+
+  private static congColor(v: number): string {
+    const r = App.CONG_RAMP;
+    return r[Math.min(r.length - 1, Math.max(0, Math.floor(v * r.length)))];
+  }
+
+  /**
+   * Read the whole window at once instead of one moment at a time.
+   *
+   * Everything here carries its sample count. With an archive this young most
+   * hours are backed by a handful of readings, and an average over two samples
+   * presented like an average over two hundred is the kind of chart that gets
+   * believed. Cells nobody measured are drawn as absent, never as free-flowing
+   * — the archive stores zero congestion for a district with no reporting
+   * station, which is the same number as an empty motorway.
+   */
+  private async renderPatterns() {
+    const el = this.patternsCard;
+    const recs = this.historyRecords;
+    const names = this.data.meta.districts.map((d) => d.name);
+    if (!recs.length) {
+      el.innerHTML = `<div class="pc-head"><span class="pc-eyebrow">PATTERNS</span></div>
+        <div class="pc-empty">NOTHING ARCHIVED IN THIS WINDOW YET</div>`;
+      return;
+    }
+
+    const p = congestionPatterns(recs);
+    const hours = p.coveredHours;
+    const ranked = [...p.districts].sort((a, b) => b.mean - a.mean);
+    const pct = (v: number) => `${Math.round(v * 100)}%`;
+    const hh = (h: number) => `${String(h).padStart(2, "0")}`;
+
+    const rows = ranked
+      .filter((d) => d.samples > 0)
+      .map((d) => {
+        const cells = hours
+          .map((h) => {
+            const c = d.byHour[h];
+            if (!c.samples) return `<i class="pc-cell pc-none" title="${escapeHtml(names[d.index] ?? "")} ${hh(h)}:00 — not measured"></i>`;
+            return `<i class="pc-cell" style="background:${App.congColor(c.mean)}" title="${escapeHtml(names[d.index] ?? "")} ${hh(h)}:00 — ${pct(c.mean)} congested, ${c.samples} sample${c.samples === 1 ? "" : "s"}"></i>`;
+          })
+          .join("");
+        const worst = d.worstHour ? `${hh(d.worstHour.hour)}:00` : "—";
+        return `<tr>
+          <th>${escapeHtml(names[d.index] ?? `D${d.index}`)}</th>
+          <td class="pc-grid">${cells}</td>
+          <td class="pc-num">${pct(d.mean)}</td>
+          <td class="pc-num pc-dim">${pct(d.peak)}</td>
+          <td class="pc-num pc-dim">${worst}</td>
+        </tr>`;
+      })
+      .join("");
+
+    const legend = App.CONG_RAMP.map((c) => `<i style="background:${c}"></i>`).join("");
+    const span =
+      p.span
+        ? `${new Date(p.span.from).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })} → ${new Date(p.span.to).toLocaleString("nl-NL", { timeZone: "Europe/Amsterdam", day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}`
+        : "";
+
+    el.innerHTML = `
+      <div class="pc-head">
+        <div>
+          <div class="pc-eyebrow">PATTERNS · CONGESTION BY DISTRICT AND HOUR</div>
+          <div class="pc-span">${escapeHtml(span)}</div>
+        </div>
+        <button id="pc-close" title="Close">×</button>
+      </div>
+      <table class="pc-table">
+        <thead><tr><th></th><th class="pc-grid">${hours.map((h) => `<i class="pc-hh">${hh(h)}</i>`).join("")}</th><th class="pc-num">MEAN</th><th class="pc-num">PEAK</th><th class="pc-num">WORST</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="pc-legend"><span>FREE</span>${legend}<span>STOPPED</span><span class="pc-none-key"><i class="pc-cell pc-none"></i> not measured</span></div>
+      <div class="pc-foot" id="pc-foot">${p.records} archived readings · ${p.samples} measured district-samples · ${hours.length} of 24 hours covered</div>
+      <div class="pc-events" id="pc-events"></div>`;
+    (el.querySelector("#pc-close") as HTMLButtonElement)?.addEventListener("click", () => {
+      this.patternsOpen = false;
+      el.classList.remove("open");
+      this.historyBar.querySelector("#hb-patterns")?.classList.remove("on");
+    });
+
+    // Events come from their own monthly file, so they arrive after the grid
+    // rather than holding it up.
+    const target = el.querySelector("#pc-events") as HTMLElement | null;
+    if (!target) return;
+    let events: ArchiveEvent[] = [];
+    try {
+      const months = new Set<string>();
+      for (const r of [recs[0], recs[recs.length - 1]]) {
+        const d = new Date(r.t);
+        months.add(`${d.getUTCFullYear()}-${d.getUTCMonth() + 1}`);
+      }
+      for (const m of months) {
+        const [y, mo] = m.split("-").map(Number);
+        events.push(...(await this.archive.events(y, mo)));
+      }
+    } catch {
+      events = [];
+    }
+    if (!events.length) {
+      target.innerHTML = `<div class="pc-empty">NO INCIDENTS OR BRIDGE OPENINGS ARCHIVED IN THIS WINDOW</div>`;
+      return;
+    }
+    const impacts = eventImpacts(recs, events, this.data.meta.districts);
+    const byType = impactByType(impacts).filter((t) => t.measured > 0);
+    if (!byType.length) {
+      target.innerHTML = `<div class="pc-empty">${events.length} EVENTS ARCHIVED, NONE OVERLAPPING A MEASURED READING</div>`;
+      return;
+    }
+    const signed = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(1)}`;
+    target.innerHTML = `
+      <div class="pc-eyebrow">WHAT EACH KIND COSTS ITS OWN DISTRICT</div>
+      <table class="pc-table pc-ev">
+        <tbody>${byType
+          .map(
+            (t) => `<tr>
+              <th>${escapeHtml(t.type.replace("-", " ").toUpperCase())}</th>
+              <td class="pc-num">${signed(t.meanDelta)} pts</td>
+              <td class="pc-num pc-dim">${t.measured} of ${t.events} measured</td>
+            </tr>`
+          )
+          .join("")}</tbody>
+      </table>
+      <div class="pc-foot">Against the same district's own congestion while nothing was open there — not against the city, because a busy district is not an incident.</div>`;
+  }
+
   private closeHistory() {
     this.historyBar?.classList.remove("open");
+    this.patternsCard?.classList.remove("open");
+    this.patternsOpen = false;
+    this.historyBar?.querySelector("#hb-patterns")?.classList.remove("on");
   }
 
   private renderHistoryMessage(msg: string) {

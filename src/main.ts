@@ -2,7 +2,7 @@ import "./style.css";
 import * as THREE from "three";
 import { buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
-import { buildCity, buildDistrictBounds, syncFog, setAmbient, RoofStreamer } from "./render/city";
+import { buildCity, buildDistrictBounds, syncFog, setAmbient, releaseToGPU, RoofStreamer } from "./render/city";
 import type { RoofIndex } from "./data/loader";
 import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveIncidentsLayer } from "./render/dynamic";
 import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit";
@@ -115,7 +115,9 @@ async function boot() {
   const data = await loadCity(dataBase, paintBoot, startSim);
   paintBoot("grid", 1);
   paintBoot("signals", 1);
-  if (!simReady) startSim(data.graphBuffer, data.meta);
+  if (!simReady) startSim(data.graphBuffer!, data.meta);
+  // the worker has its copy; this one is 11 MB of bytes nobody will read again
+  data.graphBuffer = null;
 
   const meshes = await buildCity(data, scene.scene, (f) => paintBoot("structures", 0.55 + f * 0.45));
   paintBoot("structures", 1);
@@ -131,6 +133,7 @@ async function boot() {
   const congestion = new CongestionLayer(data.graph);
   const transit = new TransitLayer(data.transit);
   const districtLines = buildDistrictBounds(data.districtBounds);
+  releaseToGPU(districtLines.geometry); // fixed boundaries, drawn once, never edited
   const ndwLayer = new NdwLayer(data.ndw?.stations ?? []);
   const airLayer = new AirLayer();
   const fixesLayer = new LiveTransitLayer();
@@ -157,6 +160,30 @@ async function boot() {
     // analysis still has it as null here — the annotation restores the truth
     (worker as Worker | null)?.terminate();
     worker = null;
+
+    // One retry, from the other side of the memory peak.
+    //
+    // The first attempt deliberately starts the moment graph.bin lands, to
+    // overlap worker init with the rest of the download — but that instant is
+    // also when this tab is heaviest, with the city's geometry still held in
+    // JavaScript on its way to the GPU. Measured on a phone-sized viewport,
+    // the difference either side of buildCity is 217 MB against 90. A worker
+    // refused for memory at the peak may well be granted after it.
+    //
+    // The graph is re-fetched rather than kept for the occasion: holding 11 MB
+    // against a retry that usually never happens is exactly the wrong trade,
+    // and this path can afford a download.
+    await new Promise((r) => setTimeout(r, 400)); // let the collector catch up
+    try {
+      const buf = await (await fetch(`${dataBase}graph.bin`)).arrayBuffer();
+      startSim(buf, data.meta);
+      await simReady!;
+      simError = null;
+    } catch (retryErr) {
+      simError = (retryErr as Error)?.message ?? String(retryErr);
+      (worker as Worker | null)?.terminate();
+      worker = null;
+    }
     paintBoot("sim", 1);
   }
   const sim = (worker as Worker | null) ?? inertWorker();

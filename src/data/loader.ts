@@ -165,7 +165,13 @@ export interface CityData {
   roads: PolylineSet;
   rail: PolylineSet;
   graph: Graph;
-  graphBuffer: ArrayBuffer; // raw copy for the sim worker
+  /**
+   * Raw graph bytes for the sim worker, which gets its own copy — the worker
+   * is started mid-load, before the main thread has finished parsing these,
+   * so the buffer cannot simply be transferred. Cleared once the worker has
+   * been handed its copy: 11 MB nothing reads again.
+   */
+  graphBuffer: ArrayBuffer | null;
   water: { verts: Float32Array; tris: Uint32Array };
   buildings: BuildingTile[];
   transit: TransitRoute[];

@@ -554,6 +554,7 @@ export class RoofStreamer {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const shells = parseRoofTile(await res.arrayBuffer());
       const near = buildNearTileMesh(st.tile, shells);
+      releaseToGPU(near.geometry); // streamed in, written once, disposed on the way out
       near.userData.tileKey = key;
       near.visible = false;
       this.group.add(near);
@@ -639,6 +640,33 @@ export interface CityMeshes {
   buildings: THREE.Group;
 }
 
+/**
+ * Hand a geometry to the GPU and stop holding a second copy in JavaScript.
+ *
+ * Three.js keeps every vertex and index array alive on the heap after
+ * uploading it, so it can re-upload on demand. For the static city that costs
+ * 93 MB — buildings 44, road and water meshes 34, line work 15 — of arrays
+ * nothing will ever read again. On a phone that is the difference between the
+ * simulation worker being allowed to start and being refused.
+ *
+ * Only ever for geometry that is written once. Anything with a dynamic
+ * attribute (the congestion colours, agent instance buffers, the live vehicle
+ * points) must keep its arrays: dropping those would break the next update.
+ *
+ * The bounding sphere is computed first, because three.js would otherwise
+ * derive it lazily from the very array being released. The accepted cost is
+ * that a lost WebGL context cannot be restored without a reload.
+ */
+export function releaseToGPU(geo: THREE.BufferGeometry) {
+  if (!geo.boundingSphere) geo.computeBoundingSphere();
+  const drop = (a: THREE.BufferAttribute) =>
+    a.onUpload(function (this: THREE.BufferAttribute) {
+      (this as unknown as { array: null }).array = null;
+    });
+  for (const a of Object.values(geo.attributes)) drop(a as THREE.BufferAttribute);
+  if (geo.index) drop(geo.index);
+}
+
 export async function buildCity(
   data: CityData,
   scene: THREE.Scene,
@@ -653,5 +681,10 @@ export async function buildCity(
   scene.add(ground, water, roads, junctions, roadLines, rail);
   const buildings = await buildBuildings(data.buildings, onStructures);
   scene.add(buildings);
+  for (const m of [ground, water, roads, junctions, roadLines, rail]) releaseToGPU(m.geometry);
+  buildings.traverse((o) => {
+    const g = (o as THREE.Mesh).geometry;
+    if (g) releaseToGPU(g);
+  });
   return { ground, water, roads, junctions, roadLines, rail, buildings };
 }
