@@ -110,7 +110,7 @@ export function buildChrome(root: HTMLElement) {
         </div>
 
         <div id="layers-pop" class="brk">${TICKS}
-          <div class="lp-title">Map layers</div>
+          <div class="lp-title">Map layers<button id="lp-close" aria-label="Close layers">✕</button></div>
           <label><input type="checkbox" data-layer="buildings" checked /><span class="box"></span>Structures</label>
           <label><input type="checkbox" data-layer="roads" checked /><span class="box"></span>Road network</label>
           <label><input type="checkbox" data-layer="signals" checked /><span class="box"></span>Signal units</label>
@@ -241,6 +241,7 @@ export function buildChrome(root: HTMLElement) {
     zoomOut: $("#zoom-out"),
     layersBtn: $("#layers-btn"),
     layersPop: $("#layers-pop"),
+    lpClose: $<HTMLButtonElement>("#lp-close"),
     layerBoxes: Array.from(root.querySelectorAll<HTMLInputElement>("#layers-pop input[data-layer]")),
     toasts: $("#toasts"),
     pageBrief: $("#page-brief"),
