@@ -17,11 +17,10 @@
 import { writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inflateRawSync } from "node:zlib";
+import { zipIndex, findEntry, readEntry, splitCsv, header as headerOf } from "./lib/gtfs-zip.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "data", "gtfs-stops.json");
-const URL_ZIP = "https://gtfs.ovapi.nl/nl/gtfs-nl.zip";
 
 // Wider than the sim bbox on purpose: a departure board names a trip's final
 // stop, and RET metro runs well past the modelled area — line B to Hoek van
@@ -34,136 +33,18 @@ const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
 const px = (lon) => +(((lon - ORIGIN.lon) * M_PER_LON).toFixed(1));
 const py = (lat) => +(((lat - ORIGIN.lat) * M_PER_LAT).toFixed(1));
 
-const UA = { "User-Agent": "rotterdam-intelligence-platform/1.0 (research; contact via github)" };
-
-/** Fetch bytes [from, to] inclusive. */
-async function range(from, to) {
-  const res = await fetch(URL_ZIP, {
-    headers: { ...UA, Range: `bytes=${from}-${to}` },
-    signal: AbortSignal.timeout(180_000),
-  });
-  if (res.status !== 206) throw new Error(`range ${from}-${to}: HTTP ${res.status} (server must support byte ranges)`);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-async function totalSize() {
-  const res = await fetch(URL_ZIP, { method: "HEAD", headers: UA, signal: AbortSignal.timeout(60_000) });
-  if (!res.ok) throw new Error(`HEAD: HTTP ${res.status}`);
-  const len = Number(res.headers.get("content-length"));
-  if (!Number.isFinite(len) || len <= 0) throw new Error("no content-length on the zip");
-  return len;
-}
-
-/** Locate the central directory, following the ZIP64 records when present. */
-async function centralDirectory(size) {
-  const tailLen = Math.min(size, 66_000); // EOCD + max comment
-  const tail = await range(size - tailLen, size - 1);
-  const eocd = tail.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
-  if (eocd === -1) throw new Error("no end-of-central-directory record found");
-  let cdSize = tail.readUInt32LE(eocd + 12);
-  let cdOff = tail.readUInt32LE(eocd + 16);
-  let count = tail.readUInt16LE(eocd + 10);
-
-  // ZIP64: the 32-bit fields saturate and the real values live in EOCD64
-  if (cdOff === 0xffffffff || cdSize === 0xffffffff || count === 0xffff) {
-    const loc = tail.lastIndexOf(Buffer.from([0x50, 0x4b, 0x06, 0x07]));
-    if (loc === -1) throw new Error("zip64 expected but no locator found");
-    const eocd64Off = Number(tail.readBigUInt64LE(loc + 8));
-    const e64 = await range(eocd64Off, eocd64Off + 55);
-    if (e64.readUInt32LE(0) !== 0x06064b50) throw new Error("bad zip64 end-of-central-directory signature");
-    count = Number(e64.readBigUInt64LE(32));
-    cdSize = Number(e64.readBigUInt64LE(40));
-    cdOff = Number(e64.readBigUInt64LE(48));
-  }
-  const cd = await range(cdOff, cdOff + cdSize - 1);
-  return { cd, count };
-}
-
-/** Find one entry by name in a parsed central directory. */
-function findEntry(cd, count, want) {
-  let p = 0;
-  for (let i = 0; i < count && p + 46 <= cd.length; i++) {
-    if (cd.readUInt32LE(p) !== 0x02014b50) throw new Error(`bad central directory entry at ${p}`);
-    const method = cd.readUInt16LE(p + 10);
-    let compSize = cd.readUInt32LE(p + 20);
-    let uncompSize = cd.readUInt32LE(p + 24);
-    const nameLen = cd.readUInt16LE(p + 28);
-    const extraLen = cd.readUInt16LE(p + 30);
-    const commentLen = cd.readUInt16LE(p + 32);
-    let localOff = cd.readUInt32LE(p + 42);
-    const name = cd.toString("utf8", p + 46, p + 46 + nameLen);
-
-    // ZIP64 extended information overrides the saturated 32-bit fields, in a
-    // fixed order but only for the fields that actually saturated
-    if (uncompSize === 0xffffffff || compSize === 0xffffffff || localOff === 0xffffffff) {
-      let e = p + 46 + nameLen;
-      const end = e + extraLen;
-      while (e + 4 <= end) {
-        const tag = cd.readUInt16LE(e);
-        const len = cd.readUInt16LE(e + 2);
-        if (tag === 0x0001) {
-          let q = e + 4;
-          if (uncompSize === 0xffffffff) { uncompSize = Number(cd.readBigUInt64LE(q)); q += 8; }
-          if (compSize === 0xffffffff) { compSize = Number(cd.readBigUInt64LE(q)); q += 8; }
-          if (localOff === 0xffffffff) { localOff = Number(cd.readBigUInt64LE(q)); q += 8; }
-          break;
-        }
-        e += 4 + len;
-      }
-    }
-    if (name === want || name.endsWith(`/${want}`)) return { name, method, compSize, uncompSize, localOff };
-    p += 46 + nameLen + extraLen + commentLen;
-  }
-  return null;
-}
-
-/** Range-read one entry's bytes and inflate. */
-async function readEntry(entry) {
-  // the local header repeats name/extra with its own lengths, so read it first
-  const head = await range(entry.localOff, entry.localOff + 29);
-  if (head.readUInt32LE(0) !== 0x04034b50) throw new Error("bad local file header signature");
-  const nameLen = head.readUInt16LE(26);
-  const extraLen = head.readUInt16LE(28);
-  const dataOff = entry.localOff + 30 + nameLen + extraLen;
-  const raw = await range(dataOff, dataOff + entry.compSize - 1);
-  if (entry.method === 0) return raw;
-  if (entry.method !== 8) throw new Error(`unsupported zip compression method ${entry.method}`);
-  return inflateRawSync(raw, { maxOutputLength: 512 * 1024 * 1024 });
-}
-
-/** Minimal RFC4180 CSV row splitter (GTFS quotes names containing commas). */
-function splitCsv(line) {
-  const out = [];
-  let cur = "";
-  let q = false;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i];
-    if (q) {
-      if (c === '"') {
-        if (line[i + 1] === '"') { cur += '"'; i++; } else q = false;
-      } else cur += c;
-    } else if (c === '"') q = true;
-    else if (c === ",") { out.push(cur); cur = ""; }
-    else cur += c;
-  }
-  out.push(cur);
-  return out;
-}
-
 async function main() {
   console.log("reading the national GTFS zip index over range requests…");
-  const size = await totalSize();
-  console.log(`  zip is ${(size / 1e6).toFixed(0)} MB`);
-  const { cd, count } = await centralDirectory(size);
-  console.log(`  central directory: ${count} entries`);
-  const entry = findEntry(cd, count, "stops.txt");
+  const entries = await zipIndex();
+  console.log(`  central directory: ${entries.size} entries`);
+  const entry = findEntry(entries, "stops.txt");
   if (!entry) throw new Error("stops.txt not present in the zip");
   console.log(`  stops.txt: ${(entry.compSize / 1e6).toFixed(1)} MB compressed → ${(entry.uncompSize / 1e6).toFixed(1)} MB`);
   const csv = (await readEntry(entry)).toString("utf8");
 
   const lines = csv.split("\n");
-  const header = splitCsv(lines[0].replace(/^﻿/, "").trim());
-  const col = (n) => header.indexOf(n);
+  const cols = headerOf(lines[0]);
+  const col = (n) => cols.indexOf(n);
   const cId = col("stop_id");
   const cName = col("stop_name");
   const cLat = col("stop_lat");

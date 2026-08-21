@@ -13,12 +13,14 @@
     "fetch-ndw": "NODE_USE_ENV_PROXY=1 node scripts/fetch-ndw.mjs",
     "fetch-live": "NODE_USE_ENV_PROXY=1 node scripts/fetch-live.mjs",
     "fetch-stops": "NODE_USE_ENV_PROXY=1 node scripts/fetch-gtfs-stops.mjs",
+    "fetch-routes": "NODE_USE_ENV_PROXY=1 node scripts/fetch-gtfs-routes.mjs",
     "fetch-timetable": "NODE_USE_ENV_PROXY=1 node scripts/fetch-gtfs-timetable.mjs",
     "fetch-heights": "NODE_USE_ENV_PROXY=1 node scripts/fetch-heights.mjs",
     "fetch-roofs": "NODE_USE_ENV_PROXY=1 node scripts/fetch-lod2.mjs",
     "apply-heights": "node scripts/apply-heights.mjs",
     "audit-buildings": "node scripts/audit-buildings.mjs",
-    "check-workflows": "node scripts/check-publish-guards.mjs"
+    "check-workflows": "node scripts/check-publish-guards.mjs",
+    "check-timetable": "NODE_USE_ENV_PROXY=1 node scripts/check-timetable.mjs"
   },
   "dependencies": {
     "earcut": "^3.2.3",

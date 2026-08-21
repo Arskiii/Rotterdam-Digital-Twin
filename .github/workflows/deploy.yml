@@ -72,6 +72,60 @@ jobs:
       - id: deployment
         uses: actions/deploy-pages@v4
 
+  # The timetable behind every moving vehicle and every departure board, kept
+  # from going stale.
+  #
+  # It is an 8 MB binary built from two streams of a 1 GB file, so it cannot be
+  # rebuilt per refresh; and committing it weekly would put 400 MB of binary
+  # into git history a year. So it lives in the Actions cache under a key that
+  # turns over with the ISO week: every tick restores it in seconds, and the
+  # first tick of a new week pays the four minutes to rebuild.
+  #
+  # Decay here is silent, which is why it is worth a job at all. A route_id
+  # missing from the route table is a vehicle dropped from the snapshot
+  # outright; a trip whose calendar has run out is a vehicle frozen on the map.
+  # Neither raises an error — the city just gets quieter.
+  #
+  # A rebuild that produces something worse than what we already have must not
+  # be kept: check-timetable gates it, so a bad feed leaves the committed files
+  # in place rather than caching a broken artifact for the rest of the week.
+  timetable:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Which week is it
+        id: wk
+        run: echo "key=gtfs-v1-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore this week's timetable
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            data/ret-timetable.bin
+            data/gtfs-stops.json
+            data/gtfs-routes.json
+          key: ${{ steps.wk.outputs.key }}
+
+      - name: Rebuild, because the week has turned
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          npm run fetch-routes
+          npm run fetch-stops
+          npm run fetch-timetable
+          # has to cover the fortnight ahead, or it does not get cached
+          npm run check-timetable -- --days 14
+
+      - name: Say what we have
+        run: npm run check-timetable
+
   # Publish the live city snapshot to the `live` branch and fold it into the
   # historical archive on the `archive` branch.
   #
@@ -97,6 +151,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+
+      # Whatever the timetable job last built. Restore-only: this job never
+      # writes the cache, so a run cancelled mid-loop cannot save a half-built
+      # one. A miss simply leaves the committed files, which is the floor.
+      - name: Which week is it
+        id: wk
+        run: echo "key=gtfs-v1-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        with:
+          path: |
+            data/ret-timetable.bin
+            data/gtfs-stops.json
+            data/gtfs-routes.json
+          key: ${{ steps.wk.outputs.key }}
 
       - name: Check out the archive branch
         run: |
