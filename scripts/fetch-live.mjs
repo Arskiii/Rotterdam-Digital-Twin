@@ -601,14 +601,26 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips 
     }
   }
 
+  // A board belongs to a platform you can see. Filtering trips by geography
+  // brings in whole networks that merely touch Rotterdam — HTM's Scheveningen
+  // trams, the Waterbus down to Dordrecht — and their stops were being
+  // published as clickable markers up to 15 km beyond the edge of the drawn
+  // city, floating over nothing. The stop table stays wide on purpose, because
+  // a metro running out to Hoek van Holland still needs those coordinates for
+  // its path; it is only the boards that are clipped.
+  const extent = JSON.parse(readFileSync(join(ROOT, "public", "data", "meta.json"), "utf8")).extent;
+  const onMap = (x, y) => x >= extent.minX && x <= extent.maxX && y >= extent.minY && y <= extent.maxY;
   const stops = {};
   const dep = {};
+  let offMap = 0;
   for (const [key, st] of stations) {
     if (!st.rows.length) continue;
+    if (!onMap(st.x, st.y)) { offMap++; continue; }
     st.rows.sort((a, b) => a[3] - b[3]);
     stops[key] = [st.name, st.x, st.y];
     dep[key] = st.rows.slice(0, PER_STOP);
   }
+  if (offMap) console.log(`    ${offMap} board stations dropped as outside the drawn map`);
   // planT, not t: the waypoint offsets are counted from the instant the
   // timetable was walked, and the walk itself takes a second or two
   return { t: new Date().toISOString(), planT: nowSec, stops, dep, liveTrips, plans };
