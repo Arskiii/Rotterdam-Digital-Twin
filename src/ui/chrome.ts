@@ -126,6 +126,7 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="air" /><span class="box"></span>Air quality</label>
           <label><input type="checkbox" data-layer="fixes" checked /><span class="box"></span>Transit RT fixes</label>
           <label><input type="checkbox" data-layer="labels" checked /><span class="box"></span>Unit labels</label>
+          <div class="lp-note" id="lp-synthetic">Vehicle, bike and pedestrian tracks are modelled traffic on the real street graph, obeying the real signals. Volume follows Rotterdam's clock and the measured sensor flows; no individual car is a real one.</div>
         </div>
 
         <div id="toasts"></div>

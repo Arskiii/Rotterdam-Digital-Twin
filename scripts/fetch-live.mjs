@@ -472,7 +472,7 @@ async function fetchTripDelays() {
  * Buses are left out on purpose: they would multiply the snapshot several
  * times over for a fleet the platform does not model.
  */
-async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
+async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips = null) {
   const tt = loadTimetable();
   const stopTable = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
   const delays = await fetchTripDelays();
@@ -483,10 +483,17 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
   // A path has to outlast the delivery path: the CDN in front of the live
   // branch caps freshness at five minutes, so anything shorter than about
   // seven runs out before the next snapshot arrives. Bus stops are a few
-  // hundred metres apart, which is roughly ten calls; rail rarely reaches ten
-  // inside the horizon at all.
+  // hundred metres apart, which is roughly ten calls.
+  //
+  // There is no separate time horizon on a path: a count is the honest bound,
+  // and a time limit only cost coverage. A vehicle reported on a trip that
+  // departs in half an hour is sitting at its origin waiting to start, and
+  // capping paths at twenty minutes left seven such vehicles a night with no
+  // path at all — frozen on the map for want of a first waypoint to wait at.
   const PLAN_STOPS = 10;
-  const PLAN_HORIZON = 20 * 60;
+  // How far ahead a trip can start and still be worth a path. The board keeps
+  // its own tighter window per row; this only decides which trips are walked.
+  const PLAN_LOOKAHEAD = 90 * 60;
 
   // A service day runs past midnight, so yesterday's late trips are still
   // arriving; both dates are scanned against their own local midnight.
@@ -519,14 +526,23 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
     if (rt?.cancelled) continue;
     const set = tt.dateSets[trip.dates];
     const shift = rt?.delay ?? 0;
+    // A vehicle reported on this trip right now is itself evidence that it is
+    // running, whatever the calendar in the timetable extract says. Calendars
+    // and the position feed drift apart — seven vehicles a snapshot were on
+    // trips the extract only lists for yesterday — and a service the operator
+    // is actively reporting is not one to leave frozen for a stale date set.
+    // The board is not given this benefit: a row there is a promise about a
+    // service, and only the published calendar can make that promise.
+    const reported = onlyTrips?.has(trip.id) ?? false;
     for (const day of days) {
-      if (!set.has(day.date)) continue;
+      const onCalendar = set.has(day.date);
+      if (!onCalendar && !(reported && day === days[days.length - 1])) continue;
       // whole-trip window check before touching individual calls
       const n = trip.callSec.length;
       if (!n) continue;
       const firstAt = day.base + trip.callSec[0] * 2 + shift;
       const lastAt = day.base + trip.callSec[n - 1] * 2 + shift;
-      if (lastAt < nowSec - 60 || firstAt > nowSec + HORIZON) continue;
+      if (lastAt < nowSec - 60 || firstAt > nowSec + PLAN_LOOKAHEAD) continue;
       if (rt?.live) liveTrips++;
       const dest = tt.headsigns[trip.head] || "";
 
@@ -540,21 +556,28 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
       // or sprint to reconcile a measurement that is already two minutes old
       // and reported at stop granularity — lateness the operator never
       // reported and the schedule does not support.
-      const wp = [];
+      // A path is only ever used to move a vehicle that exists. Building one
+      // for every trip in the window cost 254 KB a snapshot to describe
+      // thousands of services nobody could see; restricting it to the trips
+      // the position feed actually reports leaves the same coverage at a
+      // fraction of the weight.
+      const wp = onlyTrips && !onlyTrips.has(trip.id) ? null : [];
       let prevCall = null;
-      for (let k = 0; k < n; k++) {
-        const at = Math.round(day.base + trip.callSec[k] * 2 + shift - nowSec);
-        const stop = stopTable[tt.stops[trip.callStop[k]]];
-        if (!stop) continue;
-        // only the most recent past call is kept: it is where this leg began
-        // whole metres: sub-metre precision on a projected position is noise,
-        // and it is noise repeated a few thousand times per snapshot
-        const call = [Math.round(stop.x), Math.round(stop.y), at];
-        if (at < 0) { prevCall = call; continue; }
-        if (at > PLAN_HORIZON || wp.length >= PLAN_STOPS) break;
-        wp.push(call);
+      if (wp) {
+        for (let k = 0; k < n; k++) {
+          const at = Math.round(day.base + trip.callSec[k] * 2 + shift - nowSec);
+          const stop = stopTable[tt.stops[trip.callStop[k]]];
+          if (!stop) continue;
+          // only the most recent past call is kept: it is where this leg began,
+          // and whole metres, because sub-metre precision on a projected
+          // position is noise repeated a few thousand times per snapshot
+          const call = [Math.round(stop.x), Math.round(stop.y), at];
+          if (at < 0) { prevCall = call; continue; }
+          if (wp.length >= PLAN_STOPS) break;
+          wp.push(call);
+        }
+        if (wp.length) plans[trip.id] = prevCall ? [prevCall, ...wp] : wp;
       }
-      if (wp.length) plans[trip.id] = prevCall ? [prevCall, ...wp] : wp;
 
       // Buses get a path but never a board row: RET runs 80 bus routes to 17
       // rail ones, and putting every bus stop on the departure boards would
@@ -562,7 +585,7 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000)) {
       // a question the platform is not trying to answer. Metro, tram and the
       // Waterbus piers do get boards; twelve piers is a rounding error next to
       // 215 stations, and "when is the next sailing" is the same question.
-      for (let k = 0; k < n && trip.kind !== 2; k++) {
+      for (let k = 0; k < n && trip.kind !== 2 && onCalendar; k++) {
         if (k === n - 1) continue; // nobody boards at the terminus
         const at = day.base + trip.callSec[k] * 2 + shift;
         if (at < nowSec - 60 || at > nowSec + HORIZON) continue;
@@ -711,7 +734,10 @@ async function main() {
     [
       "departures",
       async () => {
-        const d = await fetchDepartures();
+        // the trips a vehicle is actually reported on — everything else needs
+        // a board row but never a path
+        const running = new Set((out.vehicles?.v ?? []).map((v) => v[4]).filter(Boolean));
+        const d = await fetchDepartures(undefined, running);
         const { plans, planT, ...rest } = d;
         out.departures = rest;
         // The plans belong with the vehicles they steer, and vehicles is
@@ -760,4 +786,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   });
 }
 
-export { fetchDepartures };
+export { fetchDepartures, loadTimetable, serviceMidnight, serviceDateNum };

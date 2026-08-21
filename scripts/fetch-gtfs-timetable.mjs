@@ -102,6 +102,23 @@ function splitCsv(line) {
 
 const header = (line) => splitCsv(line.replace(/^﻿/, "").trim());
 
+/**
+ * The nth comma-separated field, without allocating an array for the rest.
+ *
+ * Only for stop_times.txt, whose values are ids, clock times and integers —
+ * no quoting, so a comma scan is exact. Called ~40M times across the two
+ * passes, where splitCsv would dominate the runtime.
+ */
+function field(line, idx) {
+  let from = 0;
+  for (let i = 0; i < idx; i++) {
+    from = line.indexOf(",", from) + 1;
+    if (from === 0) return "";
+  }
+  const to = line.indexOf(",", from);
+  return to === -1 ? line.slice(from) : line.slice(from, to);
+}
+
 /** "25:14:00" → seconds after midnight (GTFS lets a service run past 24h). */
 function gtfsSeconds(hms) {
   const p = hms.split(":");
@@ -115,25 +132,75 @@ function gtfsSeconds(hms) {
 
 async function main() {
   const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
-  // Every operator whose vehicles the map draws in the Rotterdam area: RET's
-  // metro (route_type 1), tram (0) and bus (3), plus the two ferry operators
-  // on the Maas. Buses never reach the departure boards — 80 bus routes to 17
-  // rail ones would multiply the station list several times over — but they
-  // are the majority of the vehicles on screen, and without a timetable every
-  // one of them stands still between position fixes.
-  const OPERATORS = new Set(["RET", "Waterbus", "WaterShuttle"]);
-  const KIND_OF = { 0: 0, 1: 1, 3: 2, 2: 3, 4: 4 }; // GTFS route_type → our kind
-  const wanted = new Map(); // routeId → [line, kind]
+  // Which routes can matter, by geography rather than by operator.
+  //
+  // Filtering on a list of operator names left 43 of the 172 buses on screen
+  // frozen: they run for EBS, Connexxion, Qbuzz and Arriva, and adding those
+  // names would have pulled four national bus timetables — Groningen to
+  // Zeeland — into the repo to reach a few dozen vehicles in Rotterdam. What
+  // actually decides whether a trip can appear is whether it calls anywhere
+  // near the area the map draws, so that is the test.
+  //
+  // route_type 2 (heavy rail) is left out on purpose: NS publishes no vehicle
+  // positions to OVapi — zero trains in the live feed — so their timetables
+  // would be weight nothing could ever draw.
+  const KIND_OF = { 0: 0, 1: 1, 3: 2, 4: 4 }; // GTFS route_type → our kind
+  const drawable = new Map(); // routeId → [line, kind]
   for (const [id, r] of Object.entries(routes)) {
-    if (!OPERATORS.has(r[0])) continue;
     const kind = KIND_OF[r[2]];
-    if (kind !== undefined) wanted.set(id, [r[1], kind]);
+    if (kind !== undefined) drawable.set(id, [r[1], kind]);
   }
-  console.log(`routes: ${wanted.size} across ${OPERATORS.size} operators`);
+
+  // The area the live fetcher draws vehicles in (its BBOX), plus 3 km so a
+  // service that stops just outside but runs through is still kept. Stop
+  // coordinates come from data/gtfs-stops.json, already in this projection.
+  const ORIGIN = { lat: 51.92, lon: 4.48 };
+  const M_PER_LAT = 110574;
+  const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
+  const DRAWN = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 };
+  const MARGIN = 3000;
+  const bx0 = (DRAWN.w - ORIGIN.lon) * M_PER_LON - MARGIN;
+  const bx1 = (DRAWN.e - ORIGIN.lon) * M_PER_LON + MARGIN;
+  const by0 = (DRAWN.s - ORIGIN.lat) * M_PER_LAT - MARGIN;
+  const by1 = (DRAWN.n - ORIGIN.lat) * M_PER_LAT + MARGIN;
+  const stopTable = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
+  const local = new Set();
+  for (const [id, s] of Object.entries(stopTable)) {
+    if (s.x >= bx0 && s.x <= bx1 && s.y >= by0 && s.y <= by1) local.add(id);
+  }
+  console.log(`${drawable.size} drawable routes nationally; ${local.size} stops inside the drawn area`);
 
   const entries = await zipIndex();
   const need = ["trips.txt", "stop_times.txt", "calendar_dates.txt"];
   for (const n of need) if (!entries.has(n)) throw new Error(`${n} missing from the zip`);
+
+  // ---- 0. stop_times.txt, first pass → which trips call in the area ----
+  // A whole extra stream of the 1 GB file. It buys the geographic filter: the
+  // alternative is buffering every call of every candidate trip nationally and
+  // discarding most of them, which does not fit in memory.
+  console.log("streaming stop_times.txt, pass 1 of 2 (which trips come here)…");
+  const localTrips = new Set();
+  {
+    let cols = null;
+    let n = 0;
+    for await (const line of entryLines(entries.get("stop_times.txt"))) {
+      if (!cols) {
+        const h = header(line);
+        cols = { t: h.indexOf("trip_id"), s: h.indexOf("stop_id") };
+        if (cols.t < 0 || cols.s < 0) throw new Error("stop_times.txt is missing required columns");
+        continue;
+      }
+      if (!line) continue;
+      if (++n % 5_000_000 === 0) console.log(`    ${(n / 1e6).toFixed(0)}M rows scanned, ${localTrips.size} trips so far`);
+      // 19M rows: read the two fields by scanning commas rather than paying
+      // for a full CSV split per row. stop_times carries no quoted values.
+      const tripId = field(line, cols.t);
+      if (!tripId || localTrips.has(tripId)) continue;
+      if (local.has(field(line, cols.s))) localTrips.add(tripId);
+    }
+    console.log(`  ${(n / 1e6).toFixed(1)}M rows → ${localTrips.size} trips call inside the area`);
+  }
+  if (!localTrips.size) throw new Error("no trips call inside the drawn area — check data/gtfs-stops.json");
 
   // ---- 1. trips.txt → the in-scope trips and their service days ----
   console.log("streaming trips.txt…");
@@ -151,16 +218,18 @@ async function main() {
       }
       if (!line) continue;
       n++;
-      // cheap reject before paying for a full CSV split
+      // cheap rejects before paying for a full CSV split: most trips never
+      // come near Rotterdam, and most of those that do are not drawable
+      if (!localTrips.has(field(line, cols.t))) continue;
       const f = splitCsv(line);
-      const w = wanted.get(f[cols.r]);
+      const w = drawable.get(f[cols.r]);
       if (!w) continue;
       trips.set(f[cols.t], { line: w[0], kind: w[1], service: f[cols.s], headsign: cols.hs >= 0 ? f[cols.hs] : "" });
       services.add(f[cols.s]);
     }
     console.log(`  ${n} trips nationally → ${trips.size} in-scope trips, ${services.size} service ids`);
   }
-  if (!trips.size) throw new Error("no trips matched the operator list — check data/gtfs-routes.json");
+  if (!trips.size) throw new Error("no drawable trips call in the area — check data/gtfs-routes.json");
 
   // ---- 2. calendar_dates.txt → which dates each service runs ----
   console.log("streaming calendar_dates.txt…");
@@ -186,8 +255,8 @@ async function main() {
     console.log(`  ${serviceDates.size} services span ${days.size} calendar dates`);
   }
 
-  // ---- 3. stop_times.txt → scheduled calls, in-scope trips only (1 GB streamed) ----
-  console.log("streaming stop_times.txt (1 GB, filtered on the fly)…");
+  // ---- 3. stop_times.txt, second pass → the calls themselves ----
+  console.log("streaming stop_times.txt, pass 2 of 2 (the calls)…");
   const calls = new Map(); // tripId → [{ seq, stop, sec }]
   {
     let cols = null;
@@ -205,10 +274,8 @@ async function main() {
       }
       if (!line) continue;
       if (++n % 5_000_000 === 0) console.log(`    ${(n / 1e6).toFixed(0)}M rows scanned, ${kept} kept`);
-      // trip_id is the first column in the Dutch feed; testing it before the
-      // full split keeps this loop from being dominated by CSV parsing
-      const comma = line.indexOf(",");
-      const tripId = comma > 0 ? line.slice(0, comma) : "";
+      // test the trip before paying for a full CSV split of the row
+      const tripId = field(line, cols.t);
       if (!trips.has(tripId)) continue;
       const f = splitCsv(line);
       const sec = gtfsSeconds(f[cols.d] || f[cols.a] || "");
