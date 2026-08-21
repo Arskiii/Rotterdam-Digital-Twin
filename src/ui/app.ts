@@ -63,8 +63,36 @@ export class App {
    *
    * Decided once rather than on resize because the worker is started during
    * boot: a window widened afterwards cannot retroactively have had one.
+   *
+   * Kept character-for-character in step with the phone media query in
+   * style.css, so the markup and the behaviour cannot drift apart. Note what
+   * the query does *not* test: width alone called a phone in landscape —
+   * 844x390, wider than most laptops are tall — a desktop, and handed it a
+   * layout it has no room for. The short side is what stays small when a
+   * device is rotated, so that is what decides.
    */
-  static readonly PHONE = typeof matchMedia === "function" && matchMedia("(max-width: 780px)").matches;
+  static readonly PHONE_MQ = "(max-width: 780px), (max-height: 520px) and (pointer: coarse)";
+  static readonly PHONE = typeof matchMedia === "function" && matchMedia(App.PHONE_MQ).matches;
+  /**
+   * Whether the pointer is a fingertip rather than a cursor.
+   *
+   * Separate from PHONE on purpose: an iPad is not a phone (it gets the
+   * simulation and the full layout) but it is still driven by a finger, and a
+   * phone plugged into a mouse is the reverse. Anything sized for the *hand*
+   * keys off this; anything sized for the *screen* keys off PHONE.
+   */
+  static readonly COARSE = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  /**
+   * How much bigger every screen-space pick radius gets under a finger.
+   *
+   * A fingertip covers roughly 44 CSS px, and the contact point the browser
+   * reports drifts several px from where the user believes they pressed — so a
+   * radius tuned for a cursor asks for an accuracy nobody has. Widening it is
+   * close to free: picking is nearest-wins, so a larger radius only changes
+   * what happens when the nearest target is *far*. Between two adjacent
+   * targets the nearer one still wins, exactly as before.
+   */
+  static readonly PICK = App.COARSE ? 1.9 : 1;
   msgCount = 0;
   density = 5200;
   track: { kind: "agent" | "transit" | "liveTransit"; id: number; key?: string; label: string; missFrames: number } | null = null;
@@ -273,7 +301,7 @@ export class App {
     this.units.forEach((x) => x.el.classList.toggle("sel", x === u));
     this.ui.unitChips.forEach((c) => c.classList.toggle("sel", c.dataset.unit === u.def.id));
     // phones: the card covers half the map — only open it on an explicit tap
-    if (fly || !window.matchMedia("(max-width: 780px)").matches) this.ui.unitCard.classList.add("open");
+    if (fly || !App.PHONE) this.ui.unitCard.classList.add("open");
     this.updateUnitCard();
     this.startPerfLoading();
     if (fly) this.scene.flyTo(new THREE.Vector3(u.x, 0, -u.y), Math.max(2600, Math.min(5200, this.scene.distance)), 1100);
@@ -364,10 +392,17 @@ export class App {
     // zoom / layers
     ui.zoomIn.addEventListener("click", () => this.scene.zoomBy(0.55));
     ui.zoomOut.addEventListener("click", () => this.scene.zoomBy(1.8));
-    ui.layersBtn.addEventListener("click", () => {
-      ui.layersPop.classList.toggle("open");
-      ui.layersBtn.classList.toggle("on", ui.layersPop.classList.contains("open"));
-    });
+    const setLayersOpen = (open: boolean) => {
+      ui.layersPop.classList.toggle("open", open);
+      ui.layersBtn.classList.toggle("on", open);
+    };
+    ui.layersBtn.addEventListener("click", () =>
+      setLayersOpen(!ui.layersPop.classList.contains("open"))
+    );
+    // On a phone the panel is far too big to sit beside the button that opened
+    // it, so it goes where there is room — which means that button is no longer
+    // a way back out. Its own ✕ is.
+    ui.lpClose.addEventListener("click", () => setLayersOpen(false));
     ui.layerBoxes.forEach((box) =>
       box.addEventListener("change", () => {
         this.applyLayer(box.dataset.layer!, box.checked);
@@ -440,9 +475,16 @@ export class App {
         downY = e.clientY;
       }
     });
+    // How far the pointer may travel between press and release and still count
+    // as a tap rather than a drag. A mouse held still moves 0px; a finger
+    // pressed and lifted routinely slides 8-15px without its owner intending
+    // any motion, so a 6px budget rejected most real taps on a phone — the map
+    // simply did not respond. Panning is a continuous gesture and easily clears
+    // the larger budget, so nothing is lost at the other end.
+    const TAP_SLOP = App.COARSE ? 16 : 6;
     this.ui.viewport.addEventListener("pointerup", (e) => {
       if (e.target !== this.scene.renderer.domElement) return;
-      if (Math.hypot(e.clientX - downX, e.clientY - downY) > 6) return;
+      if (Math.hypot(e.clientX - downX, e.clientY - downY) > TAP_SLOP) return;
       // a tap anywhere on the map dismisses the unit pop-up (unit chips and
       // cards sit above the canvas, so their taps never land here)
       this.dismissUnitCard();
@@ -484,7 +526,7 @@ export class App {
     const rect = el.getBoundingClientRect();
     const cx = clientX - rect.left;
     const cy = clientY - rect.top;
-    const RADIUS = 16;
+    const RADIUS = 16 * App.PICK;
     let best: { kind: "agent" | "transit" | "liveTransit"; id: number; key?: string; label: string } | null = null;
     let bd = RADIUS * RADIUS;
 
@@ -497,7 +539,7 @@ export class App {
     const stops = this.layers.stopsLayer;
     const liveLayer = this.layers.fixesLayer;
     let stationHit = -1;
-    let stationD2 = 14 * 14;
+    let stationD2 = (14 * App.PICK) ** 2;
     if (stops?.points.visible && this.live?.departures) {
       for (let i = 0; i < stops.stations.length; i++) {
         const st = stops.stations[i];
@@ -528,7 +570,7 @@ export class App {
     // a precise click on a sensor diamond wins over nearby moving agents
     if (this.layers.ndwLayer.points.visible && this.data.ndw) {
       let bi = -1;
-      let bd2 = 9 * 9;
+      let bd2 = (9 * App.PICK) ** 2;
       for (let i = 0; i < this.data.ndw.stations.length; i++) {
         const s = this.data.ndw.stations[i];
         if (!this.scene.project(s.x, 4, -s.y, this.tmpPt)) continue;
@@ -730,7 +772,7 @@ export class App {
     this.stationCard.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:7px">
         <span style="font-size:9px;letter-spacing:.16em;color:var(--text-faint)">NDW STATION</span>
-        <button id="station-close" style="color:var(--text-dim);font-size:11px;padding:0 2px">✕</button>
+        <button id="station-close" aria-label="Close station card">✕</button>
       </div>
       <div style="font-weight:700;font-size:11.5px;margin-bottom:8px">${(s.name || "UNNAMED SITE").toUpperCase()}</div>
       ${row("MEASURED @ CAPTURE", `${fmtInt(s.flow)} VEH/H`)}
@@ -1055,13 +1097,29 @@ export class App {
    * — the archive stores zero congestion for a district with no reporting
    * station, which is the same number as an empty motorway.
    */
+  /** Close the patterns card and un-press the button that opened it. */
+  private closePatterns() {
+    this.patternsOpen = false;
+    this.patternsCard.classList.remove("open");
+    this.historyBar.querySelector("#hb-patterns")?.classList.remove("on");
+  }
+
   private async renderPatterns() {
     const el = this.patternsCard;
     const recs = this.historyRecords;
     const names = this.data.meta.districts.map((d) => d.name);
+    // The empty state needs its ✕ as much as the full one — more, in fact,
+    // since an empty archive window is the first thing a new visitor opens.
+    // Without it the panel was a dead end on a phone.
+    const closeBtn = `<button id="pc-close" title="Close">×</button>`;
+    const wireClose = () =>
+      (el.querySelector("#pc-close") as HTMLButtonElement | null)?.addEventListener("click", () =>
+        this.closePatterns()
+      );
     if (!recs.length) {
-      el.innerHTML = `<div class="pc-head"><span class="pc-eyebrow">PATTERNS</span></div>
+      el.innerHTML = `<div class="pc-head"><span class="pc-eyebrow">PATTERNS</span>${closeBtn}</div>
         <div class="pc-empty">NOTHING ARCHIVED IN THIS WINDOW YET</div>`;
+      wireClose();
       return;
     }
 
@@ -1104,7 +1162,7 @@ export class App {
           <div class="pc-eyebrow">PATTERNS · CONGESTION BY DISTRICT AND HOUR</div>
           <div class="pc-span">${escapeHtml(span)}</div>
         </div>
-        <button id="pc-close" title="Close">×</button>
+        ${closeBtn}
       </div>
       <table class="pc-table">
         <thead><tr><th></th><th class="pc-grid">${hours.map((h) => `<i class="pc-hh">${hh(h)}</i>`).join("")}</th><th class="pc-num">MEAN</th><th class="pc-num">PEAK</th><th class="pc-num">WORST</th></tr></thead>
@@ -1113,11 +1171,7 @@ export class App {
       <div class="pc-legend"><span>FREE</span>${legend}<span>STOPPED</span><span class="pc-none-key"><i class="pc-cell pc-none"></i> not measured</span></div>
       <div class="pc-foot" id="pc-foot">${p.records} archived readings · ${p.samples} measured district-samples · ${hours.length} of 24 hours covered</div>
       <div class="pc-events" id="pc-events"></div>`;
-    (el.querySelector("#pc-close") as HTMLButtonElement)?.addEventListener("click", () => {
-      this.patternsOpen = false;
-      el.classList.remove("open");
-      this.historyBar.querySelector("#hb-patterns")?.classList.remove("on");
-    });
+    wireClose();
 
     // Events come from their own monthly file, so they arrive after the grid
     // rather than holding it up.
@@ -1317,6 +1371,9 @@ export class App {
   }
 
   setDock(name: string) {
+    // both are simulation readouts and both are hidden on a phone; keep the
+    // behaviour with the markup, the same way sim and setup are kept
+    if (App.PHONE && (name === "stats" || name === "perf")) name = "units";
     this.ui.dockTabs.forEach((b) => b.classList.toggle("on", b.dataset.dock === name));
     this.ui.dockPages.forEach((p) => p.classList.toggle("on", p.dataset.dockpage === name));
     if (name === "perf") this.renderDistrictTable();

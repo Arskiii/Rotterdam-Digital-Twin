@@ -19,8 +19,91 @@ export class SceneCtx {
   // SETUP render-scale override; null tracks the display's ratio (capped at 2)
   pixelRatioOverride: number | null = null;
 
+  /**
+   * Render scale the frame-rate governor has settled on, as a fraction of the
+   * display's own ratio. 1 means "draw every device pixel we would have drawn".
+   *
+   * A phone's screen is three device pixels to the CSS pixel, so drawing this
+   * city at the display's full ratio means four to nine times the fragments a
+   * laptop does, on a fraction of the power budget. Guessing a fixed cap for
+   * "phones" gets it wrong in both directions — a recent iPhone is faster than
+   * plenty of laptops, and a five-year-old budget Android is not — so the
+   * renderer measures instead of assuming. It only ever moves between the steps
+   * below, with a wide dead band, so a scene that is comfortably fast stays
+   * sharp and one that is struggling gets its frame rate back.
+   */
+  private renderScale = 1;
+  private static readonly SCALE_STEPS = [1, 0.85, 0.7, 0.55, 0.45];
+  private scaleIdx = 0;
+  private frameEma = 16.7;
+  private lastFrameAt = 0;
+  /** ms spent continuously slow / continuously fast, not frames spent */
+  private slowMs = 0;
+  private fastMs = 0;
+  /** ms to ignore at startup, while tiles are still streaming in */
+  private warmupMs = 4000;
+
   private desiredPixelRatio() {
-    return this.pixelRatioOverride ?? Math.min(window.devicePixelRatio, 2);
+    if (this.pixelRatioOverride !== null) return this.pixelRatioOverride;
+    return Math.min(window.devicePixelRatio, 2) * this.renderScale;
+  }
+
+  /**
+   * Watch the frame interval and trade resolution for smoothness when needed.
+   *
+   * Thresholds are deliberately far apart and measured against wall-clock frame
+   * intervals, which are what the viewer actually perceives. Stepping down
+   * needs a sustained interval worse than ~42fps — bad enough that nobody would
+   * defend the sharpness — and stepping back up needs a much longer run at
+   * essentially vsync, which on a 60Hz panel means we have headroom to spare
+   * and on a 120Hz one is unmistakable. Nothing in between moves anything.
+   */
+  private governFrameRate(now: number) {
+    if (this.pixelRatioOverride !== null) return; // the operator has pinned it
+    const dt = now - this.lastFrameAt;
+    this.lastFrameAt = now;
+    // A tab that was backgrounded reports a gap of seconds to minutes and says
+    // nothing about how fast this device draws. The cutoff has to stay well
+    // clear of a genuinely struggling device, though: at 2fps the interval is
+    // 500ms, and a governor that discards those readings would go quiet exactly
+    // when it is most needed.
+    if (dt <= 0 || dt > 3000) return;
+    if (this.warmupMs > 0) {
+      this.warmupMs -= dt;
+      return;
+    }
+    this.frameEma += (dt - this.frameEma) * 0.06;
+
+    // Counted in milliseconds, not frames. Frames would make every threshold
+    // scale with the frame rate — a device at 8fps would have to stay bad for
+    // eleven seconds to earn the same response a device at 60fps gets in one
+    // and a half, which is precisely backwards.
+    const steps = SceneCtx.SCALE_STEPS;
+    if (this.frameEma > 24 && this.scaleIdx < steps.length - 1) {
+      this.slowMs += dt;
+      if (this.slowMs > 1500) this.setRenderScale(this.scaleIdx + 1);
+    } else this.slowMs = 0;
+
+    if (this.frameEma < 18.5 && this.scaleIdx > 0) {
+      this.fastMs += dt;
+      if (this.fastMs > 15000) this.setRenderScale(this.scaleIdx - 1);
+    } else this.fastMs = 0;
+  }
+
+  private setRenderScale(idx: number) {
+    this.scaleIdx = idx;
+    this.renderScale = SceneCtx.SCALE_STEPS[idx];
+    this.slowMs = 0;
+    this.fastMs = 0;
+    // give the new resolution time to show what it can do before judging it
+    this.warmupMs = 1200;
+    this.frameEma = 16.7;
+    this.resize();
+  }
+
+  /** What the governor has settled on — for diagnostics and for tests. */
+  get renderScaleNow() {
+    return this.renderScale;
   }
 
   constructor(canvas: HTMLCanvasElement) {
@@ -102,6 +185,7 @@ export class SceneCtx {
   }
 
   update() {
+    this.governFrameRate(performance.now());
     // browser zoom and monitor moves change devicePixelRatio without a
     // reliable event — one comparison per frame keeps the canvas sharp
     if (this.renderer.getPixelRatio() !== this.desiredPixelRatio()) this.resize();
