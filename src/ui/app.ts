@@ -52,6 +52,19 @@ export class App {
   simSpeed = 1;
   paused = false;
   private liveClockTimer: ReturnType<typeof setInterval> | undefined;
+  /**
+   * Whether this is a phone-sized screen, decided once at boot.
+   *
+   * Two things follow from it and they have to agree: the simulation core is
+   * never started (iOS refuses it anyway, and starting it costs the boot a
+   * worker's worth of memory for nothing), and the controls that only drive a
+   * simulation — the SIMULATION mode and the SETUP page — are not shown.
+   * Offering a mode that cannot run is worse than not offering it.
+   *
+   * Decided once rather than on resize because the worker is started during
+   * boot: a window widened afterwards cannot retroactively have had one.
+   */
+  static readonly PHONE = typeof matchMedia === "function" && matchMedia("(max-width: 780px)").matches;
   msgCount = 0;
   density = 5200;
   track: { kind: "agent" | "transit" | "liveTransit"; id: number; key?: string; label: string; missFrames: number } | null = null;
@@ -76,7 +89,9 @@ export class App {
   private boardKey: string | null = null;
   mode: "live" | "sim" | "history" = "live";
   /** false when the sim worker refused to start; LIVE and HISTORY still work */
-  simAvailable = true;
+  // false on a phone from the start: main.ts never starts the worker there, so
+  // a true here would be a flag describing a core that does not exist
+  simAvailable = !App.PHONE;
   /** the operator's congestion-flux choice, remembered across mode switches */
   private simCongestion = false;
   private historyBar!: HTMLElement;
@@ -863,7 +878,7 @@ export class App {
 
   setMode(m: "live" | "sim" | "history") {
     // a mode that cannot run is not a mode
-    if (m === "sim" && !this.simAvailable) m = "live";
+    if (m === "sim" && (!this.simAvailable || App.PHONE)) m = "live";
     const prevMode = this.mode;
     this.mode = m;
     this.ui.modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
@@ -1260,7 +1275,32 @@ export class App {
     }
   }
 
+  /**
+   * Say that this tab is running old code, and offer the one fix.
+   *
+   * A chip rather than a toast: a toast that fades has told nobody anything,
+   * and this is the difference between watching the city and watching a
+   * recording of it. Only ever raised for a visible tab — a hidden one has
+   * already reloaded itself.
+   */
+  offerReload() {
+    if (document.getElementById("stale-build")) return;
+    const el = document.createElement("button");
+    el.id = "stale-build";
+    el.innerHTML = `<span class="dot"></span>NEW BUILD — TAP TO RELOAD`;
+    el.addEventListener("click", () => location.reload());
+    this.ui.hud.appendChild(el);
+    this.log("warn", "THIS TAB IS RUNNING AN OLDER BUILD — RELOAD TO PICK UP THE CURRENT ONE");
+    // If they background it before tapping, take the reload then: coming back
+    // to a fresh app is less disruptive than the page changing under them.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) location.reload();
+    });
+  }
+
   setPage(p: typeof this.page) {
+    // SETUP only moves simulation variables, and a phone has no simulation
+    if (p === "setup" && App.PHONE) p = "map";
     this.page = p;
     this.ui.navBtns.forEach((b) => b.classList.toggle("on", b.dataset.page === p));
     this.ui.pageBrief.classList.toggle("on", p === "brief");
@@ -1424,13 +1464,21 @@ export class App {
             : cur.plan
               ? cur.speed < 0.5 ? "AT PLATFORM" : `${(cur.speed * 3.6).toFixed(0)} KM/H SCHED`
               : cur.berthed ? "AT PLATFORM" : "IN TRANSIT";
-          // "· LIVE" is dropped here though the toast keeps it: on a phone the
-          // chip has room for about four fields, and a fix age in seconds says
-          // this is a real vehicle far better than the word does
-          this.ui.trackLabel.textContent =
-            `TRACKING ${cur?.label ?? this.track.label} · ${state} · ${age} · ${zone}`;
+          // A phone fits about three fields. Rather than ellipsing the end —
+          // which eats the fix age, the one number that says whether any of
+          // this is current — the label drops what it can spare: the word
+          // TRACKING (the pulsing dot and the RELEASE button already say it),
+          // "· LIVE" (a fix age in seconds says it better), the SCHED
+          // qualifier, and the district.
+          const speed = cur?.plan && cur.speed >= 0.5 ? `${(cur.speed * 3.6).toFixed(0)} KM/H` : null;
+          this.ui.trackLabel.textContent = App.PHONE
+            ? `${cur?.label ?? this.track.label} · ${speed ?? state} · ${age}`
+            : `TRACKING ${cur?.label ?? this.track.label} · ${state} · ${age} · ${zone}`;
         } else {
-          this.ui.trackLabel.textContent = `TRACKING ${this.track.label} · ${(st.speed * 3.6).toFixed(0)} KM/H · ${zone}`;
+          const kmh = `${(st.speed * 3.6).toFixed(0)} KM/H`;
+          this.ui.trackLabel.textContent = App.PHONE
+            ? `${this.track.label} · ${kmh}`
+            : `TRACKING ${this.track.label} · ${kmh} · ${zone}`;
         }
 
         // breadcrumb trail

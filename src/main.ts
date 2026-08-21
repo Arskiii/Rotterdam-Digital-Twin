@@ -8,6 +8,7 @@ import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveI
 import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit";
 import { loadCity } from "./data/loader";
 import { LiveFeed, type LiveSnapshot } from "./data/live";
+import { watchForNewBuild } from "./data/buildwatch";
 import { App } from "./ui/app";
 
 const root = document.getElementById("app")!;
@@ -112,10 +113,16 @@ async function boot() {
     .then((res) => (res.ok ? (res.json() as Promise<RoofIndex>) : null))
     .catch(() => null);
 
-  const data = await loadCity(dataBase, paintBoot, startSim);
+  // A phone never starts the simulation core. iOS refuses it under memory
+  // pressure anyway, and trying costs the boot a worker's worth of allocation
+  // and a failure path for a mode the phone is not offered. LIVE is the whole
+  // point on a phone and it needs no simulation.
+  if (App.PHONE) document.body.dataset.phone = "1";
+
+  const data = await loadCity(dataBase, paintBoot, App.PHONE ? undefined : startSim);
   paintBoot("grid", 1);
   paintBoot("signals", 1);
-  if (!simReady) startSim(data.graphBuffer!, data.meta);
+  if (!simReady && !App.PHONE) startSim(data.graphBuffer!, data.meta);
   // the worker has its copy; this one is 11 MB of bytes nobody will read again
   data.graphBuffer = null;
 
@@ -250,6 +257,9 @@ async function boot() {
     app.setLive(snap, live.fresh);
   };
   const live = new LiveFeed(dataBase, applyLive);
+
+  // A tab left open keeps refreshing its data but never its code
+  watchForNewBuild(() => app.offerReload());
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);

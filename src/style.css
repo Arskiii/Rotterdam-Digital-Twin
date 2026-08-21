@@ -2008,3 +2008,41 @@ label {
   #patterns-card { left: 8px; right: 8px; width: auto; bottom: 142px; max-height: 52vh; }
   .pc-cell, .pc-hh { width: 9px; }
 }
+
+/* A phone gets no simulation, so it gets none of the controls that only drive
+   one — the mode button and the variables page. Set from App.PHONE at boot so
+   the markup and the behaviour cannot drift apart: setMode and setPage bounce
+   sim to live and setup to map under the same rule. */
+body[data-phone] #mode-switch button[data-mode="sim"],
+body[data-phone] #topnav .nav-btn[data-page="setup"] {
+  display: none;
+}
+
+/* A tab that is running old code says so where it cannot be missed, and where
+   it does not cover the map: bottom-centre, above the dock. */
+#stale-build {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 20px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--amber);
+  background: rgba(13, 13, 13, 0.96);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  padding: 7px 12px;
+  z-index: 60;
+  box-shadow: var(--shadow);
+}
+#stale-build .dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  background: var(--amber);
+  animation: blink 1.1s steps(2, start) infinite;
+}
