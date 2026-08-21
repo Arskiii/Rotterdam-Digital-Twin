@@ -534,6 +534,21 @@ svg {
   text-transform: uppercase;
   margin-bottom: 2px;
 }
+/* Only LIVE needs this said: in SIMULATION every agent on screen is modelled
+   and the mode name already carries that. */
+#layers-pop .lp-note {
+  display: none;
+}
+body[data-mode="live"] #layers-pop .lp-note {
+  display: block;
+  max-width: 230px;
+  margin-top: 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 10px;
+  line-height: 1.45;
+  color: var(--text-faint);
+}
 #layers-pop label {
   display: flex;
   align-items: center;

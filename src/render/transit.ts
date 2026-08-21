@@ -592,9 +592,14 @@ export class LiveTransitLayer {
         this.pos[p * 3 + 1] = 8;
         this.pos[p * 3 + 2] = v.z;
         const c = FIX_COLORS[v.kind] ?? FIX_COLORS[2];
-        this.col[p * 3] = c[0];
-        this.col[p * 3 + 1] = c[1];
-        this.col[p * 3 + 2] = c[2];
+        // Same dimming the trams and metros get. A bus that has finished its
+        // trip and is sitting at a terminus really is stationary, and a marker
+        // that reads as parked is the difference between "this is standing"
+        // and "this display is broken".
+        const dim = (v.plan ? v.speed < 0.5 : true) ? 0.62 : 1;
+        this.col[p * 3] = c[0] * dim;
+        this.col[p * 3 + 1] = c[1] * dim;
+        this.col[p * 3 + 2] = c[2] * dim;
       }
     }
     this.trams.count = ti;

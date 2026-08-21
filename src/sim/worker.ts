@@ -90,6 +90,7 @@ let burst: { edges: Int32Array; walkEdges: Int32Array; carsLeft: number; walkLef
 // NDW calibration: real veh/h per matched undirected edge
 let ndwEdgeFlow: Map<number, number> | null = null;
 let ndwTodMin = 0;
+let liveClock = false; // clock follows Rotterdam, not the simulation
 let ndwCounts: Map<number, number> | null = null; // sim vehicle-passes per matched edge
 let ndwWindowStartSim = 0;
 let ndwSimVehH = 0; // smoothed aggregate
@@ -1072,7 +1073,10 @@ function tick() {
   if (!running) return;
 
   let dt = real * simSpeed;
-  clockMin = (clockMin + (real * CLOCK_RATE * simSpeed) / 60) % 1440;
+  // On the live map the clock is Rotterdam's: one real second is one second,
+  // so the ambient fleet thins out and fills up when the city does. In the
+  // simulation it runs at CLOCK_RATE, a day every twenty minutes.
+  clockMin = (clockMin + (real * (liveClock ? 1 : CLOCK_RATE * simSpeed)) / 60) % 1440;
 
   // larger substeps at high physics rates keep 12k+ agents affordable
   const maxStep = simSpeed >= 4 ? 0.1 : 0.055;
@@ -1097,11 +1101,19 @@ function tick() {
   }
 
   // spawning toward per-mode targets
+  //
+  // Walking keeps a higher overnight floor than driving — people are out on
+  // foot at hours they would not make a car trip — but the old floor of 0.35
+  // put 706 pedestrians against 432 cars at three in the morning, inverting
+  // the real mode split. It never showed while the clock raced through the
+  // night in seconds; on the live map, which runs at Rotterdam's pace, that
+  // hour lasts an hour. 0.12 keeps the night walkable without making it
+  // busier on foot than by car.
   const dm = demand(clockMin);
   const targets = [
     Math.round(targetDensity * dm),
     Math.round(targetDensity * 0.42 * dm),
-    Math.round(targetDensity * 0.34 * (0.35 + 0.65 * dm)),
+    Math.round(targetDensity * 0.34 * (0.12 + 0.88 * dm)),
   ];
   for (let mode = 0; mode < MODES; mode++) {
     const have = mode === 0 ? activeByMode[0] + activeByMode[3] : activeByMode[mode];
@@ -1214,6 +1226,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     if (msg.congestionFeed !== undefined) congestionFeed = msg.congestionFeed;
     if (msg.autoIncidents !== undefined) autoIncidents = msg.autoIncidents;
     if (msg.timeOfDayMin !== undefined) clockMin = msg.timeOfDayMin;
+    if (msg.liveClock !== undefined) liveClock = msg.liveClock;
     if (msg.speedFactor !== undefined) weatherFactor = Math.min(1, Math.max(0.7, msg.speedFactor));
   } else if (msg.type === "liveBridges") {
     const next = new Map<string, number[]>();

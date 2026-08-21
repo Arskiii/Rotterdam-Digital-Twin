@@ -50,6 +50,7 @@ export class App {
   ucTab: "perf" | "health" = "perf";
   simSpeed = 1;
   paused = false;
+  private liveClockTimer: ReturnType<typeof setInterval> | undefined;
   msgCount = 0;
   density = 5200;
   track: { kind: "agent" | "transit" | "liveTransit"; id: number; key?: string; label: string; missFrames: number } | null = null;
@@ -775,11 +776,18 @@ export class App {
    *             signal timing, injected incidents
    *   history   what the city did earlier, replayed from the archive
    *
-   * The distinction is the point: a simulated car is not a measurement, so
-   * LIVE does not draw the synthetic fleet — it shows real transit vehicles
-   * over sensor-measured congestion, and leaves the roads honest rather than
-   * populating them with traffic nobody observed. The sim keeps running
-   * underneath either way, because the telemetry panels are built on it.
+   * The distinction is the point, and it is drawn per layer rather than per
+   * mode. Everything in LIVE that claims to be a particular thing — this tram,
+   * that bridge, this sensor's speed — is measured. The cars, bikes and
+   * pedestrians claim to be nobody: they are modelled agents on the real
+   * street graph, obeying the real signals, at a volume set by Rotterdam's
+   * clock and the measured sensor flows. Nothing publishes real road-vehicle
+   * positions for this city, so the alternative was an empty street network,
+   * which is honest and dead. The layer panel says which is which.
+   *
+   * SIMULATION is where those same agents can be pushed on — fleet size,
+   * demand, signal timing, injected incidents — and where the clock runs at
+   * 72x so a day passes in twenty minutes.
    */
   /**
    * Carry on without a simulation core.
@@ -799,13 +807,52 @@ export class App {
       btn.title = `Simulation unavailable on this device — ${reason}`;
     }
     if (this.mode === "sim") this.setMode("live");
-    this.log("warn", `SIM CORE UNAVAILABLE — ${reason.toUpperCase()} · LIVE AND HISTORY UNAFFECTED`);
+    this.log("warn", `SIM CORE UNAVAILABLE — ${reason.toUpperCase()} · MEASURED FEEDS UNAFFECTED`);
     const note = document.getElementById("setup-mode-note");
     if (note) {
       note.textContent =
         `The simulation core could not start on this device (${reason}). ` +
-        `Live and History are unaffected — they read measured data and need no simulation.`;
+        `Everything measured still works — real trams and metros, departure boards, ` +
+        `sensor congestion, incidents, weather and the archive. What is missing is ` +
+        `modelled: the cars, bikes and pedestrians on the live map, and Simulation mode itself.`;
     }
+  }
+
+  /** Minutes since midnight in Rotterdam, from the viewer's own clock. */
+  private static rotterdamTodMin(): number {
+    const p = new Intl.DateTimeFormat("nl-NL", {
+      timeZone: "Europe/Amsterdam", hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date());
+    return +p.find((x) => x.type === "hour")!.value * 60 + +p.find((x) => x.type === "minute")!.value;
+  }
+
+  /**
+   * Point the model's clock at Rotterdam, or hand it back to the simulation.
+   *
+   * The hour comes from the viewer's own device rather than from the snapshot.
+   * The snapshot's time of day belongs to the NDW calibration — it is the hour
+   * those flows were measured in and must stay pinned to them — but as a
+   * display clock it is whatever the feed last managed to publish. Reading it
+   * that way put the streets at rush hour at 02:45 whenever the shipped
+   * fallback snapshot was in use, which is exactly the kind of quietly wrong
+   * that nobody reports.
+   *
+   * Re-synced on a timer as well as on the mode switch: a backgrounded tab has
+   * its frames throttled, so the 1x clock would otherwise fall behind the city
+   * it is meant to be following.
+   */
+  private syncLiveClock(live: boolean) {
+    clearInterval(this.liveClockTimer);
+    this.worker.postMessage(
+      live
+        ? { type: "params", liveClock: true, running: true, simSpeed: 1, timeOfDayMin: App.rotterdamTodMin() }
+        : { type: "params", liveClock: false, running: !this.paused, simSpeed: this.simSpeed }
+    );
+    if (!live || !this.simAvailable) return;
+    this.liveClockTimer = setInterval(
+      () => this.worker.postMessage({ type: "params", timeOfDayMin: App.rotterdamTodMin() }),
+      60_000
+    );
   }
 
   setMode(m: "live" | "sim" | "history") {
@@ -820,12 +867,27 @@ export class App {
     const live = m === "live";
     const history = m === "history";
 
-    // synthetic agents belong to the model, not to the measured city
-    const showSynthetic = sim;
-    this.setBox("vehicles", showSynthetic);
-    this.setBox("bikes", showSynthetic);
-    this.setBox("pedestrians", showSynthetic);
-    this.setBox("transit", showSynthetic);
+    // Cars, bikes and pedestrians run in LIVE as well as SIMULATION.
+    //
+    // Nobody publishes vehicle positions for Rotterdam's roads — the sensor
+    // net gives flows at 610 points, not cars — so an empty road network was
+    // the honest picture and a dead one. These are modelled agents on the real
+    // street graph, obeying the real signals, and the layer panel says so in
+    // LIVE. What keeps them from being a lie is that they claim nothing about
+    // any individual vehicle; the numbers they move by are measured.
+    //
+    // The simulated transit fleet stays out: LIVE already draws the real
+    // trams and metros, and running both would put two of every tram on the
+    // same track.
+    const road = sim || live;
+    this.setBox("vehicles", road);
+    this.setBox("bikes", road);
+    this.setBox("pedestrians", road);
+    this.setBox("transit", sim);
+    // In LIVE the model runs on Rotterdam's clock at 1x, so the streets are
+    // empty at 03:00 and full at 08:30 for the same reason the real ones are.
+    // Speed and pause are simulation controls with no meaning against it.
+    this.syncLiveClock(live);
     // real transit is the live picture; in the model it would be two fleets
     // of the same trams on the same track
     this.setBox("fixes", live);
@@ -864,7 +926,7 @@ export class App {
     this.log(
       "info",
       live
-        ? "LIVE MODE — MEASURED CITY: REAL TRANSIT, SENSOR CONGESTION, REAL INCIDENTS"
+        ? "LIVE MODE — REAL TRANSIT, SENSOR CONGESTION, REAL INCIDENTS · ROAD TRAFFIC MODELLED"
         : sim
           ? "SIMULATION MODE — MODELLED CITY: VARIABLES UNLOCKED"
           : "HISTORY MODE — REPLAYING THE ARCHIVE"

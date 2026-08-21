@@ -18,6 +18,16 @@ export interface ParamsMsg {
   autoIncidents?: boolean;
   timeOfDayMin?: number; // force sim clock, minutes 0..1440
   speedFactor?: number; // live-weather speed multiplier for motorized traffic (0.7..1)
+  /**
+   * Run the clock at Rotterdam's, not the simulation's.
+   *
+   * The sim clock normally runs at 72x so a whole day passes in twenty
+   * minutes, which is the point of a simulation. On the live map the ambient
+   * traffic has to thin out at 03:00 and pile up at 08:30 because that is when
+   * it actually does, so the clock ticks at 1x and is re-anchored to the
+   * feed's time of day on every refresh.
+   */
+  liveClock?: boolean;
 }
 
 export interface IncidentMsg {
