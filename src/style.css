@@ -1415,6 +1415,174 @@ table.district td:first-child {
   );
 }
 
+/* How much of the requested window the archive actually holds. Amber when it
+   is well short of it — a 30D chart drawn from two days of readings is flat
+   and empty across most of its width, and nothing else on screen says why. */
+.hb-cover {
+  font-size: 8.5px;
+  letter-spacing: 0.11em;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.hb-cover.thin {
+  color: var(--amber);
+}
+
+/* ---------- transit health -----------------------------------
+   The only dock panel whose every figure is measured, and the only one that
+   needs no simulation — which is why it is also the one a phone keeps. */
+/* Every other dock tab is a strip of cards or a short table, and 118px suits
+   them. This one is a table with a sticky header and one row per line, and at
+   118px the summary and the provenance line left 45px — the header and a
+   single row. A tab that cannot show two rows is not a tab, so this one takes
+   the height it needs and the others keep theirs.
+   :has() is doing the work; where it is unsupported the rule is skipped and
+   the panel is merely as cramped as it was. */
+#dock-body:has(> .dock-page[data-dockpage="transit"].on) {
+  height: 208px;
+}
+
+/* The dock body is a fixed height whatever is in it, and this table has one
+   row per line — 84 of them at rush hour. So the summary and the provenance
+   line stay put and only the rows scroll, the way the district table already
+   does. Without this the wrap simply clipped at two rows. */
+#transit-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 14px 8px;
+}
+.tr-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+.tr-head {
+  flex: none;
+}
+.tr-foot {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.tr-nominal {
+  color: var(--text-dim);
+  flex: none;
+}
+.tr-filter {
+  flex: none;
+  font-size: 8.5px;
+  letter-spacing: 0.11em;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  padding: 2px 7px;
+}
+.tr-filter:hover {
+  color: var(--text);
+  border-color: var(--line-bright);
+}
+/* the provenance line is the first thing to give way when the row is tight */
+.tr-src {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+/* the long form by default, the short one where the dock cannot spare a
+   second line — see the comment in App.renderTransit */
+.tr-head i.lg { font-style: normal; }
+.tr-head i.sm { display: none; font-style: normal; }
+@media (max-width: 900px) {
+  .tr-head i.lg { display: none; }
+  .tr-head i.sm { display: inline; }
+  .tr-head .src { margin-right: 4px; }
+  /* the source line is in the foot's title and the head already says
+     MEASURED; the filter control is what has to survive here */
+  .tr-src { display: none; }
+}
+.tr-head b {
+  color: var(--text);
+}
+.tr-age {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+/* margin-left:auto claims the rest of the line, which on a narrow dock is
+   what pushed this chip onto a second row and halved the space left for the
+   table. Where there is no room to spare it just follows the text. */
+@media (max-width: 900px) {
+  .tr-age {
+    margin-left: 0;
+  }
+}
+.tr-none {
+  color: var(--text-faint);
+}
+.tr-table {
+  min-width: 560px;
+}
+.tr-table .bd-line {
+  min-width: 26px;
+  padding: 2px 6px;
+}
+.tr-kind {
+  font-size: 9px;
+  letter-spacing: 0.11em;
+}
+.tr-dim {
+  color: var(--text-faint) !important;
+}
+.tr-state {
+  font-size: 8.5px;
+  letter-spacing: 0.11em;
+  color: var(--text-faint);
+}
+/* Running with nothing measured, not reporting at all, and measured are three
+   different claims. Only the last is a statement about punctuality. */
+.tr-state.tr-ok {
+  color: var(--green);
+}
+.tr-state.tr-off {
+  color: var(--amber);
+}
+/* between "a couple of minutes" and "late enough to notice" */
+.tr-warn {
+  color: var(--amber);
+}
+.tr-empty {
+  padding: 16px 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+.tr-foot {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line-faint);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* overview page */
 #overview-page {
   padding: 12px 16px;

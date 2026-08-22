@@ -17,6 +17,7 @@ import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkl
 import { ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/archive";
 import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
 import { buildSearchIndex, stopEntries, searchIndex, type SearchEntry, type SearchHit } from "./search";
+import { transitHealth, KIND_LABEL, type LineHealth } from "../data/transit-health";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -154,6 +155,8 @@ export class App {
   private searchStopsFrom: unknown = null;
   private searchHits: SearchHit[] = [];
   private searchSel = 0;
+  /** transit panel: every line, rather than only the ones worth looking at */
+  private trShowAll = false;
 
   constructor(
     public ui: Chrome,
@@ -910,6 +913,7 @@ export class App {
     this.liveFresh = fresh;
     if (this.boardKey) this.renderBoard();
     if (this.page === "brief" && this.mode === "live") this.renderBrief();
+    this.renderTransit();
   }
 
   closeBoard() {
@@ -1288,6 +1292,7 @@ export class App {
           <button data-hours="720">30D</button>
         </div>
         <button id="hb-patterns" title="What keeps happening, across the whole window">PATTERNS</button>
+        <span class="hb-cover" id="hb-cover"></span>
         <span class="hb-at" id="hb-at">—</span>
       </div>
       <canvas id="hb-canvas"></canvas>
@@ -1339,13 +1344,46 @@ export class App {
     range.value = String(Math.max(0, recs.length - 1));
     this.historyIdx = Math.max(0, recs.length - 1);
     if (this.patternsOpen) void this.renderPatterns();
+    this.paintCoverage(recs, this.historyHours);
     if (!recs.length) {
-      this.renderHistoryMessage(
-        "NO ARCHIVE FOR THIS WINDOW — THE REFRESH LOOP WRITES ONE RECORD EVERY 5 MIN ONCE IT IS RUNNING ON MAIN"
-      );
+      this.renderHistoryMessage("NOTHING WAS ARCHIVED IN THIS WINDOW — TRY A SHORTER ONE");
       return;
     }
     this.paintHistory();
+  }
+
+  /**
+   * Say how much of the requested window the archive actually holds.
+   *
+   * The buttons offer 24H, 7D and 30D; the archive holds whatever the refresh
+   * loop has captured since it started, which right now is a couple of days.
+   * Asking for 30D and getting a timeline drawn from two days of readings
+   * across a month-wide axis is not an error and does not look like one — the
+   * chart is simply flat and empty for 93% of its width, which reads as a
+   * quiet city rather than an absent record.
+   *
+   * So the bar says what it has. Same rule as everywhere else here: the sample
+   * travels with the average, and an unmeasured stretch is never drawn as calm.
+   */
+  private paintCoverage(recs: ArchiveRecord[], hours: number) {
+    const el = this.historyBar.querySelector("#hb-cover") as HTMLElement | null;
+    if (!el) return;
+    if (!recs.length) {
+      el.textContent = "NO COVERAGE";
+      el.className = "hb-cover thin";
+      return;
+    }
+    const spanH = (recs[recs.length - 1].t - recs[0].t) / 3_600_000;
+    const frac = Math.min(1, spanH / hours);
+    // One decimal under ten days rather than a rounded whole: 60 hours is 2.5
+    // days, and rounding it to "3D" overstates coverage — the wrong direction
+    // for the one label whose job is to stop the chart being over-read.
+    const days = spanH / 24;
+    const span = spanH < 48 ? `${Math.round(spanH)}H` : days < 10 ? `${days.toFixed(1)}D` : `${Math.round(days)}D`;
+    el.textContent = `${span} ARCHIVED · ${fmtInt(recs.length)} READINGS`;
+    // Under two thirds of the asked-for window is worth flagging rather than
+    // leaving the reader to infer it from the shape of the line.
+    el.className = frac < 0.66 ? "hb-cover thin" : "hb-cover";
   }
 
   // ---------- patterns: what the archive says keeps happening ----------
@@ -1665,6 +1703,7 @@ export class App {
     this.ui.dockPages.forEach((p) => p.classList.toggle("on", p.dataset.dockpage === name));
     if (name === "perf") this.renderDistrictTable();
     if (name === "stats") this.renderStats();
+    if (name === "transit") this.renderTransit();
   }
 
   applyLayer(layer: string, on: boolean) {
@@ -1982,6 +2021,7 @@ export class App {
     if (this.perfState === "live") this.renderPerfLive();
     this.renderStats();
     this.renderDistrictTable();
+    this.renderTransit();
     if (this.page === "brief") this.renderBrief();
     this.updateDockClock();
   }
@@ -2293,6 +2333,130 @@ export class App {
     this.ui.statsRow.querySelectorAll<HTMLCanvasElement>("canvas[data-spark]").forEach((cv) => {
       const series = SPARKS[cv.dataset.spark!]?.().slice(-160) ?? [];
       if (series.length > 2) drawSparkline(cv, series, { min: 0, grid: false });
+    });
+  }
+
+  // ---------- dock: transit health ----------
+
+  /**
+   * How the network is running, line by line — the aggregate the map cannot
+   * show you.
+   *
+   * The live map draws every vehicle and the boards answer "what is coming
+   * here"; neither answers "is anything wrong tonight, and where". This is the
+   * only panel in the dock whose every figure is measured, and it needs no
+   * simulation, so it is the one that works on a phone.
+   *
+   * Two states are deliberately different and neither is "fine": a line with
+   * vehicles out but no trip reporting a delay is RUNNING with no measurement,
+   * and a line the timetable lists with nothing reporting at all is NOT
+   * REPORTING. At 05:30 every rail line in the city is the second of those,
+   * and a rollup that averaged the zeroes would have called it a perfect
+   * network.
+   */
+  private renderTransit() {
+    const wrap = this.ui.transitWrap;
+    if (!wrap.closest(".dock-page")?.classList.contains("on")) return;
+    const h = transitHealth(this.live);
+
+    if (!this.live) {
+      wrap.innerHTML = `<div class="tr-empty">NO LIVE SNAPSHOT HAS REACHED THIS TAB YET</div>`;
+      return;
+    }
+    if (!h.lines.length) {
+      wrap.innerHTML = `<div class="tr-empty">NOTHING IN SERVICE AND NOTHING ON THE BOARDS</div>`;
+      return;
+    }
+
+    const mins = (s: number) => `${s > 0 ? "+" : s < 0 ? "−" : ""}${(Math.abs(s) / 60).toFixed(1)}′`;
+    // The boards withhold times on a stale feed for the same reason: a delay
+    // measured hours ago is not this line's delay now.
+    const fresh = this.liveFresh;
+    const ageSec = h.at ? Math.max(0, (Date.now() - Date.parse(h.at)) / 1000) : 0;
+
+    // One render path, two lengths. The dock body is 118px tall and this
+    // summary wrapped to four lines on a 390px screen, leaving 18px for the
+    // table it is summarising — so the prose is marked up and the stylesheet
+    // drops it where there is no room, rather than a second branch here that
+    // could drift from this one.
+    const both = (long: string, short: string) => `<i class="lg">${long}</i><i class="sm">${short}</i>`;
+    const head =
+      `<div class="tr-head">` +
+      `<span class="src measured">MEASURED</span>` +
+      `<span><b>${fmtInt(h.vehicles)}</b>${both(" VEHICLES REPORTING", " VEH")}</span> · ` +
+      `<span><b>${fmtInt(h.linesRunning)}</b>${both(" LINES OUT", " LINES")}</span> · ` +
+      (fresh && h.medianDelaySec !== null
+        ? `<span>${both("NETWORK MEDIAN ", "MED ")}<b>${mins(h.medianDelaySec)}</b>${both(` OVER ${fmtInt(h.linesMeasured)} MEASURED LINE${h.linesMeasured === 1 ? "" : "S"}`, ` /${fmtInt(h.linesMeasured)}`)}</span>`
+        : fresh
+          ? `<span class="tr-none">${both("NO RUNNING DELAY REPORTED BY ANY TRIP", "NO DELAY REPORTED")}</span>`
+          : `<span class="tr-none">${both("FEED STALE — DELAYS WITHHELD", "STALE — WITHHELD")}</span>`) +
+      `<span class="tr-age">FIX ${fmtAge(ageSec)} AGO</span></div>`;
+
+    // The dock gives this about three rows, and at rush hour sixty of the
+    // eighty-four lines are running to time. Listing them all buries the two
+    // that are not, so the default is the exceptions: anything not reporting,
+    // anything with no delay data, and anything more than two minutes off.
+    // A line running to time is the one thing here nobody needs to read.
+    //
+    // At night this filter is a no-op — nothing is measured, so nothing is
+    // nominal, and the whole "not reporting" picture shows, which is the story
+    // at that hour.
+    const NOMINAL_SEC = 120;
+    const nominal = (l: LineHealth) =>
+      fresh && l.state === "measured" && l.medianDelaySec !== null && Math.abs(l.medianDelaySec) < NOMINAL_SEC;
+    const hidden = this.trShowAll ? 0 : h.lines.filter(nominal).length;
+    const shown = this.trShowAll ? h.lines : h.lines.filter((l) => !nominal(l));
+    const filterNote = this.trShowAll
+      ? `<button class="tr-filter" id="tr-toggle">SHOW EXCEPTIONS ONLY</button>`
+      : hidden
+        ? `<span class="tr-nominal">${fmtInt(hidden)} LINE${hidden === 1 ? "" : "S"} WITHIN 2′ OF THE TIMETABLE</span><button class="tr-filter" id="tr-toggle">SHOW ALL</button>`
+        : `<button class="tr-filter" id="tr-toggle">SHOW ALL</button>`;
+
+    const rows = shown
+      .map((l) => {
+        const late = l.medianDelaySec;
+        const cls = late === null ? "" : late >= 300 ? "bd-late" : late >= 120 ? "tr-warn" : late <= -60 ? "bd-early" : "bd-ontime";
+        const delay =
+          !fresh || late === null
+            ? `<span class="bd-sched">—</span>`
+            : `<span class="${cls}">${mins(late)}</span>`;
+        const worst = !fresh || l.worstDelaySec === null ? "—" : mins(l.worstDelaySec);
+        // On a stale feed nothing here is a claim about now — the snapshot was
+        // true when it was captured and the header says how long ago that was.
+        // "MEASURED" in the present tense would be the same mistake the boards
+        // avoid by withholding times outright.
+        const state =
+          l.state === "not-reporting"
+            ? `<span class="tr-state tr-off">NOT REPORTING</span>`
+            : !fresh
+              ? `<span class="tr-state bd-sched">AS OF FIX</span>`
+              : l.state === "running"
+                ? `<span class="tr-state">RUNNING · NO DELAY DATA</span>`
+                : `<span class="tr-state tr-ok">MEASURED</span>`;
+        // the sample travels with the average, as it does everywhere else here
+        const sample = l.trips ? `${fmtInt(l.trips)} TRIP${l.trips === 1 ? "" : "S"}` : l.scheduled ? `${fmtInt(l.scheduled)} SCHED` : "—";
+        return `<tr>
+          <td><span class="bd-line k${l.kind}">${escapeHtml(l.line.toUpperCase())}</span></td>
+          <td class="tr-kind">${KIND_LABEL[l.kind] ?? ""}</td>
+          <td>${l.vehicles ? fmtInt(l.vehicles) : "—"}</td>
+          <td>${delay}</td>
+          <td class="tr-dim">${worst}</td>
+          <td class="tr-dim">${sample}</td>
+          <td>${state}</td>
+        </tr>`;
+      })
+      .join("");
+
+    wrap.innerHTML =
+      head +
+      `<div class="tr-scroll"><table class="district tr-table">
+        <thead><tr><th>Line</th><th>Mode</th><th>Out</th><th>Median delay</th><th>Worst</th><th>Sample</th><th>State</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      <div class="tr-foot" title="A line's delay is the median of its own trips that reported one. Nothing is inferred from the timetable, and a line with nothing reporting is not a line on time.">${filterNote}<span class="tr-src">RET · OVAPI GTFS-RT — MEDIAN OVER EACH LINE'S OWN REPORTING TRIPS</span></div>`;
+    (wrap.querySelector("#tr-toggle") as HTMLButtonElement | null)?.addEventListener("click", () => {
+      this.trShowAll = !this.trShowAll;
+      this.renderTransit();
     });
   }
 

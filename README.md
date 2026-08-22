@@ -76,8 +76,19 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **SETUP** — fleet density, physics rate, signal cycle scale, time of day, incident
   injection, render scale. Every control is disabled outside SIMULATION,
   scenarios and the signal trial included, with one button back to it.
-- Dock: unit list, live statistics, district performance table, coverage overview,
-  message log
+- **TRANSIT** (dock) — how the network is running, line by line: vehicles out,
+  median running delay over that line's own reporting trips, its worst trip,
+  and the sample behind both. The aggregate neither the map nor a departure
+  board can give you. Three states, and only one of them is a claim about
+  punctuality: **measured** (trips reported a delay), **running** (vehicles
+  out, nothing reporting a delay yet) and **not reporting** (the timetable
+  lists services and nothing is reporting at all). At 05:30 every rail line in
+  the city is the last of those — a rollup that averaged the zeroes would have
+  called that a perfect network. Defaults to the exceptions, because at rush
+  hour sixty of the eighty-four lines are running to time and those are the
+  rows nobody needs to read. Needs no simulation, so it works on a phone.
+- Dock: unit list, transit health, live statistics, district performance table,
+  coverage overview, message log
 - **Keyboard**: `/` search · `1`/`2`/`3` mode · `L` layers · `?` the list ·
   `Esc` close or release. Focus is visible throughout, and
   `prefers-reduced-motion` turns camera flights into cuts.
@@ -98,7 +109,11 @@ all three honestly:
 - **SIMULATION** — the model, with the variables unlocked: fleet density,
   demand curve, signal program, injected incidents.
 - **HISTORY** — the archive, scrubbed. Congestion over the last day, week or
-  month with incident ticks, reading out the moment you land on.
+  month with incident ticks, reading out the moment you land on. The bar says
+  how much of the window the archive actually holds, and turns amber under two
+  thirds of it: the record starts when the refresh loop started, and a 30-day
+  chart drawn from two days of readings is flat and empty for most of its
+  width — which reads as a quiet city rather than an absent record.
 
 **Live city feeds** (refreshed every 2 minutes by `.github/workflows/deploy.yml`
 onto the `live` branch; the app polls it and falls back to the committed
@@ -277,6 +292,7 @@ src/
   ui/chrome.ts       DOM chrome (header, rail, cards, dock, boot)
   ui/app.ts          application controller: pages, units, telemetry, events
   ui/search.ts       the place index and its matcher (pure, no DOM)
+  data/transit-health.ts  per-line rollup of the live fleet and boards (pure)
   data/sw-register.ts  service-worker registration, data fingerprint, ?nosw=1
   main.ts            boot sequence
 public/

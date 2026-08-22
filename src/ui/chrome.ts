@@ -155,6 +155,7 @@ export function buildChrome(root: HTMLElement) {
       <div id="dock">
         <div id="dock-tabs" role="tablist" aria-label="Dock">
           <button data-dock="units" class="on">Unit list</button>
+          <button data-dock="transit">Transit</button>
           <button data-dock="stats">Statistics</button>
           <button data-dock="perf">Performances</button>
           <button data-dock="overview">Overview</button>
@@ -179,6 +180,7 @@ export function buildChrome(root: HTMLElement) {
               <button class="sbtn" id="strip-right">${icons.chevronRight()}</button>
             </div>
           </div>
+          <div class="dock-page" data-dockpage="transit"><div id="transit-wrap"></div></div>
           <div class="dock-page" data-dockpage="stats"><div id="stats-row"></div></div>
           <div class="dock-page" data-dockpage="perf"><div id="district-table-wrap"></div></div>
           <div class="dock-page" data-dockpage="overview"><div id="overview-page" class="on"></div></div>
@@ -275,6 +277,7 @@ export function buildChrome(root: HTMLElement) {
     stripTrack: $("#strip-track"),
     stripThumb: $("#strip-thumb"),
     statsRow: $("#stats-row"),
+    transitWrap: $("#transit-wrap"),
     districtTableWrap: $("#district-table-wrap"),
     overviewPage: $("#overview-page"),
     msgList: $("#msg-list"),
