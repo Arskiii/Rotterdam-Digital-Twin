@@ -3,10 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Rotterdam Intelligence Platform \u2014 city-wide 3D traffic simulation on the real OSM street network",
+  "description": "Rotterdam Intelligence Platform — city-wide 3D traffic simulation on the real OSM street network",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-publish-guards.mjs && tsc --noEmit && vite build",
+    "build": "node scripts/check-publish-guards.mjs && tsc --noEmit && vitest run && vite build",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "preview": "vite preview",
     "fetch-data": "node scripts/fetch-osm.mjs",
     "build-data": "node scripts/build-data.mjs",
@@ -30,6 +32,7 @@
     "@types/earcut": "^2.1.4",
     "@types/three": "^0.166.0",
     "typescript": "^5.9.3",
-    "vite": "^5.4.21"
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
   }
 }

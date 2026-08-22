@@ -9,6 +9,7 @@ import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit
 import { loadCity } from "./data/loader";
 import { LiveFeed, type LiveSnapshot } from "./data/live";
 import { watchForNewBuild } from "./data/buildwatch";
+import { registerServiceWorker } from "./data/sw-register";
 import { App } from "./ui/app";
 
 const root = document.getElementById("app")!;
@@ -32,7 +33,13 @@ const DATA_FALLBACK =
 async function resolveDataBase(): Promise<string> {
   const local = `${import.meta.env.BASE_URL}data/`;
   try {
-    const res = await fetch(`${local}meta.json`, { method: "HEAD" });
+    // A GET, not a HEAD. `Cache.match` is keyed by method, so a HEAD never
+    // matches the GET the service worker stored — which made this probe fail
+    // offline, send the boot to the jsDelivr mirror, and fail again there with
+    // the whole city sitting in a cache two lines away. The body is 2 KB and
+    // loadCity asks for the same file immediately afterwards, so it costs
+    // nothing and warms the entry it is about to read.
+    const res = await fetch(`${local}meta.json`);
     if (res.ok) return local;
   } catch {
     /* fall through */
@@ -260,6 +267,13 @@ async function boot() {
 
   // A tab left open keeps refreshing its data but never its code
   watchForNewBuild(() => app.offerReload());
+
+  // Hold the 27 MB of city binaries past the ten minutes GitHub Pages allows,
+  // so a second visit is instant and the map works with no network at all.
+  // Registered after the boot rather than before it: the first load gains
+  // nothing from a worker that is still installing, and a failure here must
+  // not be able to touch the load that matters.
+  void registerServiceWorker(data.meta);
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);

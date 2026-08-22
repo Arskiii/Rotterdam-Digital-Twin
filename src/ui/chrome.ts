@@ -11,56 +11,56 @@ function meterBars(n: number, cls = ""): string {
 
 export function buildChrome(root: HTMLElement) {
   root.innerHTML = `
-  <aside id="rail">
-    <button class="rail-btn" data-rail="menu" title="Modules">${icons.gridDots()}</button>
+  <nav id="rail" aria-label="Modules">
+    <button class="rail-btn" data-rail="menu" title="Modules" aria-label="Modules">${icons.gridDots()}</button>
     <div class="rail-sep"></div>
-    <button class="rail-btn on" data-rail="units" title="Units">${icons.drone()}</button>
-    <button class="rail-btn" data-rail="integrity" title="Network integrity">${icons.shield()}</button>
-    <button class="rail-btn" data-rail="incidents" title="Incidents">${icons.xCircle()}</button>
+    <button class="rail-btn on" data-rail="units" title="Units" aria-label="Units">${icons.drone()}</button>
+    <button class="rail-btn" data-rail="integrity" title="Network integrity" aria-label="Network integrity">${icons.shield()}</button>
+    <button class="rail-btn" data-rail="incidents" title="Incidents" aria-label="Incidents">${icons.xCircle()}</button>
     <div class="rail-sep"></div>
-    <button class="rail-btn" data-rail="secure" title="Secure feeds">${icons.lock()}</button>
-    <button class="rail-btn" data-rail="crowd" title="Crowd flows">${icons.people()}</button>
-    <button class="rail-btn" data-rail="comms" title="Comms">${icons.headset()}</button>
+    <button class="rail-btn" data-rail="secure" title="Secure feeds" aria-label="Secure feeds">${icons.lock()}</button>
+    <button class="rail-btn" data-rail="crowd" title="Crowd flows" aria-label="Crowd flows">${icons.people()}</button>
+    <button class="rail-btn" data-rail="comms" title="Comms" aria-label="Comms">${icons.headset()}</button>
     <div class="rail-space"></div>
-    <button class="rail-btn" data-rail="account" title="Operator">${icons.person()}</button>
-    <button class="rail-btn" data-rail="prefs" title="Preferences">${icons.sliders()}</button>
-  </aside>
+    <button class="rail-btn" data-rail="account" title="Operator" aria-label="Operator">${icons.person()}</button>
+    <button class="rail-btn" data-rail="prefs" title="Preferences" aria-label="Preferences">${icons.sliders()}</button>
+  </nav>
 
   <div id="stage">
     <header id="topbar" class="brk">${TICKS}
       <div id="brand">${icons.logo()} <span>${BRAND}</span></div>
-      <div id="mode-switch" title="What the map is showing">
-        <button data-mode="live" class="on">Live</button>
-        <button data-mode="sim">Simulation</button>
-        <button data-mode="history">History</button>
+      <div id="mode-switch" role="group" aria-label="What the map is showing">
+        <button data-mode="live" class="on" aria-pressed="true">Live</button>
+        <button data-mode="sim" aria-pressed="false">Simulation</button>
+        <button data-mode="history" aria-pressed="false">History</button>
       </div>
-      <nav id="topnav">
+      <nav id="topnav" aria-label="Pages">
         <button class="nav-btn" data-page="brief">Brief</button>
-        <button class="nav-btn on" data-page="map">Unit&nbsp;Map</button>
+        <button class="nav-btn on" data-page="map" aria-current="page">Unit&nbsp;Map</button>
         <button class="nav-btn" data-page="setup">Setup</button>
       </nav>
       <div id="topmeta">
         <span class="meta-item" id="live-chip" title="Live city feeds" style="display:none"><span id="live-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3ddc84;margin-right:6px"></span><span id="live-text">LIVE</span></span>
-        <span class="meta-item">${icons.pin()} <span>${LOCATION_LABEL}</span></span>
+        <span class="meta-item" id="loc-chip">${icons.pin()} <span>${LOCATION_LABEL}</span></span>
         <span class="meta-item">${icons.clock()} <span id="clock">--:--</span></span>
       </div>
     </header>
 
-    <div id="viewport">
-      <canvas id="scene-canvas"></canvas>
+    <main id="viewport">
+      <canvas id="scene-canvas" aria-label="3D map of Rotterdam" role="img"></canvas>
       <div id="vignette"></div>
 
       <div id="hud">
-        <svg id="tether"><line x1="0" y1="0" x2="0" y2="0" /></svg>
+        <svg id="tether" aria-hidden="true"><line x1="0" y1="0" x2="0" y2="0" /></svg>
         <div id="markers"></div>
 
-        <div id="scale-switch" class="brk">${TICKS}
-          <button data-scale="city" class="on">City</button>
-          <button data-scale="district">District</button>
-          <button data-scale="street">Street</button>
+        <div id="scale-switch" class="brk" role="group" aria-label="Camera scale">${TICKS}
+          <button data-scale="city" class="on" aria-pressed="true">City</button>
+          <button data-scale="district" aria-pressed="false">District</button>
+          <button data-scale="street" aria-pressed="false">Street</button>
         </div>
 
-        <div id="track-chip" class="brk">${TICKS}
+        <div id="track-chip" class="brk" role="status">${TICKS}
           <span class="dot red"></span>
           <span id="track-label">TRACKING</span>
           <button id="track-release">Release</button>
@@ -103,10 +103,25 @@ export function buildChrome(root: HTMLElement) {
         </div>
 
         <div id="map-tools">
-          <button class="tool-btn" id="zoom-in" title="Zoom in">${icons.plus()}</button>
-          <button class="tool-btn" id="zoom-out" title="Zoom out">${icons.minus()}</button>
+          <button class="tool-btn" id="search-btn" title="Find a place (/)" aria-label="Find a place">${icons.search()}</button>
           <div class="tool-gap"></div>
-          <button class="tool-btn" id="layers-btn" title="Layers">${icons.layers()}</button>
+          <button class="tool-btn" id="zoom-in" title="Zoom in" aria-label="Zoom in">${icons.plus()}</button>
+          <button class="tool-btn" id="zoom-out" title="Zoom out" aria-label="Zoom out">${icons.minus()}</button>
+          <div class="tool-gap"></div>
+          <button class="tool-btn" id="layers-btn" title="Layers (L)" aria-label="Map layers">${icons.layers()}</button>
+        </div>
+
+        <div id="search-pop" class="brk">${TICKS}
+          <div class="sp-field">
+            <span class="sp-icon" aria-hidden="true">${icons.search(13)}</span>
+            <input id="search-input" type="text" role="combobox" autocomplete="off" spellcheck="false"
+              aria-label="Find a street, stop, sensor station or district"
+              aria-expanded="false" aria-controls="search-results" aria-autocomplete="list"
+              placeholder="Street, stop, sensor, district" />
+            <button id="sp-close" aria-label="Close search">✕</button>
+          </div>
+          <div id="search-results" role="listbox" aria-label="Search results"></div>
+          <div class="sp-hint">↑↓ move · ⏎ fly there · esc close</div>
         </div>
 
         <div id="layers-pop" class="brk">${TICKS}
@@ -129,16 +144,16 @@ export function buildChrome(root: HTMLElement) {
           <div class="lp-note" id="lp-synthetic">Vehicle, bike and pedestrian tracks are modelled traffic on the real street graph, obeying the real signals. Volume follows Rotterdam's clock and the measured sensor flows; no individual car is a real one.</div>
         </div>
 
-        <div id="toasts"></div>
+        <div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
 
-        <section id="page-brief" class="page"></section>
-        <section id="page-setup" class="page"></section>
+        <section id="page-brief" class="page" aria-label="Intelligence brief"></section>
+        <section id="page-setup" class="page" aria-label="Setup"></section>
       </div>
 
       <div id="attribution">MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>
 
       <div id="dock">
-        <div id="dock-tabs">
+        <div id="dock-tabs" role="tablist" aria-label="Dock">
           <button data-dock="units" class="on">Unit list</button>
           <button data-dock="stats">Statistics</button>
           <button data-dock="perf">Performances</button>
@@ -167,13 +182,13 @@ export function buildChrome(root: HTMLElement) {
           <div class="dock-page" data-dockpage="stats"><div id="stats-row"></div></div>
           <div class="dock-page" data-dockpage="perf"><div id="district-table-wrap"></div></div>
           <div class="dock-page" data-dockpage="overview"><div id="overview-page" class="on"></div></div>
-          <div class="dock-page" data-dockpage="messages"><div id="msg-list"></div></div>
+          <div class="dock-page" data-dockpage="messages"><div id="msg-list" role="region" aria-label="Message log"></div></div>
         </div>
       </div>
-    </div>
+    </main>
   </div>
 
-  <div id="boot">
+  <div id="boot" role="status" aria-live="polite" aria-label="Loading Rotterdam">
     <div id="boot-inner">
       <div id="boot-brand">${icons.logo(26)} <span>${BRAND}</span><span class="bsub">RTM NODE 04</span></div>
       <div class="boot-stage" data-stage="grid">
@@ -243,6 +258,11 @@ export function buildChrome(root: HTMLElement) {
     layersPop: $("#layers-pop"),
     lpClose: $<HTMLButtonElement>("#lp-close"),
     layerBoxes: Array.from(root.querySelectorAll<HTMLInputElement>("#layers-pop input[data-layer]")),
+    searchBtn: $<HTMLButtonElement>("#search-btn"),
+    searchPop: $("#search-pop"),
+    searchInput: $<HTMLInputElement>("#search-input"),
+    searchResults: $("#search-results"),
+    searchClose: $<HTMLButtonElement>("#sp-close"),
     toasts: $("#toasts"),
     pageBrief: $("#page-brief"),
     pageSetup: $("#page-setup"),

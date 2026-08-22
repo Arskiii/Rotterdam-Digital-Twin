@@ -16,6 +16,7 @@ import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
 import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml, fmtAge } from "./format";
 import { ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/archive";
 import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
+import { buildSearchIndex, stopEntries, searchIndex, type SearchEntry, type SearchHit } from "./search";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -144,6 +145,15 @@ export class App {
   // tracked-target trail
   private trail: THREE.Line;
   private trailPts: number[] = [];
+  // ---- search ----
+  /** the static half of the index (streets, sensors, districts), built lazily */
+  private searchStatic: SearchEntry[] | null = null;
+  /** the static half plus this snapshot's stops, rebuilt when the snapshot moves */
+  private searchMerged: SearchEntry[] | null = null;
+  /** the stops object the merged index was built from, by identity */
+  private searchStopsFrom: unknown = null;
+  private searchHits: SearchHit[] = [];
+  private searchSel = 0;
 
   constructor(
     public ui: Chrome,
@@ -241,6 +251,8 @@ export class App {
     this.buildSetupPage();
     this.buildOverview();
     this.wire();
+    // before restoreSettings, which calls setMode and touches the same boxes
+    this.withdrawPhoneControls();
     this.restoreSettings();
     this.log("info", "UPLINK ESTABLISHED — SURVEILTRACK NODE 04 ONLINE");
     this.log("info", `CITY GRID LOADED — ${fmtInt(this.data.meta.counts.roadKm)} KM ROADWAY / ${fmtInt(this.data.meta.counts.signalsInventory)} SIGNAL UNITS`);
@@ -379,15 +391,19 @@ export class App {
     });
 
     // scale switch
+    const markScale = (match: (b: HTMLButtonElement) => boolean) =>
+      ui.scaleBtns.forEach((x) => {
+        const on = match(x);
+        x.classList.toggle("on", on);
+        x.setAttribute("aria-pressed", String(on));
+      });
     ui.scaleBtns.forEach((b) =>
       b.addEventListener("click", () => {
         this.scene.setScale(b.dataset.scale as ScaleName);
-        ui.scaleBtns.forEach((x) => x.classList.toggle("on", x === b));
+        markScale((x) => x === b);
       })
     );
-    this.scene.onScaleChange = (s) => {
-      ui.scaleBtns.forEach((x) => x.classList.toggle("on", x.dataset.scale === s));
-    };
+    this.scene.onScaleChange = (s) => markScale((x) => x.dataset.scale === s);
 
     // zoom / layers
     ui.zoomIn.addEventListener("click", () => this.scene.zoomBy(0.55));
@@ -510,12 +526,121 @@ export class App {
       this.setPage("map");
       this.scene.flyTo(new THREE.Vector3(x, 0, -y), Math.min(2600, Math.max(1200, this.scene.distance)), 1000);
     });
-    window.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        if (this.track) this.releaseTrack("RELEASED BY OPERATOR");
-        else this.dismissUnitCard();
+    // ---- search ----
+    ui.searchBtn.addEventListener("click", () => this.setSearchOpen(!ui.searchPop.classList.contains("open")));
+    ui.searchClose.addEventListener("click", () => {
+      this.setSearchOpen(false);
+      ui.searchBtn.focus();
+    });
+    ui.searchInput.addEventListener("input", () => this.renderSearch());
+    ui.searchInput.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        this.moveSearchSel(1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        this.moveSearchSel(-1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        this.commitSearch(this.searchSel);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.setSearchOpen(false);
+        ui.searchBtn.focus();
       }
     });
+    ui.searchResults.addEventListener("click", (e) => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>(".sr-row");
+      if (row) this.commitSearch(+(row.dataset.i ?? "-1"));
+    });
+
+    window.addEventListener("keydown", (e) => this.onKey(e));
+  }
+
+  /**
+   * Keyboard shortcuts for the things an operator does constantly.
+   *
+   * Everything here is reachable by mouse as well; this is a second route, not
+   * the only one. Anything with a modifier is left alone so the browser's own
+   * shortcuts keep working, and typing into a field is never intercepted —
+   * except by Escape, which means "get me out of this" everywhere.
+   */
+  private onKey(e: KeyboardEvent) {
+    const t = e.target as HTMLElement | null;
+    const typing =
+      !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+
+    if (e.key === "Escape") {
+      if (this.ui.searchPop.classList.contains("open")) this.setSearchOpen(false);
+      else if (this.ui.layersPop.classList.contains("open")) {
+        this.ui.layersPop.classList.remove("open");
+        this.ui.layersBtn.classList.remove("on");
+      } else if (this.track) this.releaseTrack("RELEASED BY OPERATOR");
+      else this.dismissUnitCard();
+      return;
+    }
+    if (typing || e.ctrlKey || e.metaKey || e.altKey) return;
+
+    switch (e.key) {
+      case "/":
+        e.preventDefault(); // Firefox binds this to quick-find
+        this.setSearchOpen(true);
+        break;
+      case "1":
+        this.setMode("live");
+        this.saveSetting("mode", this.mode);
+        break;
+      case "2":
+        this.setMode("sim");
+        this.saveSetting("mode", this.mode);
+        break;
+      case "3":
+        this.setMode("history");
+        this.saveSetting("mode", this.mode);
+        break;
+      case "l":
+      case "L": {
+        const open = !this.ui.layersPop.classList.contains("open");
+        this.ui.layersPop.classList.toggle("open", open);
+        this.ui.layersBtn.classList.toggle("on", open);
+        if (open) this.setSearchOpen(false);
+        break;
+      }
+      case "?":
+        this.toast(
+          "info",
+          "<b>KEYS</b> — / FIND · 1 LIVE · 2 SIMULATION · 3 HISTORY · L LAYERS · ESC RELEASE"
+        );
+        break;
+    }
+  }
+
+  /**
+   * Withdraw the controls a phone cannot honour.
+   *
+   * `main.ts` never starts the simulation worker on a phone, so no frame and
+   * no congestion message ever arrives: the modelled fleet has nothing to
+   * draw and the flux replay has nothing to replay. The same reasoning already
+   * removes SIMULATION and SETUP there — "offering a mode that cannot run is
+   * worse than not offering it" — and it applies just as well to four switches
+   * and a button that can only ever report NO HISTORY YET.
+   *
+   * Hidden rather than removed, so `layerBoxes`, the saved layer states and
+   * `setBox` all keep working on the same elements they always did.
+   */
+  private withdrawPhoneControls() {
+    if (!App.PHONE) return;
+    for (const layer of ["vehicles", "bikes", "pedestrians", "congestion"]) {
+      const box = this.ui.layerBoxes.find((b) => b.dataset.layer === layer);
+      const label = box?.closest("label") as HTMLElement | null;
+      if (label) label.style.display = "none";
+    }
+    const replay = this.ui.hud.querySelector<HTMLElement>("#replay-btn");
+    if (replay) {
+      // the gap that spaced it from the zoom buttons goes with it
+      (replay.previousElementSibling as HTMLElement | null)?.style.setProperty("display", "none");
+      replay.style.display = "none";
+    }
   }
 
   // ---------- target tracking ----------
@@ -652,6 +777,117 @@ export class App {
     this.log("ok", `TARGET ACQUIRED — ${best.label} UNDER CAMERA LOCK`);
   }
 
+  // ---------- search ----------
+
+  /**
+   * The index, built on first use and kept current with the live stops.
+   *
+   * The street half walks every edge in the graph, which is not something to
+   * do during boot for a panel nobody may open — so it waits for the first
+   * keystroke. The stop half arrives with the snapshot and changes every two
+   * minutes, so it is rebuilt when the snapshot's `stops` object changes
+   * identity rather than on every keystroke: a search runs on every character
+   * typed, and re-indexing 700 stops each time would be felt.
+   */
+  private searchAll(): SearchEntry[] {
+    if (!this.searchStatic) {
+      this.searchStatic = buildSearchIndex(this.data, this.data.meta.districts.map((d) => d.name));
+    }
+    const stops = this.live?.departures?.stops;
+    if (!this.searchMerged || stops !== this.searchStopsFrom) {
+      this.searchStopsFrom = stops;
+      this.searchMerged = this.searchStatic.concat(stopEntries(stops));
+    }
+    return this.searchMerged;
+  }
+
+  setSearchOpen(open: boolean) {
+    this.ui.searchPop.classList.toggle("open", open);
+    this.ui.searchBtn.classList.toggle("on", open);
+    this.ui.searchInput.setAttribute("aria-expanded", String(open));
+    if (!open) {
+      this.ui.searchResults.innerHTML = "";
+      this.searchHits = [];
+      this.ui.searchInput.removeAttribute("aria-activedescendant");
+      return;
+    }
+    // both panels want the same corner
+    this.ui.layersPop.classList.remove("open");
+    this.ui.layersBtn.classList.remove("on");
+    this.setPage("map");
+    this.ui.searchInput.focus();
+    this.ui.searchInput.select();
+    this.renderSearch();
+  }
+
+  /**
+   * The second series on the brief chart, and the legend swatch that names it.
+   *
+   * One constant for both because they have to agree — and #666, which they
+   * used to share, measured 3.41:1 as legend text. Lifting only the words
+   * would have left the legend pointing at a line of a different grey.
+   */
+  private static readonly TRACKS_INK = "#8a8a8a";
+
+  private static SEARCH_KIND: Record<string, string> = {
+    street: "ST",
+    station: "NDW",
+    stop: "RET",
+    district: "DIS",
+  };
+
+  private renderSearch() {
+    const q = this.ui.searchInput.value;
+    this.searchHits = searchIndex(this.searchAll(), q, 8);
+    this.searchSel = 0;
+    const list = this.ui.searchResults;
+    if (!this.searchHits.length) {
+      list.innerHTML = q.trim().length >= 2 ? `<div class="sr-empty">NOTHING MATCHES “${escapeHtml(q)}”</div>` : "";
+      this.ui.searchInput.removeAttribute("aria-activedescendant");
+      return;
+    }
+    list.innerHTML = this.searchHits
+      .map((h, i) => {
+        // the matched letters, marked up in place — a result reads as an answer
+        // to what was typed rather than a list that happens to contain it
+        const [a, b] = h.at;
+        const name =
+          b > a
+            ? `${escapeHtml(h.label.slice(0, a))}<b>${escapeHtml(h.label.slice(a, b))}</b>${escapeHtml(h.label.slice(b))}`
+            : escapeHtml(h.label);
+        return `<div class="sr-row${i === 0 ? " sel" : ""}" id="sr-opt-${i}" role="option" aria-selected="${i === 0}" data-i="${i}">
+          <span class="sr-kind">${App.SEARCH_KIND[h.kind] ?? ""}</span>
+          <span class="sr-name">${name}</span>
+          <span class="sr-sub">${escapeHtml(h.sub)}</span>
+        </div>`;
+      })
+      .join("");
+    this.ui.searchInput.setAttribute("aria-activedescendant", "sr-opt-0");
+  }
+
+  private moveSearchSel(delta: number) {
+    if (!this.searchHits.length) return;
+    const n = this.searchHits.length;
+    this.searchSel = (this.searchSel + delta + n) % n;
+    const rows = this.ui.searchResults.querySelectorAll<HTMLElement>(".sr-row");
+    rows.forEach((r, i) => {
+      const on = i === this.searchSel;
+      r.classList.toggle("sel", on);
+      r.setAttribute("aria-selected", String(on));
+      if (on) r.scrollIntoView({ block: "nearest" });
+    });
+    this.ui.searchInput.setAttribute("aria-activedescendant", `sr-opt-${this.searchSel}`);
+  }
+
+  private commitSearch(i: number) {
+    const h = this.searchHits[i];
+    if (!h) return;
+    this.setSearchOpen(false);
+    this.setPage("map");
+    this.scene.flyTo(new THREE.Vector3(h.x, 0, -h.y), h.dist, 1100);
+    this.log("ok", `MOVED TO ${escapeHtml(h.label.toUpperCase())} — ${escapeHtml(h.sub.toUpperCase())}`);
+  }
+
   // ---------- live departure boards ----------
 
   /**
@@ -673,6 +909,7 @@ export class App {
     this.live = snap;
     this.liveFresh = fresh;
     if (this.boardKey) this.renderBoard();
+    if (this.page === "brief" && this.mode === "live") this.renderBrief();
   }
 
   closeBoard() {
@@ -871,7 +1108,7 @@ export class App {
     }
     if (this.mode === "sim") this.setMode("live");
     this.log("warn", `SIM CORE UNAVAILABLE — ${reason.toUpperCase()} · MEASURED FEEDS UNAFFECTED`);
-    const note = document.getElementById("setup-mode-note");
+    const note = document.getElementById("smn-text");
     if (note) {
       note.textContent =
         `The simulation core could not start on this device (${reason}). ` +
@@ -879,6 +1116,9 @@ export class App {
         `sensor congestion, incidents, weather and the archive. What is missing is ` +
         `modelled: the cars, bikes and pedestrians on the live map, and Simulation mode itself.`;
     }
+    // there is no simulation to switch to
+    const go = document.getElementById("smn-go");
+    if (go) go.style.display = "none";
   }
 
   /** Minutes since midnight in Rotterdam, from the viewer's own clock. */
@@ -923,7 +1163,11 @@ export class App {
     if (m === "sim" && (!this.simAvailable || App.PHONE)) m = "live";
     const prevMode = this.mode;
     this.mode = m;
-    this.ui.modeBtns.forEach((b) => b.classList.toggle("on", b.dataset.mode === m));
+    this.ui.modeBtns.forEach((b) => {
+      const on = b.dataset.mode === m;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", String(on));
+    });
     document.body.dataset.mode = m;
 
     const sim = m === "sim";
@@ -980,12 +1224,17 @@ export class App {
     // SETUP alters model variables; in LIVE and HISTORY there is nothing to
     // alter, and pretending otherwise would imply the sliders change the city
     this.ui.pageSetup.classList.toggle("mode-locked", !sim);
-    const note = document.getElementById("setup-mode-note");
-    if (note && this.simAvailable) {
-      note.textContent = sim
+    this.lockSetupControls(!sim);
+    const noteText = document.getElementById("smn-text");
+    const noteGo = document.getElementById("smn-go") as HTMLButtonElement | null;
+    if (noteText && this.simAvailable) {
+      noteText.textContent = sim
         ? ""
-        : `Variables are a simulation control. Switch to SIMULATION to change fleet density, demand, signal timing or inject incidents.`;
+        : `Variables are a simulation control. Fleet density, demand, signal timing, scenarios, calibration and the signal trial all move the model, not the city.`;
     }
+    if (noteGo) noteGo.style.display = !sim && this.simAvailable ? "" : "none";
+    // the brief leads with a different set of figures per mode
+    if (this.page === "brief") this.renderBrief();
     this.log(
       "info",
       live
@@ -994,6 +1243,35 @@ export class App {
           ? "SIMULATION MODE — MODELLED CITY: VARIABLES UNLOCKED"
           : "HISTORY MODE — REPLAYING THE ARCHIVE"
     );
+  }
+
+  /**
+   * Disable every SETUP control that moves a model variable.
+   *
+   * The stylesheet dims and un-clicks the panels, but that lock was a single
+   * `#setup-grid` selector and the Calibration and Scenario Library panels are
+   * siblings of that grid, not children — so both stayed fully live outside
+   * SIMULATION. Pressing "Erasmusbrug raised" in LIVE really did raise it: a
+   * CRIT event about a bridge that was not open, written into the same feed
+   * that carries the real NDW bridge openings.
+   *
+   * Belt as well as braces, deliberately. The CSS is the thing anyone will see;
+   * `disabled` is the thing that holds if a future selector stops matching,
+   * and it is also what tells a screen reader these controls are unavailable —
+   * which `pointer-events: none` never did.
+   *
+   * The note is excluded by scoping rather than by name: it is neither inside
+   * the grid nor a `.panel`, so the button that switches to SIMULATION stays
+   * pressable, which is the whole point of it being there.
+   */
+  private lockSetupControls(locked: boolean) {
+    this.ui.pageSetup
+      .querySelectorAll<HTMLButtonElement | HTMLInputElement>(
+        "#setup-grid button, #setup-grid input, :scope > .panel button, :scope > .panel input"
+      )
+      .forEach((el) => {
+        el.disabled = locked;
+      });
   }
 
   // ---------- history: replaying the archive ----------
@@ -1356,7 +1634,12 @@ export class App {
     // SETUP only moves simulation variables, and a phone has no simulation
     if (p === "setup" && App.PHONE) p = "map";
     this.page = p;
-    this.ui.navBtns.forEach((b) => b.classList.toggle("on", b.dataset.page === p));
+    this.ui.navBtns.forEach((b) => {
+      const on = b.dataset.page === p;
+      b.classList.toggle("on", on);
+      if (on) b.setAttribute("aria-current", "page");
+      else b.removeAttribute("aria-current");
+    });
     this.ui.pageBrief.classList.toggle("on", p === "brief");
     this.ui.pageSetup.classList.toggle("on", p === "setup");
     const mapUi = p === "map";
@@ -2124,21 +2407,19 @@ export class App {
   // ---------- BRIEF ----------
   private buildBriefPage() {
     this.ui.pageBrief.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
         <div>
           <h1>Intelligence Brief</h1>
-          <div class="sub">ROTTERDAM METRO AREA — LIVE TRAFFIC POSTURE &amp; NETWORK INTEGRITY</div>
+          <div class="sub" id="brief-sub">ROTTERDAM METRO AREA</div>
         </div>
         <button class="action-btn" id="brief-sitrep">Copy SITREP</button>
       </div>
       <div id="brief-grid"></div>
       <div id="brief-cols">
         <div class="panel">
-          <div class="p-title">City flow — mean speed / active tracks</div>
+          <div class="p-title" id="brief-chart-title">City flow</div>
           <canvas id="brief-chart-canvas"></canvas>
-          <div style="display:flex;gap:18px;margin-top:8px;font-size:9px;color:var(--text-faint);letter-spacing:.12em">
-            <span>— MEAN SPEED</span><span style="color:#666">— ACTIVE TRACKS (SCALED)</span>
-          </div>
+          <div id="brief-chart-legend" style="display:flex;gap:18px;margin-top:8px;font-size:9px;color:var(--text-faint);letter-spacing:.12em"></div>
         </div>
         <div class="panel">
           <div class="p-title">Event feed</div>
@@ -2147,7 +2428,7 @@ export class App {
       </div>
       <div style="height:12px"></div>
       <div class="panel">
-        <div class="p-title">District posture</div>
+        <div class="p-title" id="brief-districts-title">District posture</div>
         <div id="brief-districts" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px 22px"></div>
       </div>`;
     (this.ui.pageBrief.querySelector("#brief-sitrep") as HTMLButtonElement).addEventListener("click", () =>
@@ -2155,59 +2436,291 @@ export class App {
     );
   }
 
+  /**
+   * What the sensors actually reported, rolled up for the brief.
+   *
+   * Every figure here comes off the live snapshot: the NDW station rows, the
+   * situation feed, the GTFS-RT fleet. Nothing modelled reaches it. Congestion
+   * is measured speed against the posted limit on the edge each station sits
+   * on, which is the same arithmetic the sensor-net layer colours itself with —
+   * and stations that reported no speed are counted as absent rather than as
+   * free-flowing, for the reason the archive already does the same.
+   */
+  private liveSummary() {
+    const snap = this.live;
+    const ndw = this.data.ndw;
+    if (!snap || !ndw) return null;
+    const nd = this.data.meta.districts.length;
+    const byDistrict = Array.from({ length: nd }, () => ({ cong: 0, speed: 0, n: 0 }));
+    let reporting = 0;
+    let speedSum = 0;
+    let congSum = 0;
+    let flowSum = 0;
+    for (const [i, flow, speed] of snap.traffic?.s ?? []) {
+      const st = ndw.stations[i];
+      if (!st) continue;
+      flowSum += flow;
+      if (!(speed > 0)) continue;
+      const limit = this.data.graph.edges.speed[st.edge] || 50;
+      const cong = Math.max(0, Math.min(1, 1 - speed / limit));
+      reporting++;
+      speedSum += speed;
+      congSum += cong;
+      const d = byDistrict[this.data.graph.edges.district[st.edge]];
+      if (d) {
+        d.cong += cong;
+        d.speed += speed;
+        d.n++;
+      }
+    }
+    const inc = snap.incidents ?? [];
+    return {
+      stations: ndw.stations.length,
+      reporting,
+      meanSpeed: reporting ? speedSum / reporting : 0,
+      congestion: reporting ? congSum / reporting : 0,
+      flow: flowSum,
+      incidents: inc.filter((i) => i.kind !== 4).length,
+      works: inc.filter((i) => i.kind === 4).length,
+      bridges: snap.bridges?.length ?? 0,
+      transit: snap.vehicles?.v.length ?? 0,
+      at: snap.t,
+      districts: byDistrict.map((d) => ({
+        congestion: d.n ? d.cong / d.n : 0,
+        speed: d.n ? d.speed / d.n : 0,
+        stations: d.n,
+      })),
+    };
+  }
+
+  /** The archive record currently under the scrub head, if any. */
+  private historyRecord(): ArchiveRecord | null {
+    return this.historyRecords[Math.min(this.historyIdx, this.historyRecords.length - 1)] ?? null;
+  }
+
+  /**
+   * A pasteable summary of what is on screen — of *this* city, not another.
+   *
+   * It used to refuse outright without simulation metrics ("SITREP UNAVAILABLE
+   * — SIM WARMING UP"), which meant the button never worked at all on a phone,
+   * where the simulation core is never started and the measured feeds are the
+   * entire point. Each mode now reports what it actually has, and every block
+   * is labelled MEASURED or MODELLED so the text cannot be read as the wrong
+   * kind of claim once it has been pasted somewhere else.
+   */
   private copySitrep() {
     const m = this.metrics;
-    if (!m) {
-      this.toast("warn", "SITREP UNAVAILABLE — SIM WARMING UP");
-      return;
-    }
     const c = this.data.meta.counts;
-    const cal = m.calibration;
-    const topDistricts = m.districts
-      .map((d, i) => ({ name: DISTRICTS[i].name, cong: d.congestion }))
-      .sort((a, b) => b.cong - a.cong)
-      .slice(0, 3)
-      .map((d) => `${d.name} ${(d.cong * 100).toFixed(0)}%`)
-      .join(" · ");
-    const lines = [
-      `SURVEILTRACK SITREP — ROTTERDAM, NL`,
-      `${new Date().toISOString().slice(0, 16).replace("T", " ")}Z · SIM CLOCK ${fmtSimClock(m.clockMin)}`,
-      `─────────────────────────────────────`,
-      `TRACKS    ${fmtInt(m.active)} cars · ${fmtInt(m.trucks)} freight · ${fmtInt(m.bikes)} bikes · ${fmtInt(m.walkers)} pedestrians · ${fmtInt(this.layers.transit.vehicleCount)} transit`,
-      `FLOW      ${fmtInt(m.throughputMin)} trips/min · mean ${m.avgSpeedKmh.toFixed(1)} km/h · ${fmtInt(m.queued)} queued (${((m.queued / Math.max(1, m.active)) * 100).toFixed(0)}%)`,
-      `SIGNALS   ${fmtInt(m.greensNow)}/${fmtInt(c.signalsInventory)} heads green · ${fmtInt(c.junctions)} junctions under control`,
-      cal && cal.ratio > 0
-        ? `CALIB     ${(cal.ratio * 100).toFixed(1)}% of NDW measured flow · scale 1:${(1 / cal.ratio).toFixed(1)} · ${fmtInt(cal.stations)} stations`
-        : `CALIB     no sensor lock`,
-      `CONGEST   index ${(m.congestionIndex * 100).toFixed(0)}% · hottest: ${topDistricts}`,
-      `INCIDENTS ${fmtInt(m.incidents)} active`,
-      `GRID      ${fmtInt(c.roadKm)} km road · ${fmtInt(c.pathKm)} km paths · ${fmtInt(c.buildings)} structures`,
-    ];
+    const lines: string[] = [`SURVEILTRACK SITREP — ROTTERDAM, NL`];
+
+    if (this.mode === "history") {
+      const rec = this.historyRecord();
+      if (!rec) {
+        this.toast("warn", "NOTHING ARCHIVED AT THIS MOMENT — SCRUB TO A RECORDED ONE");
+        return;
+      }
+      const seen = rec.districts.filter((d) => d.speed > 0);
+      const cong = seen.length ? seen.reduce((p, d) => p + d.congestion, 0) / seen.length : 0;
+      const worst = rec.districts
+        .map((d, i) => ({ d, name: DISTRICTS[i]?.name ?? `D${i}` }))
+        .filter((x) => x.d.speed > 0)
+        .sort((a, b) => b.d.congestion - a.d.congestion)
+        .slice(0, 3)
+        .map((x) => `${x.name} ${(x.d.congestion * 100).toFixed(0)}%`)
+        .join(" · ");
+      lines.push(
+        `ARCHIVED  ${new Date(rec.t).toISOString().slice(0, 16).replace("T", " ")}Z`,
+        `─────────────────────────────────────`,
+        `MEASURED  congestion ${(cong * 100).toFixed(0)}% over ${seen.length} reporting district${seen.length === 1 ? "" : "s"}`,
+        `HOTTEST   ${worst || "none reporting"}`,
+        `EVENTS    ${fmtInt(rec.incidents)} incidents · ${fmtInt(rec.bridges)} bridges open`,
+        `TRANSIT   ${fmtInt(rec.transit)} vehicles in service`,
+        `WEATHER   ${rec.temp.toFixed(1)}°C · ${rec.rain.toFixed(1)} mm/h · Maas ${rec.waterCm >= 0 ? "+" : ""}${rec.waterCm} cm`
+      );
+    } else if (this.mode === "live") {
+      const live = this.liveSummary();
+      if (!live) {
+        this.toast("warn", "NO LIVE SNAPSHOT HAS REACHED THIS TAB YET");
+        return;
+      }
+      const worst = live.districts
+        .map((d, i) => ({ d, name: DISTRICTS[i]?.name ?? `D${i}` }))
+        .filter((x) => x.d.stations > 0)
+        .sort((a, b) => b.d.congestion - a.d.congestion)
+        .slice(0, 3)
+        .map((x) => `${x.name} ${(x.d.congestion * 100).toFixed(0)}%`)
+        .join(" · ");
+      lines.push(
+        `${new Date().toISOString().slice(0, 16).replace("T", " ")}Z · SNAPSHOT ${live.at}${this.liveFresh ? "" : " (STALE)"}`,
+        `─────────────────────────────────────`,
+        `MEASURED  ${fmtInt(live.reporting)}/${fmtInt(live.stations)} NDW stations reporting · ${fmtInt(live.flow)} veh/h summed`,
+        `SPEED     ${live.meanSpeed.toFixed(1)} km/h mean · congestion ${(live.congestion * 100).toFixed(0)}% vs posted limits`,
+        `HOTTEST   ${worst || "no district reporting"}`,
+        `EVENTS    ${fmtInt(live.incidents)} incidents · ${fmtInt(live.works)} roadworks · ${fmtInt(live.bridges)} bridges open`,
+        `TRANSIT   ${fmtInt(live.transit)} vehicles reporting a position (OVapi GTFS-RT)`,
+        `GRID      ${fmtInt(c.roadKm)} km road · ${fmtInt(c.pathKm)} km paths · ${fmtInt(c.signalsInventory)} signal heads`
+      );
+      if (m) {
+        lines.push(
+          `─────────────────────────────────────`,
+          `MODELLED  ${fmtInt(m.active)} tracks · ${m.avgSpeedKmh.toFixed(1)} km/h mean · ${fmtInt(m.queued)} queued`,
+          `          (agents on the real graph — no individual vehicle is a real one)`
+        );
+      }
+    } else {
+      if (!m) {
+        this.toast("warn", "SITREP UNAVAILABLE — SIM WARMING UP");
+        return;
+      }
+      const cal = m.calibration;
+      const topDistricts = m.districts
+        .map((d, i) => ({ name: DISTRICTS[i].name, cong: d.congestion }))
+        .sort((a, b) => b.cong - a.cong)
+        .slice(0, 3)
+        .map((d) => `${d.name} ${(d.cong * 100).toFixed(0)}%`)
+        .join(" · ");
+      lines.push(
+        `MODELLED · ${new Date().toISOString().slice(0, 16).replace("T", " ")}Z · SIM CLOCK ${fmtSimClock(m.clockMin)}`,
+        `─────────────────────────────────────`,
+        `TRACKS    ${fmtInt(m.active)} cars · ${fmtInt(m.trucks)} freight · ${fmtInt(m.bikes)} bikes · ${fmtInt(m.walkers)} pedestrians · ${fmtInt(this.layers.transit.vehicleCount)} transit`,
+        `FLOW      ${fmtInt(m.throughputMin)} trips/min · mean ${m.avgSpeedKmh.toFixed(1)} km/h · ${fmtInt(m.queued)} queued (${((m.queued / Math.max(1, m.active)) * 100).toFixed(0)}%)`,
+        `SIGNALS   ${fmtInt(m.greensNow)}/${fmtInt(c.signalsInventory)} heads green · ${fmtInt(c.junctions)} junctions under control`,
+        cal && cal.ratio > 0
+          ? `CALIB     ${(cal.ratio * 100).toFixed(1)}% of NDW measured flow · scale 1:${(1 / cal.ratio).toFixed(1)} · ${fmtInt(cal.stations)} stations`
+          : `CALIB     no sensor lock`,
+        `CONGEST   index ${(m.congestionIndex * 100).toFixed(0)}% · hottest: ${topDistricts}`,
+        `INCIDENTS ${fmtInt(m.incidents)} active`,
+        `GRID      ${fmtInt(c.roadKm)} km road · ${fmtInt(c.pathKm)} km paths · ${fmtInt(c.buildings)} structures`
+      );
+    }
+
     const text = lines.join("\n");
     navigator.clipboard
       ?.writeText(text)
       .then(() => this.toast("info", "<b>SITREP COPIED</b> TO CLIPBOARD"))
       .catch(() => this.toast("warn", "CLIPBOARD BLOCKED — SITREP LOGGED TO MESSAGES"));
-    for (const l of lines) this.log("info", l);
+    for (const l of lines) this.log("info", escapeHtml(l));
   }
 
   private renderBrief() {
     const m = this.metrics;
     const c = this.data.meta.counts;
+    const live = this.liveSummary();
+    const rec = this.historyRecord();
+    const mode = this.mode;
     const grid = document.getElementById("brief-grid")!;
     const kpi = (k: string, v: string, s?: string) =>
       `<div class="panel kpi"><div class="k">${k}</div><div class="v">${v}</div><div class="s">${s ?? ""}</div></div>`;
-    grid.innerHTML = [
-      kpi("Active tracks", m ? fmtInt(m.active) : "—", m ? `${fmtInt(m.bikes)} BIKES · ${fmtInt(m.walkers)} PEDS · ${fmtInt(this.layers.transit.vehicleCount)} TRANSIT` : ""),
-      kpi("Network speed", m ? `${m.avgSpeedKmh.toFixed(1)}<span class="u"> KM/H</span>` : "—", m ? `${fmtInt(m.queued)} QUEUED` : ""),
-      kpi("Congestion index", m ? `${Math.round(m.congestionIndex * 100)}<span class="u">%</span>` : "—", m && m.congestionIndex > 0.4 ? "ELEVATED" : "NOMINAL"),
-      kpi("Signal grid", `${fmtInt(c.signalsInventory)}`, `${fmtInt(c.junctions)} JUNCTIONS · ${m ? fmtInt(m.greensNow) : "—"} GREEN`),
-    ].join("");
+    const pct = (v: number) => `${Math.round(v * 100)}<span class="u">%</span>`;
 
-    // chart
+    // Which city this page is about, said out loud.
+    //
+    // It used to read `this.metrics` and nothing else — so under a header that
+    // said LIVE, and a chip that said the feed was hours stale, it presented
+    // the simulation's numbers beneath the words "LIVE TRAFFIC POSTURE". That
+    // is the exact confusion the mode switch exists to remove, on the page most
+    // likely to be screenshotted. Each mode now leads with the figures that
+    // mode actually has, and every panel says which kind it is showing.
+    const sub = document.getElementById("brief-sub")!;
+    const asOf =
+      mode === "live"
+        ? live
+          ? `${fmtTimestamp(new Date(live.at), TIMEZONE)} · ${this.liveFresh ? `${fmtAge((Date.now() - Date.parse(live.at)) / 1000)} OLD` : "FEED STALE"}`
+          : "NO SNAPSHOT YET"
+        : mode === "history"
+          ? rec
+            ? fmtTimestamp(new Date(rec.t), TIMEZONE)
+            : "NOTHING ARCHIVED IN THIS WINDOW"
+          : m
+            ? `SIM CLOCK ${fmtSimClock(m.clockMin)}`
+            : "WARMING UP";
+    sub.innerHTML =
+      mode === "live"
+        ? `<span class="src measured">MEASURED</span> NDW SENSOR NET · OVAPI TRANSIT · NDW SITUATIONS — ${escapeHtml(asOf)}`
+        : mode === "history"
+          ? `<span class="src measured">ARCHIVED</span> READING THE SCRUBBED MOMENT — ${escapeHtml(asOf)}`
+          : `<span class="src modelled">MODELLED</span> AGENTS ON THE REAL STREET GRAPH — ${escapeHtml(asOf)}`;
+
+    if (mode === "live") {
+      grid.innerHTML = live
+        ? [
+            kpi(
+              "Sensor network",
+              fmtInt(live.reporting),
+              `OF ${fmtInt(live.stations)} STATIONS REPORTING A SPEED`
+            ),
+            kpi(
+              "Measured speed",
+              `${live.meanSpeed.toFixed(1)}<span class="u"> KM/H</span>`,
+              "MEAN OVER REPORTING STATIONS"
+            ),
+            kpi(
+              "Measured congestion",
+              pct(live.congestion),
+              "AGAINST THE POSTED LIMIT ON EACH STATION'S EDGE"
+            ),
+            kpi(
+              "Transit in service",
+              fmtInt(live.transit),
+              "TRAMS · METROS · BUSES · FERRIES REPORTING A POSITION"
+            ),
+            kpi(
+              "Live incidents",
+              fmtInt(live.incidents),
+              `${fmtInt(live.works)} ROADWORKS · ${fmtInt(live.bridges)} BRIDGE${live.bridges === 1 ? "" : "S"} OPEN`
+            ),
+            kpi("Signal grid", fmtInt(c.signalsInventory), `${fmtInt(c.junctions)} JUNCTIONS MAPPED`),
+          ].join("")
+        : `<div class="panel kpi"><div class="k">Sensor network</div><div class="v">—</div><div class="s">NO LIVE SNAPSHOT REACHED THIS TAB YET</div></div>`;
+    } else if (mode === "history") {
+      const cityCong = rec
+        ? (() => {
+            const seen = rec.districts.filter((d) => d.speed > 0);
+            return seen.length ? seen.reduce((p, d) => p + d.congestion, 0) / seen.length : 0;
+          })()
+        : 0;
+      const seen = rec ? rec.districts.filter((d) => d.speed > 0) : [];
+      grid.innerHTML = rec
+        ? [
+            kpi("Archived congestion", pct(cityCong), `MEAN OVER ${seen.length} MEASURED DISTRICT${seen.length === 1 ? "" : "S"}`),
+            kpi(
+              "District speed",
+              `${(seen.length ? seen.reduce((p, d) => p + d.speed, 0) / seen.length : 0).toFixed(1)}<span class="u"> KM/H</span>`,
+              "MEAN OF THE DISTRICTS THAT REPORTED"
+            ),
+            kpi("Incidents", fmtInt(rec.incidents), `${fmtInt(rec.bridges)} BRIDGE${rec.bridges === 1 ? "" : "S"} OPEN`),
+            kpi("Transit in service", fmtInt(rec.transit), `${rec.temp.toFixed(1)}°C · ${rec.rain.toFixed(1)} MM/H RAIN`),
+          ].join("")
+        : `<div class="panel kpi"><div class="k">Archive</div><div class="v">—</div><div class="s">SCRUB THE ARCHIVE BAR TO A MOMENT THAT WAS RECORDED</div></div>`;
+    } else {
+      grid.innerHTML = [
+        kpi(
+          "Active tracks",
+          m ? fmtInt(m.active) : "—",
+          m ? `${fmtInt(m.bikes)} BIKES · ${fmtInt(m.walkers)} PEDS · ${fmtInt(this.layers.transit.vehicleCount)} TRANSIT` : ""
+        ),
+        kpi("Network speed", m ? `${m.avgSpeedKmh.toFixed(1)}<span class="u"> KM/H</span>` : "—", m ? `${fmtInt(m.queued)} QUEUED` : ""),
+        kpi("Congestion index", m ? pct(m.congestionIndex) : "—", m && m.congestionIndex > 0.4 ? "ELEVATED" : "NOMINAL"),
+        kpi("Signal grid", fmtInt(c.signalsInventory), `${fmtInt(c.junctions)} JUNCTIONS · ${m ? fmtInt(m.greensNow) : "—"} GREEN`),
+      ].join("");
+    }
+
+    // ---- chart ----
+    // In HISTORY the series is the archive's own measured congestion; in the
+    // other two it is the model's. The panel title carries which, because two
+    // unlabelled lines on an unlabelled axis are indistinguishable.
+    const chartTitle = document.getElementById("brief-chart-title")!;
+    const chartLegend = document.getElementById("brief-chart-legend")!;
     const canvas = document.getElementById("brief-chart-canvas") as HTMLCanvasElement;
-    const hist = this.cityHistory;
-    if (canvas && hist.length > 2) {
+    const historySeries = mode === "history" ? this.historyRecords : null;
+    chartTitle.innerHTML =
+      historySeries
+        ? `<span class="src measured">MEASURED</span> Archived congestion across the window`
+        : `<span class="src modelled">MODELLED</span> City flow — mean speed / active tracks`;
+    chartLegend.innerHTML = historySeries
+      ? `<span>— CONGESTION, 0–100%</span>`
+      : `<span>— MEAN SPEED, 0–60 KM/H</span><span style="color:${App.TRACKS_INK}">— ACTIVE TRACKS (SCALED TO PEAK)</span>`;
+    if (canvas) {
       const dpr = Math.min(devicePixelRatio, 2);
       const w = canvas.clientWidth, h = canvas.clientHeight;
       canvas.width = w * dpr; canvas.height = h * dpr;
@@ -2219,6 +2732,7 @@ export class App {
         ctx.beginPath(); ctx.moveTo(0, h * f); ctx.lineTo(w, h * f); ctx.stroke();
       }
       const draw = (vals: number[], max: number, color: string) => {
+        if (vals.length < 2) return;
         ctx.beginPath();
         vals.forEach((v, i) => {
           const x = (i / (vals.length - 1)) * w;
@@ -2227,30 +2741,64 @@ export class App {
         });
         ctx.strokeStyle = color; ctx.lineWidth = 1.2; ctx.stroke();
       };
-      draw(hist.map((x) => x.speed), 60, "#dedede");
-      draw(hist.map((x) => x.active), Math.max(2000, ...hist.map((x) => x.active)) * 1.15, "#666");
+      if (historySeries) {
+        draw(
+          historySeries.map((r) => {
+            const seen = r.districts.filter((d) => d.speed > 0);
+            return seen.length ? seen.reduce((p, d) => p + d.congestion, 0) / seen.length : 0;
+          }),
+          1,
+          "#ee4444"
+        );
+      } else {
+        const hist = this.cityHistory;
+        draw(hist.map((x) => x.speed), 60, "#dedede");
+        draw(hist.map((x) => x.active), Math.max(2000, ...hist.map((x) => x.active)) * 1.15, App.TRACKS_INK);
+      }
     }
 
-    // events into brief
+    // ---- events into brief ----
     const evWrap = document.getElementById("brief-events")!;
     evWrap.innerHTML = "";
     Array.from(this.ui.msgList.children)
       .slice(0, 9)
       .forEach((n) => evWrap.appendChild(n.cloneNode(true)));
 
-    // districts posture
+    // ---- district posture ----
+    // Measured per-district congestion in LIVE, the archive's in HISTORY, the
+    // model's in SIMULATION. A district with no reporting station says so
+    // rather than drawing an empty bar that reads as free-flowing.
+    const dTitle = document.getElementById("brief-districts-title")!;
     const dWrap = document.getElementById("brief-districts")!;
-    if (m) {
-      dWrap.innerHTML = m.districts
-        .map((d, i) => {
-          const cg = Math.round(d.congestion * 100);
-          const cls = cg > 65 ? "crit" : cg > 40 ? "warn" : "";
-          return `<div style="display:flex;flex-direction:column;gap:3px">
-            <div style="display:flex;justify-content:space-between;font-size:9.5px;color:var(--text-dim)"><span>${DISTRICTS[i].name.toUpperCase()}</span><span>${cg}%</span></div>
-            <span class="cong-bar ${cls}" style="width:100%"><i style="width:${Math.min(100, cg)}%"></i></span>
-          </div>`;
-        })
-        .join("");
+    const bar = (name: string, cg: number | null, note: string) => {
+      const pctv = cg === null ? 0 : Math.round(cg * 100);
+      const cls = cg === null ? "" : pctv > 65 ? "crit" : pctv > 40 ? "warn" : "";
+      return `<div style="display:flex;flex-direction:column;gap:3px">
+        <div style="display:flex;justify-content:space-between;gap:8px;font-size:9.5px;color:var(--text-dim)"><span>${escapeHtml(name.toUpperCase())}</span><span>${cg === null ? note : `${pctv}%`}</span></div>
+        <span class="cong-bar ${cls}${cg === null ? " unmeasured" : ""}" style="width:100%"><i style="width:${cg === null ? 0 : Math.min(100, pctv)}%"></i></span>
+      </div>`;
+    };
+    if (mode === "live") {
+      dTitle.innerHTML = `<span class="src measured">MEASURED</span> District posture — sensor speed against the limit`;
+      dWrap.innerHTML = live
+        ? live.districts
+            .map((d, i) =>
+              bar(DISTRICTS[i]?.name ?? `D${i}`, d.stations ? d.congestion : null, "NO STATION")
+            )
+            .join("")
+        : "";
+    } else if (mode === "history") {
+      dTitle.innerHTML = `<span class="src measured">ARCHIVED</span> District posture at the scrubbed moment`;
+      dWrap.innerHTML = rec
+        ? rec.districts
+            .map((d, i) => bar(DISTRICTS[i]?.name ?? `D${i}`, d.speed > 0 ? d.congestion : null, "NOT MEASURED"))
+            .join("")
+        : "";
+    } else {
+      dTitle.innerHTML = `<span class="src modelled">MODELLED</span> District posture`;
+      dWrap.innerHTML = m
+        ? m.districts.map((d, i) => bar(DISTRICTS[i]?.name ?? `D${i}`, d.congestion, "")).join("")
+        : "";
     }
   }
 
@@ -2260,7 +2808,7 @@ export class App {
     p.innerHTML = `
       <h1>Setup</h1>
       <div class="sub">SIMULATION CORE · OBSERVATION GRID · SYSTEM</div>
-      <div id="setup-mode-note"></div>
+      <div id="setup-mode-note"><span id="smn-text"></span><button class="action-btn" id="smn-go">Switch to Simulation</button></div>
       <div id="setup-grid">
         <div class="panel">
           <div class="p-title">Simulation core</div>
@@ -2474,6 +3022,11 @@ export class App {
     $("su-trial").addEventListener("click", () => {
       this.startTrial();
       this.setPage("map");
+    });
+    // The note said "switch to SIMULATION" and left you to find the switch.
+    $("smn-go").addEventListener("click", () => {
+      this.setMode("sim");
+      this.saveSetting("mode", this.mode);
     });
   }
 

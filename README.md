@@ -59,11 +59,33 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **UNIT MAP** — 3D city with drone observation units, unit detail card with live zone
   telemetry, City/District/Street camera scales, layer control (structures, roads,
   signals, vehicles, congestion flux, hydro, rail, labels)
-- **BRIEF** — city KPIs, flow chart, event feed, district posture
+- **Search** (`/`) — one index over every named thing on the map: ~10k street
+  names from the graph, the 610 NDW sensor stations, every RET stop the live
+  feed publishes, and the fifteen districts. Diacritic- and
+  punctuation-insensitive, so `gravendijkwal` and `sgravendijkwal` both find
+  `'s-Gravendijkwal`. Arrow keys move, ⏎ flies the camera there. A street is
+  indexed on the most important way carrying its name, not the longest — Dutch
+  streets carry a named cycleway alongside the carriageway, and length alone
+  made the Coolsingel a cycleway.
+- **BRIEF** — mode-aware. In LIVE it leads with what was *measured* (stations
+  reporting, mean sensor speed, measured congestion against posted limits, real
+  incidents, transit in service); in SIMULATION with the model's own figures; in
+  HISTORY with the archive record under the scrub head. Every panel carries a
+  MEASURED or MODELLED chip, and a district with no reporting station is drawn
+  as absent rather than as free-flowing.
 - **SETUP** — fleet density, physics rate, signal cycle scale, time of day, incident
-  injection, render scale
+  injection, render scale. Every control is disabled outside SIMULATION,
+  scenarios and the signal trial included, with one button back to it.
 - Dock: unit list, live statistics, district performance table, coverage overview,
   message log
+- **Keyboard**: `/` search · `1`/`2`/`3` mode · `L` layers · `?` the list ·
+  `Esc` close or release. Focus is visible throughout, and
+  `prefers-reduced-motion` turns camera flights into cuts.
+- **Works offline.** A service worker holds the 27 MB of city binaries past the
+  ten minutes GitHub Pages allows, so a second visit is instant and the map
+  opens with no network at all. It never caches `live.json` (a measurement of
+  now) or `meta.json` (the version signal, which is how it knows to drop a
+  stale city). `?nosw=1` unregisters it and clears its caches.
 
 **Three maps, one city** — a mode switch in the header decides what you are
 looking at, because these are different questions and one map cannot answer
@@ -188,7 +210,13 @@ as a few minutes old, and only genuine outages show amber or red.
 ```bash
 npm install
 npm run dev
+npm test        # vitest: binary parsers, snapshot migrations, archive
+                # patterns, the search matcher, the format helpers
 ```
+
+`npm run build` runs the workflow guards, `tsc --noEmit`, the test suite and
+then Vite, so CI cannot publish a build whose parsers or migrations have
+drifted.
 
 Open `http://localhost:5173`. Left-drag pans, right-drag orbits, scroll zooms toward the
 cursor. Everything in the UI is live. The layout is responsive: on phones the
@@ -248,8 +276,14 @@ src/
   render/drone.ts    wireframe drone viewer (unit card)
   ui/chrome.ts       DOM chrome (header, rail, cards, dock, boot)
   ui/app.ts          application controller: pages, units, telemetry, events
+  ui/search.ts       the place index and its matcher (pure, no DOM)
+  data/sw-register.ts  service-worker registration, data fingerprint, ?nosw=1
   main.ts            boot sequence
+public/
+  sw.js              offline cache: the city binaries and the app shell
 ```
+
+Tests sit beside what they cover (`*.test.ts`) and run without a DOM.
 
 Deploys to GitHub Pages via `.github/workflows/deploy.yml` (pushes to `main`).
 
