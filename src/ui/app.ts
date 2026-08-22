@@ -911,9 +911,13 @@ export class App {
   setLive(snap: import("../data/live").LiveSnapshot, fresh: boolean) {
     this.live = snap;
     this.liveFresh = fresh;
-    if (this.boardKey) this.renderBoard();
-    if (this.page === "brief" && this.mode === "live") this.renderBrief();
-    this.renderTransit();
+    // Same reasoning as slowTick, and it matters more here: this runs from the
+    // poll, whose caller records the snapshot's timestamp before handing it on
+    // — so an exception escaping here is not retried, and the app sits on old
+    // data with the map still moving around it.
+    this.guard("departure board", () => this.boardKey && this.renderBoard());
+    this.guard("brief", () => this.page === "brief" && this.mode === "live" && this.renderBrief());
+    this.guard("transit", () => this.renderTransit());
   }
 
   closeBoard() {
@@ -2007,6 +2011,34 @@ export class App {
     }
   }
 
+  /** panels that have already reported a fault, so the log is not flooded */
+  private faulted = new Set<string>();
+
+  /**
+   * Run one panel's render without letting it take the tick down with it.
+   *
+   * Both of this app's heartbeats used to be all-or-nothing: `slowTick` renders
+   * six panels in a row every 1.5 seconds and `setLive` three more on every
+   * snapshot, and an exception anywhere in either stopped everything after it —
+   * a malformed departure row would silently freeze the dock clock, which is
+   * the one thing on screen that looks like proof the app is alive.
+   *
+   * The boundary sanitiser upstream is the real fix for the shapes we know
+   * about. This is for the ones we do not: a panel that fails takes itself out
+   * and says so once, and the other eight keep running.
+   */
+  private guard(what: string, fn: () => void) {
+    try {
+      fn();
+    } catch (err) {
+      if (this.faulted.has(what)) return;
+      this.faulted.add(what);
+      const msg = (err as Error)?.message ?? String(err);
+      console.error(`[${what}]`, err);
+      this.log("crit", `${escapeHtml(what.toUpperCase())} PANEL FAULTED — ${escapeHtml(msg)} · OTHER READOUTS UNAFFECTED`);
+    }
+  }
+
   // ---------- slow tick (1.5s): unit drift, live panels ----------
   private slowTick() {
     for (const u of this.units) {
@@ -2017,13 +2049,16 @@ export class App {
         u.signal = u.linkPct > 80 ? "STRONG" : u.linkPct > 55 ? "MODERATE" : "WEAK";
       }
     }
-    if (this.selected) this.updateUnitCard();
-    if (this.perfState === "live") this.renderPerfLive();
-    this.renderStats();
-    this.renderDistrictTable();
-    this.renderTransit();
-    if (this.page === "brief") this.renderBrief();
-    this.updateDockClock();
+    // Each panel on its own footing: one that throws must not stop the five
+    // behind it, least of all the clock that is the operator's proof the app
+    // is still running.
+    this.guard("unit card", () => this.selected && this.updateUnitCard());
+    this.guard("zone telemetry", () => this.perfState === "live" && this.renderPerfLive());
+    this.guard("statistics", () => this.renderStats());
+    this.guard("district table", () => this.renderDistrictTable());
+    this.guard("transit", () => this.renderTransit());
+    this.guard("brief", () => this.page === "brief" && this.renderBrief());
+    this.guard("clock", () => this.updateDockClock());
   }
 
   private updateDockClock() {

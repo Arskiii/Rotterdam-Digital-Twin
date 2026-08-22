@@ -95,9 +95,9 @@ export interface RoofIndex {
 }
 
 export function parseRoofTile(buf: ArrayBuffer): RoofShell[] {
-  const r = new Reader(buf);
-  if (r.u32() !== 0x46525452) throw new Error("bad roofs magic");
-  const count = r.u16();
+  const r = new Reader(buf, "a roof tile");
+  if (r.u32() !== 0x46525452) throw new CityDataError("a roof tile", "it does not start with the expected marker");
+  const count = r.need(r.u16(), 5, "roof shells");
   const shells: RoofShell[] = [];
   for (let i = 0; i < count; i++) {
     const ordinal = r.u16();
@@ -207,12 +207,55 @@ async function fetchBuf(url: string, onProgress: (frac: number) => void): Promis
   return out.buffer;
 }
 
+/**
+ * What went wrong with a city file, in words worth showing someone.
+ *
+ * The raw failures are `RangeError: Offset is outside the bounds of the
+ * DataView` and `byte length of Float32Array should be a multiple of 4`, and
+ * `boot()` puts whichever one it caught on screen as "BOOT FAILURE — …". That
+ * tells the person in front of it nothing, and it tells them nothing about the
+ * one thing they can act on, which is that the download did not finish.
+ */
+export class CityDataError extends Error {
+  constructor(file: string, detail: string) {
+    super(`${file} could not be read — ${detail}. The download may have been interrupted; reload to fetch it again.`);
+    this.name = "CityDataError";
+  }
+}
+
 class Reader {
   dv: DataView;
   pos = 0;
-  constructor(buf: ArrayBuffer) {
+  /** the file this reader is walking, for error messages */
+  file: string;
+  constructor(buf: ArrayBuffer, file = "city data") {
     this.dv = new DataView(buf);
+    this.file = file;
   }
+
+  /**
+   * Refuse a declared count the buffer cannot possibly satisfy.
+   *
+   * Every one of these formats opens a section with a count and then reads
+   * that many fixed-size records. Trusting the count means a corrupt byte in
+   * the header decides how much memory to allocate: flipping the top bits of
+   * graph.bin's node count asked for a 32 GB typed array, which on a phone is
+   * an out-of-memory kill of the tab rather than an error anyone can read.
+   *
+   * Checking it against the bytes actually remaining costs one comparison per
+   * section and turns every such case into a sentence.
+   */
+  need(count: number, bytesEach: number, what: string): number {
+    const left = this.dv.byteLength - this.pos;
+    if (!Number.isInteger(count) || count < 0 || count * bytesEach > left) {
+      throw new CityDataError(
+        this.file,
+        `it declares ${count.toLocaleString("en-US")} ${what} but only ${left.toLocaleString("en-US")} bytes remain`
+      );
+    }
+    return count;
+  }
+
   u8() { return this.dv.getUint8(this.pos++); }
   u16() { const v = this.dv.getUint16(this.pos, true); this.pos += 2; return v; }
   i16() { const v = this.dv.getInt16(this.pos, true); this.pos += 2; return v; }
@@ -220,10 +263,10 @@ class Reader {
   f32() { const v = this.dv.getFloat32(this.pos, true); this.pos += 4; return v; }
 }
 
-function parsePolylines(buf: ArrayBuffer, magic: number): PolylineSet {
-  const r = new Reader(buf);
-  if (r.u32() !== magic) throw new Error("bad polyline magic");
-  const count = r.u32();
+function parsePolylines(buf: ArrayBuffer, magic: number, file = "a polyline file"): PolylineSet {
+  const r = new Reader(buf, file);
+  if (r.u32() !== magic) throw new CityDataError(file, "it does not start with the expected marker");
+  const count = r.need(r.u32(), 4, "ways");
   const cls = new Uint8Array(count);
   const flags = new Uint8Array(count);
   const ptOffset = new Uint32Array(count);
@@ -246,11 +289,11 @@ function parsePolylines(buf: ArrayBuffer, magic: number): PolylineSet {
 }
 
 export function parseGraph(buf: ArrayBuffer): Graph {
-  const r = new Reader(buf);
-  if (r.u32() !== 0x474d5452) throw new Error("bad graph magic");
+  const r = new Reader(buf, "graph.bin");
+  if (r.u32() !== 0x474d5452) throw new CityDataError("graph.bin", "it does not start with the expected marker");
   const version = r.u32();
   if (version !== 4) throw new Error("graph version mismatch — rerun: npm run build-data");
-  const nodeCount = r.u32();
+  const nodeCount = r.need(r.u32(), 9, "nodes");
   const nodesXY = new Float32Array(nodeCount * 2);
   const inCore = new Uint8Array(nodeCount);
   for (let i = 0; i < nodeCount; i++) {
@@ -258,7 +301,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     nodesXY[i * 2 + 1] = r.f32();
     inCore[i] = r.u8();
   }
-  const sigCount = r.u32();
+  const sigCount = r.need(r.u32(), 8, "signal heads");
   const signals = {
     count: sigCount,
     nodeIdx: new Uint32Array(sigCount),
@@ -272,7 +315,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     signals.phase[i] = r.u8();
     signals.crossingOnly[i] = r.u8();
   }
-  const auxCount = r.u32();
+  const auxCount = r.need(r.u32(), 12, "auxiliary signals");
   const aux = {
     count: auxCount,
     xy: new Float32Array(auxCount * 2),
@@ -286,7 +329,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     aux.phase[i] = r.u8();
     r.u8();
   }
-  const cCount = r.u32();
+  const cCount = r.need(r.u32(), 12, "signal clusters");
   const clusters = {
     count: cCount,
     xy: new Float32Array(cCount * 2),
@@ -301,7 +344,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     clusters.cycle[i] = r.u8();
     clusters.offset[i] = r.u16();
   }
-  const eCount = r.u32();
+  const eCount = r.need(r.u32(), 26, "edges");
   const edges = {
     count: eCount,
     a: new Uint32Array(eCount),
@@ -329,7 +372,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     edges.modeMask[i] = r.u8();
     edges.nameIdx[i] = r.u16();
   }
-  const nameCount = r.u16();
+  const nameCount = r.need(r.u16(), 1, "street names");
   const names: string[] = [];
   const dec = new TextDecoder();
   for (let i = 0; i < nameCount; i++) {
@@ -337,31 +380,36 @@ export function parseGraph(buf: ArrayBuffer): Graph {
     names.push(dec.decode(new Uint8Array(buf, r.pos, len)));
     r.pos += len;
   }
-  const geoCount = r.u32();
+  // The one that used to fail silently: `buf.slice` clamps to the end of the
+  // buffer, so a truncated graph.bin returned a short geometry array about a
+  // quarter of the time (whenever the shortfall happened to be a multiple of
+  // four) and every read past its end came back undefined — a city drawn at
+  // NaN, with no error anywhere.
+  const geoCount = r.need(r.u32(), 8, "geometry points");
   const geo = new Float32Array(buf.slice(r.pos, r.pos + geoCount * 8));
   return { nodeCount, nodesXY, inCore, signals, aux, clusters, edges, names, geo };
 }
 
 function parseWater(buf: ArrayBuffer) {
-  const r = new Reader(buf);
-  if (r.u32() !== 0x574d5452) throw new Error("bad water magic");
-  const nVerts = r.u32();
+  const r = new Reader(buf, "water.bin");
+  if (r.u32() !== 0x574d5452) throw new CityDataError("water.bin", "it does not start with the expected marker");
+  const nVerts = r.need(r.u32(), 8, "vertices");
   const verts = new Float32Array(buf.slice(r.pos, r.pos + nVerts * 8));
   r.pos += nVerts * 8;
-  const nTris = r.u32();
+  const nTris = r.need(r.u32(), 12, "triangles");
   const tris = new Uint32Array(buf.slice(r.pos, r.pos + nTris * 12));
   return { verts, tris };
 }
 
 function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
-  const r = new Reader(buf);
-  if (r.u32() !== 0x424d5452) throw new Error("bad buildings magic");
-  const tileCount = r.u32();
+  const r = new Reader(buf, "buildings.bin");
+  if (r.u32() !== 0x424d5452) throw new CityDataError("buildings.bin", "it does not start with the expected marker");
+  const tileCount = r.need(r.u32(), 12, "tiles");
   const tiles: BuildingTile[] = [];
   for (let t = 0; t < tileCount; t++) {
     const ox = r.f32();
     const oy = r.f32();
-    const count = r.u32();
+    const count = r.need(r.u32(), 4, "structures");
     const heights = new Uint16Array(count);
     const nVerts = new Uint8Array(count);
     const nTris = new Uint8Array(count);
@@ -395,9 +443,9 @@ function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
 }
 
 function parseTransit(buf: ArrayBuffer): TransitRoute[] {
-  const r = new Reader(buf);
-  if (r.u32() !== 0x544d5452) throw new Error("bad transit magic");
-  const count = r.u32();
+  const r = new Reader(buf, "transit.bin");
+  if (r.u32() !== 0x544d5452) throw new CityDataError("transit.bin", "it does not start with the expected marker");
+  const count = r.need(r.u32(), 6, "routes");
   const routes: TransitRoute[] = [];
   for (let i = 0; i < count; i++) {
     const kind = r.u8();
@@ -418,9 +466,9 @@ function parseTransit(buf: ArrayBuffer): TransitRoute[] {
 }
 
 function parseDistrictBounds(buf: ArrayBuffer): DistrictBoundary[] {
-  const r = new Reader(buf);
-  if (r.u32() !== 0x444d5452) throw new Error("bad districts magic");
-  const count = r.u16();
+  const r = new Reader(buf, "districts.bin");
+  if (r.u32() !== 0x444d5452) throw new CityDataError("districts.bin", "it does not start with the expected marker");
+  const count = r.need(r.u16(), 11, "districts");
   const dec = new TextDecoder();
   const out: DistrictBoundary[] = [];
   for (let i = 0; i < count; i++) {
@@ -490,13 +538,13 @@ export async function loadCity(
   const transit: TransitRoute[] = transitBuf ? parseTransit(transitBuf) : [];
   const districtBounds: DistrictBoundary[] = districtsBuf ? parseDistrictBounds(districtsBuf) : [];
 
-  const roads = parsePolylines(roadsBuf, 0x524d5452);
+  const roads = parsePolylines(roadsBuf, 0x524d5452, "roads.bin");
   onProgress("grid", 0.9);
   const graph = parseGraph(graphBuf);
   onProgress("signals", 0.85);
   const water = parseWater(waterBuf);
   onProgress("grid", 1);
-  const rail = parsePolylines(railBuf, 0x4c4d5452);
+  const rail = parsePolylines(railBuf, 0x4c4d5452, "rail.bin");
   const buildings = parseBuildings(bldBuf);
   onProgress("structures", 0.7);
 

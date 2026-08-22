@@ -147,6 +147,13 @@ stale the app says so instead of presenting old traffic as current):
   surface rides the real tide; **weather** (Buienradar Rotterdam): rain slows
   motorized traffic; **air quality** (Luchtmeetnet, 9 DCMR stations): NO₂/PM2.5
   as a toggleable station layer
+- The snapshot is assembled from five third-party feeds with no schema between
+  them and the browser, so it is **sifted at the boundary**: a row that is not
+  the shape it claims to be — a `null` vehicle, a `NaN` delay, a board entry
+  that is not a list — is dropped before any consumer sees it, and the count is
+  announced in the message log rather than swallowed. Every panel is also
+  independently faulted: one that throws takes itself out and says so once
+  instead of stopping the five behind it.
 - `npm run fetch-live` produces the snapshot on demand
 
 **The archive** — every snapshot is folded into a history on the `archive`

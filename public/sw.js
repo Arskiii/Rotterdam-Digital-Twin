@@ -61,9 +61,21 @@ async function syncDataVersion(version) {
   const held = await cache.match(VERSION_KEY);
   const seen = held ? await held.text() : null;
   if (seen === version) return;
-  await caches.delete(DATA_CACHE);
-  const fresh = await caches.open(DATA_CACHE);
-  await fresh.put(VERSION_KEY, new Response(version));
+  if (seen !== null) {
+    // A version is on record and it is not this one, so the cache holds a city
+    // that no longer exists. Drop it whole.
+    await caches.delete(DATA_CACHE);
+    const fresh = await caches.open(DATA_CACHE);
+    await fresh.put(VERSION_KEY, new Response(version)).catch(() => {});
+    return;
+  }
+  // Nothing on record: this is the first load that has ever reported a
+  // version, so there is nothing stale to remove — and deleting here would
+  // throw away exactly what this load has just finished caching. The page
+  // sends the version at the end of boot, by which point the 27 MB is already
+  // going in, so the old unconditional delete cost the first visit its cache
+  // and made the warm-up take two loads instead of one.
+  await cache.put(VERSION_KEY, new Response(version)).catch(() => {});
 }
 
 self.addEventListener("message", (e) => {
@@ -81,7 +93,13 @@ async function cacheFirst(request, cacheName) {
   const res = await fetch(request);
   // A 206 cannot be replayed as a whole response, and an error is not worth
   // holding onto — the next load should be free to try again.
-  if (res.ok && res.status === 200) cache.put(request, res.clone());
+  //
+  // The put is deliberately not awaited and deliberately caught: storing the
+  // city is 27 MB, and on a device near its storage limit every one of these
+  // rejects with QuotaExceededError. The response is already in hand, so a
+  // full disk should cost the visitor nothing but the cache — not an
+  // unhandled rejection per file, and not a failed load.
+  if (res.ok && res.status === 200) cache.put(request, res.clone()).catch(() => {});
   return res;
 }
 
@@ -90,7 +108,7 @@ async function networkFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   try {
     const res = await fetch(request);
-    if (res.ok && res.status === 200) cache.put(request, res.clone());
+    if (res.ok && res.status === 200) cache.put(request, res.clone()).catch(() => {});
     return res;
   } catch (err) {
     const hit = await cache.match(request);

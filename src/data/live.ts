@@ -99,11 +99,182 @@ export function upgradeV1(snap: LiveSnapshot) {
  * without erroring — and a network round trip is a poor place to keep logic
  * that can be checked directly.
  */
-export function admitSnapshot(raw: unknown, current: LiveSnapshot | null): "invalid" | "stale" | "ok" {
+const num = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+
+/**
+ * Throw away anything in the snapshot that is not the shape it claims to be.
+ *
+ * This file is assembled by a scheduled job out of five third-party feeds —
+ * NDW's XML situations, OVapi's protobuf, Rijkswaterstaat, Buienradar,
+ * Luchtmeetnet — and reaches the browser as JSON with no schema between the
+ * two. Until now every consumer trusted it completely, and one bad row was
+ * enough to take the whole live path down: a `null` in `vehicles.v` threw a
+ * TypeError out of the poll, and because the poll records the snapshot's
+ * timestamp *before* handing it on, the retry saw the same `t` and skipped the
+ * update entirely. The map kept moving on the layers that had already been
+ * fed, while the boards, the brief and the transit panel sat frozen on old
+ * data with nothing on screen saying so. The same row rendered through the
+ * 1.5-second tick took the dock clock with it.
+ *
+ * So the boundary is the place to fix it, not each of the eight consumers.
+ * A row that cannot be read is dropped and counted; the count is surfaced
+ * rather than swallowed, because "the feed published 40 unreadable vehicles"
+ * is exactly the kind of thing this product says out loud instead of hiding.
+ *
+ * Non-finite numbers are dropped as hard as missing ones. A NaN delay does not
+ * fail anything on its way in — it silently turns a line's median, and then
+ * the whole network median, into NaN.
+ */
+export function sanitizeSnapshot(snap: LiveSnapshot): { dropped: number; fields: string[] } {
+  let dropped = 0;
+  const fields: string[] = [];
+  /** Keep the rows a predicate accepts; drop the field entirely if it is not a list. */
+  const sift = <T>(list: unknown, ok: (row: unknown) => boolean, label: string): T[] | undefined => {
+    if (list === undefined || list === null) return undefined;
+    if (!Array.isArray(list)) {
+      dropped++;
+      fields.push(label);
+      return undefined;
+    }
+    const kept = (list as unknown[]).filter(ok);
+    if (kept.length !== list.length) {
+      dropped += list.length - kept.length;
+      fields.push(label);
+    }
+    return kept as T[];
+  };
+
+  if (snap.traffic) {
+    // [stationIdx, veh/h, km/h]
+    const s = sift<[number, number, number]>(
+      snap.traffic.s,
+      (r) => Array.isArray(r) && r.length >= 3 && num(r[0]) && r[0] >= 0 && num(r[1]) && num(r[2]),
+      "traffic"
+    );
+    if (s) snap.traffic.s = s;
+    else delete (snap as { traffic?: unknown }).traffic;
+  }
+
+  if (snap.vehicles) {
+    // [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAge]
+    const v = sift<LiveVehicle>(
+      snap.vehicles.v,
+      (r) => Array.isArray(r) && r.length >= 9 && num(r[0]) && num(r[1]) && num(r[2]),
+      "vehicles"
+    );
+    snap.vehicles.v = v ?? [];
+    // A plan keyed by trip id, each call [x, y, secondsAfter t]. A malformed
+    // leg parks a vehicle at NaN, which is worse than not animating it.
+    const plan = snap.vehicles.plan;
+    if (plan && typeof plan === "object" && !Array.isArray(plan)) {
+      for (const trip of Object.keys(plan)) {
+        const legs = plan[trip];
+        if (!Array.isArray(legs) || !legs.every((l) => Array.isArray(l) && l.length >= 3 && num(l[0]) && num(l[1]) && num(l[2]))) {
+          delete plan[trip];
+          dropped++;
+          fields.push("paths");
+        }
+      }
+    } else if (plan !== undefined) {
+      delete snap.vehicles.plan;
+      dropped++;
+      fields.push("paths");
+    }
+  }
+
+  if (snap.departures) {
+    const dep = snap.departures.dep;
+    if (!dep || typeof dep !== "object" || Array.isArray(dep)) {
+      snap.departures.dep = {};
+      if (dep !== undefined) {
+        dropped++;
+        fields.push("boards");
+      }
+    } else {
+      for (const stop of Object.keys(dep)) {
+        // [line, kind, destination, secondsUntil, delaySec, isLive, tripId]
+        const rows = sift<Departure>(
+          dep[stop],
+          (r) => Array.isArray(r) && r.length >= 6 && num(r[3]) && num(r[4]) && num(r[1]),
+          "boards"
+        );
+        if (rows) dep[stop] = rows;
+        else delete dep[stop];
+      }
+    }
+    const stops = snap.departures.stops;
+    if (!stops || typeof stops !== "object" || Array.isArray(stops)) {
+      snap.departures.stops = {};
+      if (stops !== undefined) {
+        dropped++;
+        fields.push("stops");
+      }
+    } else {
+      for (const k of Object.keys(stops)) {
+        const s = stops[k];
+        if (!Array.isArray(s) || s.length < 3 || typeof s[0] !== "string" || !num(s[1]) || !num(s[2])) {
+          delete stops[k];
+          dropped++;
+          fields.push("stops");
+        }
+      }
+    }
+  }
+
+  const inc = sift<NonNullable<LiveSnapshot["incidents"]>[number]>(
+    snap.incidents,
+    (r) => !!r && typeof r === "object" && num((r as { x: unknown }).x) && num((r as { y: unknown }).y) && num((r as { kind: unknown }).kind),
+    "incidents"
+  );
+  if (snap.incidents !== undefined) snap.incidents = inc ?? [];
+
+  const br = sift<NonNullable<LiveSnapshot["bridges"]>[number]>(
+    snap.bridges,
+    (r) => !!r && typeof r === "object" && num((r as { x: unknown }).x) && num((r as { y: unknown }).y) && Array.isArray((r as { edges: unknown }).edges),
+    "bridges"
+  );
+  if (snap.bridges !== undefined) snap.bridges = br ?? [];
+
+  if (snap.air) {
+    const s = sift<[number, number, number | null, number | null, string]>(
+      snap.air.s,
+      (r) => Array.isArray(r) && r.length >= 2 && num(r[0]) && num(r[1]),
+      "air"
+    );
+    if (s) snap.air.s = s;
+    else delete (snap as { air?: unknown }).air;
+  }
+
+  // Scalars: a non-finite tide reading drives the river mesh to NaN and the
+  // whole water plane disappears.
+  if (snap.water && !num(snap.water.cm)) {
+    delete (snap as { water?: unknown }).water;
+    dropped++;
+    fields.push("tide");
+  }
+  if (snap.weather && !num(snap.weather.rain)) {
+    if (snap.weather && typeof snap.weather === "object") snap.weather.rain = 0;
+    fields.push("weather");
+  }
+
+  return { dropped, fields: [...new Set(fields)] };
+}
+
+export interface Admission {
+  verdict: "invalid" | "stale" | "ok";
+  /** rows the snapshot published that could not be read, and had to be dropped */
+  dropped: number;
+  /** which parts of the feed they came from */
+  fields: string[];
+}
+
+export function admitSnapshot(raw: unknown, current: LiveSnapshot | null): Admission {
+  const no = (verdict: Admission["verdict"]): Admission => ({ verdict, dropped: 0, fields: [] });
   const snap = raw as LiveSnapshot | null;
-  if (!snap || typeof snap.t !== "string" || !snap.t || !(snap.v >= 1)) return "invalid";
-  if (!Number.isFinite(Date.parse(snap.t))) return "invalid";
-  if (current && Date.parse(snap.t) < Date.parse(current.t)) return "stale";
+  if (!snap || typeof snap !== "object" || Array.isArray(snap)) return no("invalid");
+  if (typeof snap.t !== "string" || !snap.t || !(snap.v >= 1)) return no("invalid");
+  if (!Number.isFinite(Date.parse(snap.t))) return no("invalid");
+  if (current && Date.parse(snap.t) < Date.parse(current.t)) return no("stale");
   // v1 published [x, y, kind, bearing, line] where v2 publishes the line and
   // the trip id; read raw, every bus on a route collapsed into one vehicle.
   if (snap.v < 2) upgradeV1(snap);
@@ -112,7 +283,10 @@ export function admitSnapshot(raw: unknown, current: LiveSnapshot | null): "inva
   // platform it is heading for. The missing call is not in the file, so the
   // paths are dropped and those vehicles sit at their last fix, as under v2.
   if (snap.v < 3 && snap.vehicles) delete snap.vehicles.plan;
-  return "ok";
+  // Version first, shape second: the migrations above rewrite the very rows
+  // the sift below has to judge.
+  const { dropped, fields } = sanitizeSnapshot(snap);
+  return { verdict: "ok", dropped, fields };
 }
 
 export class LiveFeed {
@@ -121,6 +295,9 @@ export class LiveFeed {
   private localUrl: string;
   private onUpdate: (snap: LiveSnapshot) => void;
   private lastT = "";
+  /** rows the last accepted snapshot published that could not be read */
+  lastDropped = 0;
+  lastDroppedFields: string[] = [];
 
   constructor(dataBase: string, onUpdate: (snap: LiveSnapshot) => void) {
     this.localUrl = `${dataBase}live/live.json`;
@@ -165,10 +342,12 @@ export class LiveFeed {
       }
       // v1 snapshots predate the departure boards but still carry traffic,
       // weather and tide, so they are accepted and simply offer less
-      const verdict = admitSnapshot(snap, this.snapshot);
+      const { verdict, dropped, fields } = admitSnapshot(snap, this.snapshot);
       if (verdict === "invalid") continue;
       if (verdict === "stale") return; // a fallback must not undo a fresher publish
       this.source = source;
+      this.lastDropped = dropped;
+      this.lastDroppedFields = fields;
       if (snap.t !== this.lastT) {
         this.lastT = snap.t;
         this.snapshot = snap;

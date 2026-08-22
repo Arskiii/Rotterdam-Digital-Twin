@@ -262,7 +262,24 @@ async function boot() {
     }
     if (snap.water) liveWater = snap.water;
     app.setLive(snap, live.fresh);
+    // The feed is assembled from five third-party sources with no schema
+    // between them and the browser. Rows that could not be read are dropped at
+    // the boundary rather than crashing a consumer — but a feed publishing
+    // unreadable vehicles is a fact about the city's data, so it is said out
+    // loud once per distinct fault rather than swallowed.
+    if (live.lastDropped > 0) {
+      const sig = `${live.lastDropped}:${live.lastDroppedFields.join(",")}`;
+      if (sig !== lastDropSig) {
+        lastDropSig = sig;
+        app.log(
+          "warn",
+          `LIVE FEED PUBLISHED ${live.lastDropped} UNREADABLE ROW${live.lastDropped === 1 ? "" : "S"} ` +
+            `(${live.lastDroppedFields.join(", ").toUpperCase()}) — DROPPED, THE REST STANDS`
+        );
+      }
+    }
   };
+  let lastDropSig = "";
   const live = new LiveFeed(dataBase, applyLive);
 
   // A tab left open keeps refreshing its data but never its code
@@ -287,8 +304,16 @@ async function boot() {
   const lineMat = meshes.roadLines.material as THREE.LineBasicMaterial;
   let lastNow = performance.now();
   let lastLiveChip = 0;
-  function loop(now: number) {
-    requestAnimationFrame(loop);
+  // A fault in the per-frame work must not take the picture with it.
+  //
+  // rAF is re-armed at the top of the loop, so the loop itself already
+  // survives a throw — but everything between there and
+  // `renderer.render` does not, and that call is the last statement. One bad
+  // frame therefore meant a black canvas, sixty times a second, with the
+  // console filling up and the city still perfectly loaded underneath.
+  // Whatever else fails, the scene gets drawn.
+  let frameFault = false;
+  const perFrame = (now: number) => {
     const realDt = Math.min(0.1, (now - lastNow) / 1000);
     lastNow = now;
     transit.update(app.paused ? 0 : realDt * app.simSpeed);
@@ -359,6 +384,19 @@ async function boot() {
       }
     }
     app.frame(now);
+  };
+
+  function loop(now: number) {
+    requestAnimationFrame(loop);
+    try {
+      perFrame(now);
+    } catch (err) {
+      if (!frameFault) {
+        frameFault = true;
+        console.error("[frame]", err);
+        app.log("crit", `RENDER LOOP FAULTED — ${(err as Error)?.message ?? err} · THE MAP IS STILL DRAWN`);
+      }
+    }
     scene.renderer.render(scene.scene, scene.camera);
     fpsBox.frames++;
     const span = now - fpsBox.t0;
