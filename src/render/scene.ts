@@ -155,7 +155,21 @@ export class SceneCtx {
     return "street";
   }
 
+  /**
+   * Whether the viewer has asked their system for less movement.
+   *
+   * Read once here rather than at each of the fourteen call sites: a camera
+   * flight is the largest motion this product makes, and someone who has set
+   * that preference should get a cut instead of a swoop wherever the camera
+   * moves — a search result, an incident, a scenario, the boot framing.
+   */
+  private static readonly REDUCED =
+    typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+
   flyTo(target: THREE.Vector3, distance: number, dur = 900) {
+    // 1ms, not 0: the easing divides by this, and a zero duration turns the
+    // first frame's 0/0 into NaN positions for the camera.
+    if (SceneCtx.REDUCED) dur = 1;
     const dir = this.camera.position.clone().sub(this.controls.target);
     const polar = Math.min(Math.PI * 0.33, Math.acos(dir.y / dir.length()));
     const azim = Math.atan2(dir.x, dir.z);

@@ -54,7 +54,10 @@ export interface ArchiveEvent {
   until: string | null;
 }
 
-function parseCoarse(buf: ArrayBuffer): ArchiveRecord[] {
+/** Exported for tests: the wire format is the contract between two repos-worth
+ *  of code (scripts/archive-live.mjs writes it, this reads it) and nothing else
+ *  would notice a silent drift in it. */
+export function parseCoarse(buf: ArrayBuffer): ArchiveRecord[] {
   const dv = new DataView(buf);
   const bytes = new Uint8Array(buf);
   if (buf.byteLength < COARSE_HEAD) return [];

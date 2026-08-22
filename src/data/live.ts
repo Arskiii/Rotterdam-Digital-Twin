@@ -76,12 +76,43 @@ export type LiveHealth = "live" | "lagging" | "stale" | "offline";
  * position instead. They cannot be followed across refreshes, which is honest:
  * v1 never knew which vehicle was which.
  */
-function upgradeV1(snap: LiveSnapshot) {
+export function upgradeV1(snap: LiveSnapshot) {
   const raw = snap.vehicles?.v as unknown as [number, number, number, number, string][] | undefined;
   if (!raw) return;
   snap.vehicles!.v = raw.map(([x, y, kind, , line], i) => [
     x, y, kind, line ?? "", `v1:${i}`, -1, 0, "", -1,
   ]);
+}
+
+/**
+ * Whether a fetched snapshot may replace the one in hand, migrating it on the
+ * way in.
+ *
+ *   invalid — not a snapshot, or a version this build cannot read. Try the
+ *             next source; this one told us nothing.
+ *   stale   — older than what we already have. Stop looking: a fallback copy
+ *             must never overwrite a fresher published one.
+ *   ok      — usable, and `raw` has been brought up to the current shape.
+ *
+ * Split out from the poll loop because this is the part with a history of
+ * quiet failures — a v1 tuple read as v2 rendered 76 vehicles instead of 228
+ * without erroring — and a network round trip is a poor place to keep logic
+ * that can be checked directly.
+ */
+export function admitSnapshot(raw: unknown, current: LiveSnapshot | null): "invalid" | "stale" | "ok" {
+  const snap = raw as LiveSnapshot | null;
+  if (!snap || typeof snap.t !== "string" || !snap.t || !(snap.v >= 1)) return "invalid";
+  if (!Number.isFinite(Date.parse(snap.t))) return "invalid";
+  if (current && Date.parse(snap.t) < Date.parse(current.t)) return "stale";
+  // v1 published [x, y, kind, bearing, line] where v2 publishes the line and
+  // the trip id; read raw, every bus on a route collapsed into one vehicle.
+  if (snap.v < 2) upgradeV1(snap);
+  // v2 vehicle paths listed only the calls still ahead; v3 starts each one at
+  // the call already made. Read as v3, a v2 path parks every vehicle on the
+  // platform it is heading for. The missing call is not in the file, so the
+  // paths are dropped and those vehicles sit at their last fix, as under v2.
+  if (snap.v < 3 && snap.vehicles) delete snap.vehicles.plan;
+  return "ok";
 }
 
 export class LiveFeed {
@@ -134,17 +165,9 @@ export class LiveFeed {
       }
       // v1 snapshots predate the departure boards but still carry traffic,
       // weather and tide, so they are accepted and simply offer less
-      if (!snap?.t || !(snap.v >= 1)) continue;
-      if (snap.v < 2) upgradeV1(snap);
-      // v2 vehicle paths listed only the calls still ahead; v3 starts each one
-      // at the call already made, so the leg a vehicle is on has a scheduled
-      // start as well as an end. Read as v3, a v2 path would park every
-      // vehicle on the platform it is heading for. There is no upgrade for
-      // this — the missing call is not in the file — so the paths are dropped
-      // and those vehicles sit at their last fix, as they did under v2.
-      if (snap.v < 3 && snap.vehicles) delete snap.vehicles.plan;
-      // never replace a fresher snapshot with a staler one
-      if (this.snapshot && Date.parse(snap.t) < Date.parse(this.snapshot.t)) return;
+      const verdict = admitSnapshot(snap, this.snapshot);
+      if (verdict === "invalid") continue;
+      if (verdict === "stale") return; // a fallback must not undo a fresher publish
       this.source = source;
       if (snap.t !== this.lastT) {
         this.lastT = snap.t;

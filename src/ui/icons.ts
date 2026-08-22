@@ -74,4 +74,6 @@ export const icons = {
 
   target: (size = 15) =>
     S(size, `<circle cx="12" cy="12" r="7.5"/><path d="M12 2.5v4M12 17.5v4M2.5 12h4M17.5 12h4"/>`),
+
+  search: (size = 15) => S(size, `<circle cx="10.7" cy="10.7" r="6.2"/><path d="M15.2 15.2 20.5 20.5"/>`),
 };

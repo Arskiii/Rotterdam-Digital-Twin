@@ -30,7 +30,15 @@
   --tick: #cfcfcf;
   --text: #e8e8e8;
   --text-dim: #909090;
-  --text-faint: #5c5c5c;
+  /* Lifted from #5c5c5c, which measured 2.93:1 against the panel ground and is
+     used almost exclusively at 8.5–9.5px — the smallest type in the product,
+     failing the contrast floor by the widest margin. #7d7d7d clears 4.5:1 on
+     every surface it lands on and reads as the same quiet grey. */
+  --text-faint: #7d7d7d;
+  /* Focus is drawn in the brightest ink the palette has, on purpose: this UI is
+     near-black everywhere, and a focus ring that has to be hunted for is the
+     same as no focus ring. */
+  --focus: #cfcfcf;
   --green: #35d158;
   --amber: #d2a018;
   --red: #ee4444;
@@ -75,6 +83,44 @@ input[type="range"] {
 
 ::selection {
   background: #3c3c3c;
+}
+
+/* ---------- keyboard focus ---------------------------------
+   There was no focus rule at all, so the UA default applied — and on this
+   palette it resolved to a 1px outline in rgb(16,16,16), which is invisible
+   against every surface in the product. Tab moved focus and nothing on screen
+   said where it had gone.
+
+   :focus-visible rather than :focus, so a mouse click on a button does not
+   leave a ring behind it. The offset keeps the ring clear of the 1px borders
+   these controls already carry. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* Inside the tool column and the dock strip there is no room for an offset
+   ring without it colliding with the neighbour above. */
+.tool-btn:focus-visible,
+#dock-tabs button:focus-visible,
+.rail-btn:focus-visible {
+  outline-offset: -2px;
+}
+
+/* ---------- reduced motion ----------------------------------
+   This interface blinks, pulses, patrols and flies the camera. Someone who has
+   asked their system for less of that is asking for a reason. The 3D scene
+   itself keeps rendering — it is the content, not decoration — but every
+   ornamental animation stops, and camera moves become cuts (App reads this
+   query too, and passes a zero duration to flyTo). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 svg {
@@ -517,6 +563,154 @@ svg {
 }
 #map-tools .tool-gap {
   height: 10px;
+}
+
+/* ---------- search ------------------------------------------
+   Anchored off the tool column like the layer panel, because it is the same
+   kind of thing: a panel a map button opens. Wider than that one — a street
+   name is longer than a layer name, and a result that ellipsizes is a result
+   you cannot tell apart from its neighbour. */
+#search-pop {
+  position: absolute;
+  right: 54px;
+  bottom: 176px;
+  width: 336px;
+  border: 1px solid var(--line);
+  background: rgba(10, 10, 10, 0.97);
+  padding: 9px 10px;
+  display: none;
+  flex-direction: column;
+  gap: 7px;
+  z-index: 21;
+  box-shadow: var(--shadow);
+}
+#search-pop.open {
+  display: flex;
+}
+.sp-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-inset);
+  padding: 0 8px;
+}
+.sp-field .sp-icon {
+  display: grid;
+  place-items: center;
+  color: var(--text-faint);
+  flex: none;
+}
+#search-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  padding: 9px 0;
+}
+#search-input::placeholder {
+  color: var(--text-faint);
+  letter-spacing: 0.06em;
+}
+#search-input:focus {
+  outline: none;
+}
+/* the ring goes on the box, not the bare input inside it */
+.sp-field:focus-within {
+  border-color: var(--focus);
+}
+#sp-close {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--text-faint);
+  font-family: var(--mono);
+  line-height: 1;
+}
+#sp-close:hover {
+  color: var(--text);
+}
+#search-results {
+  display: flex;
+  flex-direction: column;
+  max-height: 268px;
+  overflow-y: auto;
+}
+#search-results:empty {
+  display: none;
+}
+.sr-row {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 7px 8px;
+  border-left: 2px solid transparent;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+.sr-row:hover,
+.sr-row.sel {
+  background: var(--bg-hover);
+  border-left-color: var(--text);
+}
+/* The name is the answer; the sub is only there to tell two answers apart. So
+   the sub is the one that gives way — it shrinks eight times as readily, which
+   is the difference between "E… STREET · HILLEGERSBERG-SCHIEBROEK" and
+   "Erasmuspad STREET · HILLEGERSBERG-SCHIE…". Without the weighting flexbox
+   shrinks both in proportion to their content, so the longest district name in
+   the city was crushing the street it belonged to down to one letter. */
+.sr-row .sr-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* the letters that actually matched, so a result reads as an answer to what
+   was typed rather than a list that happens to contain it */
+.sr-row .sr-name b {
+  color: #7abeff;
+  font-weight: 700;
+}
+.sr-row .sr-sub {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+  flex: 0 8 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sr-kind {
+  flex: none;
+  width: 15px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-transform: uppercase;
+}
+.sr-empty {
+  padding: 9px 8px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+.sp-hint {
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  border-top: 1px solid var(--line-faint);
+  padding-top: 6px;
 }
 
 /* layers popover */
@@ -1209,6 +1403,185 @@ table.district td:first-child {
 }
 .cong-bar.warn i { background: var(--amber); }
 .cong-bar.crit i { background: var(--red); }
+/* A district with no reporting station is drawn as absent, not as an empty bar
+   — an empty bar is what free-flowing looks like, and the two are not the same
+   claim. The archive reader has made this distinction all along; the brief now
+   makes it too. */
+.cong-bar.unmeasured {
+  background: repeating-linear-gradient(
+    -45deg,
+    #1e1e1e 0 3px,
+    #141414 3px 6px
+  );
+}
+
+/* How much of the requested window the archive actually holds. Amber when it
+   is well short of it — a 30D chart drawn from two days of readings is flat
+   and empty across most of its width, and nothing else on screen says why. */
+.hb-cover {
+  font-size: 8.5px;
+  letter-spacing: 0.11em;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.hb-cover.thin {
+  color: var(--amber);
+}
+
+/* ---------- transit health -----------------------------------
+   The only dock panel whose every figure is measured, and the only one that
+   needs no simulation — which is why it is also the one a phone keeps. */
+/* Every other dock tab is a strip of cards or a short table, and 118px suits
+   them. This one is a table with a sticky header and one row per line, and at
+   118px the summary and the provenance line left 45px — the header and a
+   single row. A tab that cannot show two rows is not a tab, so this one takes
+   the height it needs and the others keep theirs.
+   :has() is doing the work; where it is unsupported the rule is skipped and
+   the panel is merely as cramped as it was. */
+#dock-body:has(> .dock-page[data-dockpage="transit"].on) {
+  height: 208px;
+}
+
+/* The dock body is a fixed height whatever is in it, and this table has one
+   row per line — 84 of them at rush hour. So the summary and the provenance
+   line stay put and only the rows scroll, the way the district table already
+   does. Without this the wrap simply clipped at two rows. */
+#transit-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 14px 8px;
+}
+.tr-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+.tr-head {
+  flex: none;
+}
+.tr-foot {
+  flex: none;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.tr-nominal {
+  color: var(--text-dim);
+  flex: none;
+}
+.tr-filter {
+  flex: none;
+  font-size: 8.5px;
+  letter-spacing: 0.11em;
+  color: var(--text-dim);
+  border: 1px solid var(--line);
+  padding: 2px 7px;
+}
+.tr-filter:hover {
+  color: var(--text);
+  border-color: var(--line-bright);
+}
+/* the provenance line is the first thing to give way when the row is tight */
+.tr-src {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tr-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0 6px;
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+/* the long form by default, the short one where the dock cannot spare a
+   second line — see the comment in App.renderTransit */
+.tr-head i.lg { font-style: normal; }
+.tr-head i.sm { display: none; font-style: normal; }
+@media (max-width: 900px) {
+  .tr-head i.lg { display: none; }
+  .tr-head i.sm { display: inline; }
+  .tr-head .src { margin-right: 4px; }
+  /* the source line is in the foot's title and the head already says
+     MEASURED; the filter control is what has to survive here */
+  .tr-src { display: none; }
+}
+.tr-head b {
+  color: var(--text);
+}
+.tr-age {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 9px;
+  letter-spacing: 0.12em;
+}
+/* margin-left:auto claims the rest of the line, which on a narrow dock is
+   what pushed this chip onto a second row and halved the space left for the
+   table. Where there is no room to spare it just follows the text. */
+@media (max-width: 900px) {
+  .tr-age {
+    margin-left: 0;
+  }
+}
+.tr-none {
+  color: var(--text-faint);
+}
+.tr-table {
+  min-width: 560px;
+}
+.tr-table .bd-line {
+  min-width: 26px;
+  padding: 2px 6px;
+}
+.tr-kind {
+  font-size: 9px;
+  letter-spacing: 0.11em;
+}
+.tr-dim {
+  color: var(--text-faint) !important;
+}
+.tr-state {
+  font-size: 8.5px;
+  letter-spacing: 0.11em;
+  color: var(--text-faint);
+}
+/* Running with nothing measured, not reporting at all, and measured are three
+   different claims. Only the last is a statement about punctuality. */
+.tr-state.tr-ok {
+  color: var(--green);
+}
+.tr-state.tr-off {
+  color: var(--amber);
+}
+/* between "a couple of minutes" and "late enough to notice" */
+.tr-warn {
+  color: var(--amber);
+}
+.tr-empty {
+  padding: 16px 4px;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: var(--text-faint);
+}
+.tr-foot {
+  margin-top: 6px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line-faint);
+  font-size: 8.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* overview page */
 #overview-page {
@@ -1340,11 +1713,35 @@ table.district td:first-child {
   margin-bottom: 12px;
 }
 
+/* auto-fit rather than a fixed four: LIVE has six measured figures worth
+   leading with, SIMULATION four, HISTORY four, and a hard column count made
+   the row either overflow or leave a gap depending on the mode */
 #brief-grid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(196px, 1fr));
   gap: 12px;
   margin-bottom: 12px;
+}
+
+/* ---------- measured vs modelled ----------------------------
+   The one distinction this whole product is organized around, as a chip small
+   enough to sit inside a panel title. Every figure on BRIEF now carries one,
+   because the page used to present the model's numbers under the word LIVE. */
+.src {
+  display: inline-block;
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  padding: 2px 5px;
+  margin-right: 8px;
+  vertical-align: 1px;
+  border: 1px solid currentColor;
+}
+.src.measured {
+  color: #6fe39a;
+}
+.src.modelled {
+  color: #9a9a9a;
 }
 #brief-grid .kpi .k {
   font-size: 9px;
@@ -1367,24 +1764,59 @@ table.district td:first-child {
   color: var(--text-dim);
 }
 
+/* The brief fills its viewport instead of stopping two thirds of the way down.
+   Everything on it was a fixed height — a 150px chart and a 150px event feed —
+   which on a 950px screen left a third of the page as empty black, and on a
+   short one clipped both. The header, the KPI row and the district posture keep
+   their natural size; the middle row takes whatever is left, so the chart is
+   readable and the feed shows what it has. */
+#page-brief.on {
+  display: flex;
+  flex-direction: column;
+}
 #brief-cols {
   display: grid;
   grid-template-columns: 1.35fr 1fr;
   gap: 12px;
+  flex: 1;
+  /* below this the chart is not worth drawing; the page scrolls instead */
+  min-height: 210px;
+}
+#brief-cols > .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* A canvas cannot be flex-sized directly — it carries an intrinsic 300x150 and
+   would fight the row — so it fills a positioned wrapper that can be. */
+#brief-chart-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  margin-top: 6px;
 }
 #brief-chart-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 150px;
+  height: 100%;
   display: block;
 }
 #brief-events {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-height: 150px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #333 transparent;
+}
+/* the header, the KPI row and the district row keep their own size; only the
+   middle row is elastic */
+#page-brief > .panel,
+#page-brief > #brief-grid {
+  flex: none;
 }
 
 /* setup page */
@@ -1546,7 +1978,10 @@ table.district td:first-child {
   bottom: 2px;
   z-index: 11;
   font-size: 8.5px;
-  color: #4a4a4a;
+  /* ODbL requires this credit to be readable, and #4a4a4a measured 2.23:1 —
+     the lowest contrast anywhere in the product, on the one line that is a
+     licence condition rather than a design choice */
+  color: var(--text-faint);
   letter-spacing: 0.04em;
   pointer-events: none;
 }
@@ -1563,6 +1998,38 @@ table.district td:first-child {
   z-index: 30;
   align-items: flex-end;
   pointer-events: none;
+}
+/* On BRIEF and SETUP the top-right belongs to the page.
+   Toasts sit above every page (z-index 30 against 25), so on the map they have
+   an empty corner to themselves and on a page they landed squarely on the KPI
+   row — three stacked NDW obstructions covering "Live incidents" and "Signal
+   grid", which are the two figures the toast is telling you about. Reserving a
+   permanent hole for something that fades after five seconds would be the
+   wrong trade, so the transient thing moves instead: bottom-right, clear of
+   the attribution line and of everything either page puts on screen. */
+body[data-page="brief"] #toasts,
+body[data-page="setup"] #toasts {
+  top: auto;
+  bottom: 22px;
+}
+/* A count, not another line: five obstructions are one fact about the city. */
+.toast-n {
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--line-bright);
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+/* And with the brief now filling its viewport there is no empty corner left to
+   float over, so the page gives the stack a lane while one exists rather than
+   drawing across the district bars. --toast-lane is the stack's measured
+   height, set by App.syncToastFlag: a toast wraps to two lines when its text
+   is long, so a fixed reservation is either short for one or wasteful for the
+   usual case. Only the elastic middle row pays for it, and the lane goes when
+   the last toast fades. */
+body[data-toasts] #page-brief.on {
+  padding-bottom: calc(var(--toast-lane, 40px) + 34px);
 }
 .toast {
   border: 1px solid var(--line);
@@ -1772,7 +2239,7 @@ label {
 .hb-empty { color: var(--text-faint); letter-spacing: 0.1em; }
 
 /* SETUP is a simulation control; outside SIMULATION it reads as inert */
-#setup-mode-note:empty { display: none; }
+#setup-mode-note:has(#smn-text:empty) { display: none; }
 #setup-mode-note {
   border: 1px solid var(--line);
   border-left: 2px solid var(--amber);
@@ -1781,8 +2248,99 @@ label {
   font-size: 10.5px;
   color: var(--text-dim);
   letter-spacing: 0.03em;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
 }
-.page.mode-locked #setup-grid { opacity: 0.42; pointer-events: none; }
+/* The note used to say "switch to SIMULATION" and leave you to go find the
+   switch. It is one click; it may as well be this one.
+
+   Sitting right after the sentence rather than pushed to the far edge: the
+   toast stack occupies the top-right of the viewport, and a button flush right
+   on a full-width bar lands underneath it — the one control on this page that
+   still works outside SIMULATION, hidden behind a notification. */
+#setup-mode-note #smn-go {
+  flex: none;
+}
+/* Everything on SETUP moves a simulation variable, so everything on SETUP is
+   locked outside SIMULATION — not just #setup-grid.
+   The Calibration and Scenario Library panels are siblings of that grid rather
+   than children of it, so the old selector left them fully lit and fully
+   clickable: you could raise the Erasmusbrug, run a signal trial or
+   auto-calibrate the fleet while the header read LIVE and the note beside them
+   said variables were locked. The scenario wrote a CRIT event about a bridge
+   that was not open into the same feed that carries real NDW bridge openings,
+   which is the precise confusion the mode split exists to prevent.
+   App.setMode also sets `disabled` on the controls, so a future regression in
+   this selector cannot quietly reopen the same hole. */
+.page.mode-locked #setup-grid,
+.page.mode-locked > .panel { opacity: 0.42; pointer-events: none; }
+/* the note is the one thing that must stay readable and reachable — it carries
+   the way out */
+.page.mode-locked #setup-mode-note { opacity: 1; pointer-events: auto; }
+
+/* ---------- the band between a phone and a desktop -----------
+   The phone block below and the coarse-pointer block at the end of this file
+   were the only two breakpoints in the stylesheet, which left everything from
+   781px to full desktop running the desktop layout unchanged. It does not fit:
+   measured at 900x700 the top bar's right edge landed at 1000px, so the clock
+   was clipped away entirely and the location chip ran 10px past the viewport.
+
+   That band is an iPad in portrait, a half-screen laptop window and a small
+   netbook — not an edge case. The fix is the same one the phone block already
+   makes: give #topmeta a min-width so a nowrap flex row is allowed to shrink,
+   and spend the width on the things that answer a question rather than the
+   things that state where you are.
+
+   Ordered before the phone block on purpose, so the phone rules win where the
+   two overlap. */
+@media (max-width: 1080px) {
+  #topbar {
+    padding: 0 12px;
+    gap: 14px;
+  }
+  /* the mark still identifies the product; the wordmark repeats the tab title */
+  #brand span {
+    display: none;
+  }
+  #mode-switch {
+    margin-left: 10px;
+  }
+  #mode-switch button {
+    padding: 4px 8px;
+    letter-spacing: 0.04em;
+  }
+  #topnav {
+    gap: 15px;
+  }
+  #topnav .nav-btn {
+    font-size: 11px;
+    letter-spacing: 0.09em;
+  }
+  /* Without min-width:0 a nowrap flex item refuses to shrink at all, which is
+     what put the clock past the right edge instead of merely tightening it. */
+  #topmeta {
+    gap: 13px;
+    min-width: 0;
+  }
+  #topmeta #live-chip {
+    min-width: 0;
+    overflow: hidden;
+  }
+  #topmeta #live-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+}
+
+/* Narrower still: the map already says which city it is, and the feed's health
+   is worth more than a label that never changes. */
+@media (max-width: 940px) {
+  #topmeta #loc-chip {
+    display: none;
+  }
+}
 
 /* "Phone" is not a width. A phone turned sideways is 844x390 — wider than
    most laptops are tall — and keying on width alone handed it the desktop
@@ -1937,6 +2495,20 @@ label {
     min-height: 42px;
   }
   body[data-mode="live"] #layers-pop .lp-note { max-width: none; }
+
+  /* Same treatment as the layer panel, and for the same reason: pinned beside
+     the tool column it would cover the button that opened it. The keyboard
+     hint goes — a phone has no arrow keys and no return key to describe. */
+  #search-pop {
+    left: 6px;
+    right: 6px;
+    top: 46px;
+    bottom: auto;
+    width: auto;
+  }
+  #search-results { max-height: 46vh; }
+  .sr-row { min-height: 44px; align-items: center; }
+  .sp-hint { display: none; }
 
   #replay-bar {
     width: calc(100vw - 24px);
