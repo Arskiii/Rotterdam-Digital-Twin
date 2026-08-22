@@ -1596,24 +1596,59 @@ table.district td:first-child {
   color: var(--text-dim);
 }
 
+/* The brief fills its viewport instead of stopping two thirds of the way down.
+   Everything on it was a fixed height — a 150px chart and a 150px event feed —
+   which on a 950px screen left a third of the page as empty black, and on a
+   short one clipped both. The header, the KPI row and the district posture keep
+   their natural size; the middle row takes whatever is left, so the chart is
+   readable and the feed shows what it has. */
+#page-brief.on {
+  display: flex;
+  flex-direction: column;
+}
 #brief-cols {
   display: grid;
   grid-template-columns: 1.35fr 1fr;
   gap: 12px;
+  flex: 1;
+  /* below this the chart is not worth drawing; the page scrolls instead */
+  min-height: 210px;
+}
+#brief-cols > .panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+/* A canvas cannot be flex-sized directly — it carries an intrinsic 300x150 and
+   would fight the row — so it fills a positioned wrapper that can be. */
+#brief-chart-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  margin-top: 6px;
 }
 #brief-chart-canvas {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: 150px;
+  height: 100%;
   display: block;
 }
 #brief-events {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  max-height: 150px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: #333 transparent;
+}
+/* the header, the KPI row and the district row keep their own size; only the
+   middle row is elastic */
+#page-brief > .panel,
+#page-brief > #brief-grid {
+  flex: none;
 }
 
 /* setup page */
@@ -1795,6 +1830,38 @@ table.district td:first-child {
   z-index: 30;
   align-items: flex-end;
   pointer-events: none;
+}
+/* On BRIEF and SETUP the top-right belongs to the page.
+   Toasts sit above every page (z-index 30 against 25), so on the map they have
+   an empty corner to themselves and on a page they landed squarely on the KPI
+   row — three stacked NDW obstructions covering "Live incidents" and "Signal
+   grid", which are the two figures the toast is telling you about. Reserving a
+   permanent hole for something that fades after five seconds would be the
+   wrong trade, so the transient thing moves instead: bottom-right, clear of
+   the attribution line and of everything either page puts on screen. */
+body[data-page="brief"] #toasts,
+body[data-page="setup"] #toasts {
+  top: auto;
+  bottom: 22px;
+}
+/* A count, not another line: five obstructions are one fact about the city. */
+.toast-n {
+  margin-left: 8px;
+  padding: 1px 5px;
+  border: 1px solid var(--line-bright);
+  color: var(--text-dim);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+/* And with the brief now filling its viewport there is no empty corner left to
+   float over, so the page gives the stack a lane while one exists rather than
+   drawing across the district bars. --toast-lane is the stack's measured
+   height, set by App.syncToastFlag: a toast wraps to two lines when its text
+   is long, so a fixed reservation is either short for one or wasteful for the
+   usual case. Only the elastic middle row pays for it, and the lane goes when
+   the last toast fades. */
+body[data-toasts] #page-brief.on {
+  padding-bottom: calc(var(--toast-lane, 40px) + 34px);
 }
 .toast {
   border: 1px solid var(--line);

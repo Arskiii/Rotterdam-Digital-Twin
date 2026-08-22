@@ -1634,6 +1634,10 @@ export class App {
     // SETUP only moves simulation variables, and a phone has no simulation
     if (p === "setup" && App.PHONE) p = "map";
     this.page = p;
+    // The stylesheet needs to know which page is up: the toast stack and the
+    // top-right of a page both want the same corner, and only one of them can
+    // have it. Mirrors body[data-mode], which already does this for the modes.
+    document.body.dataset.page = p;
     this.ui.navBtns.forEach((b) => {
       const on = b.dataset.page === p;
       b.classList.toggle("on", on);
@@ -2377,17 +2381,78 @@ export class App {
     this.msgCount++;
   }
 
+  /** live toasts by kind, so a burst of the same thing is one line and a count */
+  private toastGroups = new Map<string, { el: HTMLElement; n: number; timer: ReturnType<typeof setTimeout> }>();
+
+  /**
+   * A short-lived notification, grouped by what it is.
+   *
+   * Boot fires one of these per live NDW situation, which in practice means
+   * five or six identical-shaped warnings in the same second — and stacked
+   * three-deep they covered whatever happened to be under them. Grouping is
+   * the fix rather than moving them: five obstructions are one fact about the
+   * city, not five things to read.
+   *
+   * The key is the text before the first em dash — the kind of event, without
+   * the street. So five obstructions in five districts collapse to the newest
+   * one with a ×5 beside it, while an obstruction and a bridge opening stay
+   * apart. Each new member restarts the group's clock, so a run of them stays
+   * up until it stops rather than expiring while it is still arriving.
+   */
   toast(level: "info" | "warn" | "crit", html: string) {
+    const key = `${level}:${(html.split("—")[0] ?? html).trim()}`;
+    const arm = (g: { el: HTMLElement; n: number; timer: ReturnType<typeof setTimeout> }) => {
+      clearTimeout(g.timer);
+      g.timer = setTimeout(() => {
+        g.el.style.opacity = "0";
+        g.el.style.transition = "opacity 400ms";
+        setTimeout(() => {
+          g.el.remove();
+          if (this.toastGroups.get(key) === g) this.toastGroups.delete(key);
+          this.syncToastFlag();
+        }, 420);
+      }, 5200);
+    };
+
+    const open = this.toastGroups.get(key);
+    if (open && open.el.isConnected) {
+      open.n++;
+      open.el.innerHTML = `${html}<span class="toast-n">×${open.n}</span>`;
+      arm(open);
+      this.syncToastFlag(); // a longer line can wrap, and the lane follows it
+      return;
+    }
+
     const el = document.createElement("div");
     el.className = `toast ${level}`;
     el.innerHTML = html;
     this.ui.toasts.appendChild(el);
+    const group = { el, n: 1, timer: setTimeout(() => {}, 0) };
+    this.toastGroups.set(key, group);
+    arm(group);
     while (this.ui.toasts.children.length > 3) this.ui.toasts.firstChild?.remove();
-    setTimeout(() => {
-      el.style.opacity = "0";
-      el.style.transition = "opacity 400ms";
-      setTimeout(() => el.remove(), 420);
-    }, 5200);
+    this.syncToastFlag();
+  }
+
+  /**
+   * Reserve exactly as much of the page as the stack is currently using.
+   *
+   * Measured rather than guessed: a toast wraps to two lines when its text is
+   * long, so any fixed reservation is either wrong for one toast or wasteful
+   * for the common case of one. There is no feedback loop to worry about —
+   * the stack is positioned against the HUD, not against the page whose
+   * padding this sets.
+   */
+  private syncToastFlag() {
+    const n = this.ui.toasts.children.length;
+    if (n) {
+      document.body.dataset.toasts = "1";
+      const h = Math.ceil(this.ui.toasts.getBoundingClientRect().height);
+      document.body.style.setProperty("--toast-lane", `${h}px`);
+    } else {
+      delete document.body.dataset.toasts;
+      document.body.style.removeProperty("--toast-lane");
+    }
   }
 
   private flavorEvent() {
@@ -2418,7 +2483,7 @@ export class App {
       <div id="brief-cols">
         <div class="panel">
           <div class="p-title" id="brief-chart-title">City flow</div>
-          <canvas id="brief-chart-canvas"></canvas>
+          <div id="brief-chart-wrap"><canvas id="brief-chart-canvas"></canvas></div>
           <div id="brief-chart-legend" style="display:flex;gap:18px;margin-top:8px;font-size:9px;color:var(--text-faint);letter-spacing:.12em"></div>
         </div>
         <div class="panel">
@@ -2426,7 +2491,7 @@ export class App {
           <div id="brief-events"></div>
         </div>
       </div>
-      <div style="height:12px"></div>
+      <div style="height:12px;flex:none"></div>
       <div class="panel">
         <div class="p-title" id="brief-districts-title">District posture</div>
         <div id="brief-districts" style="display:grid;grid-template-columns:repeat(5,1fr);gap:8px 22px"></div>
@@ -2758,10 +2823,14 @@ export class App {
     }
 
     // ---- events into brief ----
+    // Thirty rather than nine: the panel used to be 150px tall whatever the
+    // screen, so nine was all that fitted. It now takes the height the page has
+    // spare, and nine left most of it blank on anything but a laptop. The panel
+    // scrolls, so a short screen is no worse off than before.
     const evWrap = document.getElementById("brief-events")!;
     evWrap.innerHTML = "";
     Array.from(this.ui.msgList.children)
-      .slice(0, 9)
+      .slice(0, 30)
       .forEach((n) => evWrap.appendChild(n.cloneNode(true)));
 
     // ---- district posture ----
