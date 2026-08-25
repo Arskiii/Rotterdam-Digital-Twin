@@ -44,19 +44,19 @@ jobs:
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "20"
           cache: "npm"
       - run: npm ci
       - run: npm run build
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
         if: github.ref == 'refs/heads/main'
         with:
           # Auto-enable Pages on the repo on first deploy so no manual setup is needed.
           enablement: true
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         if: github.ref == 'refs/heads/main'
         with:
           path: dist
@@ -70,7 +70,7 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - id: deployment
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
 
   # The timetable behind every moving vehicle and every departure board, kept
   # from going stale.
@@ -94,8 +94,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
 
@@ -105,7 +105,7 @@ jobs:
 
       - name: Restore this week's timetable
         id: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             data/ret-timetable.bin
@@ -143,12 +143,19 @@ jobs:
   live:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
-    timeout-minutes: 32
+    # Two different ceilings because the two callers want different things. On a
+    # tick this is a watchdog: the default loop is 25 minutes, so anything past
+    # 32 is a wedged fetch sitting on the live-data group, and killing it lets
+    # the next tick take over. A dispatch is allowed to ask for up to 55
+    # (`minutes`, above), which that same watchdog would kill mid-loop — losing
+    # the final archive push with it — so it gets a ceiling that fits what the
+    # input already promises.
+    timeout-minutes: ${{ github.event_name == 'schedule' && 32 || 60 }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "22"
 
@@ -158,7 +165,7 @@ jobs:
       - name: Which week is it
         id: wk
         run: echo "key=gtfs-v1-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache/restore@v4
+      - uses: actions/cache/restore@v5
         with:
           path: |
             data/ret-timetable.bin
