@@ -27,14 +27,19 @@ Voor het openbare Rotterdam Digital Twin-project
 toegang tot actuele iVRI SPaT/MAP-data in Rotterdam. Het platform gebruikt al
 open NDW-telpunten en incidentdata. Verkeerslichtstanden worden nu uitsluitend
 gesimuleerd; wij willen echte standen afzonderlijk en met bronvermelding tonen.
-Wij willen geen verkeerslichten aansturen.
+Zo kunnen bewoners, onderzoekers en beleidsmakers verkeersmaatregelen beter
+begrijpen en kunnen wij simulatie-uitkomsten toetsen aan gemeten situaties.
+Wij vragen niet om persoonsgegevens of individuele voertuigtrajecten, willen
+geen verkeerslichten aansturen en zullen verouderde standen niet als
+oversteekadvies tonen.
 
 Kunt u aangeven welke dienst of partner de actuele SPaT/MAP-feed verstrekt,
 welke testtoegang en overeenkomst nodig zijn, en wie toestemming kan geven
 voor openbare weergave? Zijn voor Rotterdam ook historische fasegegevens,
 signaalgroepidentifiers en topology/MAP-bestanden beschikbaar voor validatie?
 Graag vernemen wij eventuele kosten, gebruiksvoorwaarden, bewaartermijnen
-en de juiste contactpersoon.
+en de juiste contactpersoon. Als de toegang via Talking Traffic/UDAP moet
+lopen, vernemen wij graag welke rol NDW bij toestemming en datagebruik heeft.
 
 Met vriendelijke groet,
 
@@ -52,6 +57,12 @@ Geachte afdeling Datadiensten,
 Voor het openbare Rotterdam Digital Twin-project
 (https://github.com/Arskiii/Rotterdam-Digital-Twin) willen wij gemeten
 verkeerslichtstanden duidelijk gescheiden van onze verkeerssimulatie tonen.
+Dat helpt om analyses van doorstroming, wachttijden en bereikbaarheid voor
+fietsers en voetgangers op controleerbare gegevens te baseren. Bewoners en
+onderzoekers kunnen zo beter zien wat werkelijk is gemeten en wat een model
+voorspelt. Wij vragen alleen om signaal- en topologiegegevens, geen
+persoonsgegevens of individuele voertuigtrajecten; het platform stuurt geen
+verkeerslichten aan en geeft geen oversteekadvies.
 Wij vragen u dit verzoek door te sturen naar de beheerder van Rotterdamse
 verkeersregelinstallaties en verkeersdata.
 
