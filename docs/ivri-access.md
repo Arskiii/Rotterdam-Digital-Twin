@@ -7,8 +7,9 @@ The map never labels simulated phases as observed data.
 
 ## Access request
 
-Contact [NDW](https://www.ndw.nu/service/contact) or the Talking Traffic/UDAP
-service operator. Ask for read-only SPaT and MAP covering Rotterdam, including
+Contact the Talking Traffic/UDAP service operator, the
+[NDW servicedesk](https://www.ndw.nu/service/contact), and Rotterdam's
+open-data office. Ask for read-only SPaT and MAP covering Rotterdam, including
 the 82 iVRI installations inside the platform's coverage area, and for:
 
 1. A test feed and the current service interface specification.
@@ -20,9 +21,14 @@ the 82 iVRI installations inside the platform's coverage area, and for:
 
 The [CROW UDAP interface specification](https://kennisbank.crow.nl/public/gastgebruiker/IVRI/iVRI_specificaties/16_IDD_UDAP-FI/113953)
 describes the interface route. The [Monotch onboarding guide](https://monotch.freshdesk.com/support/solutions/articles/6000282921-technical-support-page-for-csp-isp-listener-integration-on-udap)
-lists `info@talking-traffic.com` as a participation contact; confirm that its
-listener route is valid for this display use case. Do not put provider secrets
-in the browser bundle or the public repository.
+lists `info@talking-traffic.com` as the starting point for a CSP/ISP listener.
+That guide is written for an emergency-vehicle use case, so ask whether the
+same onboarding route covers public display of signal states. It requires an
+organization name, named contact, email address, and phone number. NDW lists
+`mail@servicedeskndw.nu` for data access questions. Rotterdam's open-data
+office lists `datadiensten@rotterdam.nl` for dataset content questions; ask it
+to route the city-owned iVRI asset and MAP mapping request to the traffic
+signal owner. Do not put provider secrets in the browser bundle or repository.
 
 The repo includes a draft in [udap-access-request.md](udap-access-request.md).
 It needs the organization's name and a named contact before sending.
