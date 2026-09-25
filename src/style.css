@@ -719,6 +719,8 @@ svg {
   right: 54px;
   bottom: 176px;
   width: 196px;
+  max-height: calc(100% - 192px);
+  overflow-y: auto;
   border: 1px solid var(--line);
   background: rgba(10, 10, 10, 0.96);
   padding: 10px 12px;
@@ -2462,7 +2464,7 @@ label {
     font-size: 11px;
   }
 
-  /* Fifteen layer toggles do not fit beside a 38px button on a 390px screen.
+  /* The layer toggles do not fit beside a 38px button on a 390px screen.
      Pinned to the right edge they landed squarely on top of #map-tools — so
      the panel covered the very button that opens it, and there was no way to
      close it again. It moves to the top of the map instead, where it clears

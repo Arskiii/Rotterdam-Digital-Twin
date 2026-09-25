@@ -132,6 +132,12 @@ self.addEventListener("fetch", (e) => {
     e.respondWith(networkFirst(req, DATA_CACHE));
     return;
   }
+  // Modelled risk maps can be regenerated independently of the city binaries.
+  // Revalidate them online while retaining the last copy for offline use.
+  if (rel.startsWith("data/resilience/")) {
+    e.respondWith(networkFirst(req, DATA_CACHE));
+    return;
+  }
   // The city. Content-stable within a build, and the reason this file exists.
   if (rel.startsWith("data/")) {
     e.respondWith(cacheFirst(req, DATA_CACHE));

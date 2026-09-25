@@ -28,6 +28,7 @@ export interface ParamsMsg {
    * feed's time of day on every refresh.
    */
   liveClock?: boolean;
+  holdClock?: boolean; // keep demand/time of day fixed during an exploratory signal trial
 }
 
 export interface IncidentMsg {

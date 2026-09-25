@@ -6,6 +6,9 @@ import { buildCity, buildDistrictBounds, syncFog, setAmbient, releaseToGPU, Roof
 import type { RoofIndex } from "./data/loader";
 import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveIncidentsLayer } from "./render/dynamic";
 import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit";
+import { ResilienceLayers } from "./render/resilience";
+import { ObservedSignalsLayer } from "./render/observed-signals";
+import { pollObservedSignals } from "./data/live-signals";
 import { loadCity } from "./data/loader";
 import { LiveFeed, type LiveSnapshot } from "./data/live";
 import { watchForNewBuild } from "./data/buildwatch";
@@ -153,7 +156,9 @@ async function boot() {
   const fixesLayer = new LiveTransitLayer();
   const stopsLayer = new LiveStopsLayer();
   const liveIncidentsLayer = new LiveIncidentsLayer();
-  scene.scene.add(signals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.group, stopsLayer.points, liveIncidentsLayer.points);
+  const resilience = new ResilienceLayers(dataBase, scene.scene);
+  const observedSignals = new ObservedSignalsLayer(data.graph);
+  scene.scene.add(signals.points, observedSignals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.group, stopsLayer.points, liveIncidentsLayer.points);
 
   // The engine has been initializing since graph.bin arrived — usually done.
   //
@@ -202,8 +207,15 @@ async function boot() {
   }
   const sim = (worker as Worker | null) ?? inertWorker();
 
-  const app = new App(ui, scene, data, meshes, { signals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer, stopsLayer }, sim);
+  const app = new App(ui, scene, data, meshes, { signals, observedSignals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer, stopsLayer, resilience }, sim);
   if (simError) app.disableSim(simError);
+
+  const signalStatus = document.getElementById("ivri-feed-status");
+  pollObservedSignals(import.meta.env.VITE_LIVE_SIGNALS_URL?.trim() ?? "",
+    data.graph.signals.count + data.graph.aux.count, data.meta.graphSha256, (snapshot, state) => {
+      observedSignals.set(snapshot);
+      if (signalStatus) signalStatus.textContent = state;
+    });
 
   // feed the NDW snapshot into the sim's calibration loop
   if (data.ndw?.stations.length) {
@@ -331,6 +343,7 @@ async function boot() {
     }
     if (now - lastLiveChip > 1000) {
       lastLiveChip = now;
+      observedSignals.refresh();
       const age = live.ageMin();
       if (live.snapshot) {
         ui.liveChip.style.display = "";
