@@ -241,6 +241,7 @@ svg {
 }
 #topnav .nav-btn {
   position: relative;
+  text-decoration: none;
   text-transform: uppercase;
   letter-spacing: 0.14em;
   font-size: 11.5px;

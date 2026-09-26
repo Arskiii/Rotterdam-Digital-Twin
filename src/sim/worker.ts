@@ -8,7 +8,17 @@
 // incidents with rerouting.
 
 import { parseGraph, MODE_CAR, type Graph } from "../data/loader";
-import type { MainToWorker, MetricsMsg, DistrictStat } from "./protocol";
+import type { MainToWorker, MetricsMsg, DistrictStat, InitMsg } from "./protocol";
+
+let randomSeed: number | null = null;
+function rand(): number {
+  if (randomSeed === null) return Math.random();
+  randomSeed = (randomSeed + 0x6D2B79F5) | 0;
+  let x = randomSeed;
+  x = Math.imul(x ^ (x >>> 15), x | 1);
+  x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+  return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+}
 
 const post = (msg: unknown, transfer?: Transferable[]) =>
   (self as unknown as Worker).postMessage(msg, (transfer ?? []) as never);
@@ -91,6 +101,7 @@ let burst: { edges: Int32Array; walkEdges: Int32Array; carsLeft: number; walkLef
 let ndwEdgeFlow: Map<number, number> | null = null;
 let ndwTodMin = 0;
 let liveClock = false; // clock follows Rotterdam, not the simulation
+let experimentCounts: Map<number, number> | null = null;
 let ndwCounts: Map<number, number> | null = null; // sim vehicle-passes per matched edge
 let ndwWindowStartSim = 0;
 let ndwSimVehH = 0; // smoothed aggregate
@@ -265,7 +276,7 @@ function buildSpawnTables() {
 function sampleSpawnEdge(mode: number): number {
   const cum = spawnCum[mode];
   if (!cum.length) return -1;
-  const r = Math.random() * cum[cum.length - 1];
+  const r = rand() * cum[cum.length - 1];
   let lo = 0, hi = cum.length - 1;
   while (lo < hi) {
     const mid = (lo + hi) >> 1;
@@ -408,7 +419,7 @@ function spawn(mode: number, originEdge = -1, truckChance = TRUCK_SHARE) {
     if (a < 0) return;
     let b = sampleSpawnEdge(mode);
     const [minR, maxR, localShare] = TRIP_SHAPE[mode];
-    if (Math.random() < localShare) {
+    if (rand() < localShare) {
       const ax = G.nodesXY[dSource[a] * 2], ay = G.nodesXY[dSource[a] * 2 + 1];
       for (let k = 0; k < 10; k++) {
         const cand = sampleSpawnEdge(mode);
@@ -423,12 +434,12 @@ function spawn(mode: number, originEdge = -1, truckChance = TRUCK_SHARE) {
     const id = freeList.pop()!;
     vRoutes[id] = r;
     vRouteIdx[id] = 0;
-    vMode[id] = mode === 0 && Math.random() < truckChance ? 3 : mode;
+    vMode[id] = mode === 0 && rand() < truckChance ? 3 : mode;
     const m = vMode[id];
     vEdge[id] = a;
     vS[id] = Math.min(8, dLen[a] * 0.3);
     vV[id] = Math.min(modeSpeed(a, m), m === 2 ? 1.4 : 8);
-    vV0f[id] = m === 2 ? 0.85 + Math.random() * 0.4 : m === 3 ? 0.78 + Math.random() * 0.14 : 0.88 + Math.random() * 0.27;
+    vV0f[id] = m === 2 ? 0.85 + rand() * 0.4 : m === 3 ? 0.78 + rand() * 0.14 : 0.88 + rand() * 0.27;
     vWait[id] = 0;
     vAlive[id] = 1;
     if (m !== 2) {
@@ -780,6 +791,10 @@ function stepVehicles(dt: number) {
       if (canGo && next >= 0 && !((mode === 0 || mode === 3) && dBlocked[next]) && room) {
         removeFromQueue(id);
         // NDW calibration counter: motorized vehicles entering a measured edge
+        if (experimentCounts && (mode === 0 || mode === 3)) {
+          const ue = next >> 1;
+          if (experimentCounts.has(ue)) experimentCounts.set(ue, experimentCounts.get(ue)! + 1);
+        }
         if (ndwCounts && (mode === 0 || mode === 3)) {
           const ue = next >> 1;
           const c = ndwCounts.get(ue);
@@ -832,13 +847,13 @@ let nextFault = 400;
 function maybeInject() {
   if (!autoIncidents) return;
   if (simTime > nextAutoIncident) {
-    nextAutoIncident = simTime + 240 + Math.random() * 420;
+    nextAutoIncident = simTime + 240 + rand() * 420;
     injectIncident();
   }
   if (simTime > nextFault) {
-    nextFault = simTime + 300 + Math.random() * 600;
-    const c = Math.floor(Math.random() * G.clusters.count);
-    clusterFault[c] = simTime + 45 + Math.random() * 60;
+    nextFault = simTime + 300 + rand() * 600;
+    const c = Math.floor(rand() * G.clusters.count);
+    clusterFault[c] = simTime + 45 + rand() * 60;
     post({
       type: "event",
       level: "warn",
@@ -868,7 +883,7 @@ function injectIncident() {
     if (dExists[d ^ 1]) dBlocked[d ^ 1] = 1;
     const off = G.edges.geoOff[e];
     const x = G.geo[off * 2], y = G.geo[off * 2 + 1];
-    incidents.push({ dEdge: d, until: simTime + 120 + Math.random() * 200, x, y });
+    incidents.push({ dEdge: d, until: simTime + 120 + rand() * 200, x, y });
     post({
       type: "event",
       level: "crit",
@@ -969,7 +984,7 @@ let lastMetrics = 0;
 let lastCong = 0;
 const distAgg = { veh: new Float32Array(32), spd: new Float32Array(32), q: new Float32Array(32), cong: new Float32Array(32), n: new Float32Array(32) };
 
-function sendMetrics() {
+function collectMetrics(): MetricsMsg {
   const dists: DistrictStat[] = [];
   distAgg.veh.fill(0); distAgg.spd.fill(0); distAgg.q.fill(0); distAgg.cong.fill(0); distAgg.n.fill(0);
   let vSum = 0, queued = 0;
@@ -1062,17 +1077,12 @@ function sendMetrics() {
     incidentPts: incidents.map((i) => ({ x: i.x, y: i.y })),
     districts: dists,
   };
-  post(msg);
+  return msg;
 }
+function sendMetrics() { post(collectMetrics()); }
 
 // ---------------- main loop ----------------
-let lastTick = performance.now();
-function tick() {
-  const now = performance.now();
-  const real = Math.min(0.12, (now - lastTick) / 1000);
-  lastTick = now;
-  if (!running) return;
-
+function advance(real: number) {
   let dt = real * simSpeed;
   // On the live map the clock is Rotterdam's: one real second is one second,
   // so the ambient fleet thins out and fills up when the city does. In the
@@ -1127,12 +1137,12 @@ function tick() {
   if (burst) {
     for (let i = 0; i < 8 && burst.carsLeft > 0; i++) {
       if (burst.edges.length === 0) break;
-      spawn(0, burst.edges[Math.floor(Math.random() * burst.edges.length)], burst.truckChance);
+      spawn(0, burst.edges[Math.floor(rand() * burst.edges.length)], burst.truckChance);
       burst.carsLeft--;
     }
     for (let i = 0; i < 12 && burst.walkLeft > 0; i++) {
       if (burst.walkEdges.length === 0) break;
-      spawn(2, burst.walkEdges[Math.floor(Math.random() * burst.walkEdges.length)]);
+      spawn(2, burst.walkEdges[Math.floor(rand() * burst.walkEdges.length)]);
       burst.walkLeft--;
     }
     if (burst.carsLeft <= 0 && burst.walkLeft <= 0) burst = null;
@@ -1144,6 +1154,17 @@ function tick() {
   }
 
   maybeInject();
+
+}
+
+let lastTick = performance.now();
+function tick() {
+  const now = performance.now();
+  const real = Math.min(0.12, (now - lastTick) / 1000);
+  lastTick = now;
+  if (!running) return;
+
+  advance(real);
 
   // frame out
   const total = activeByMode[0] + activeByMode[1] + activeByMode[2];
@@ -1211,13 +1232,48 @@ function tick() {
   }
 }
 
+async function runExperiment(config: NonNullable<InitMsg["experiment"]>) {
+  const warmup = Math.max(0, Math.min(120, config.warmupSec));
+  const measure = Math.max(30, Math.min(300, config.measureSec));
+  targetDensity = Math.max(200, Math.min(4000, config.density));
+  clockMin = Math.max(0, Math.min(1439, config.clockMin));
+  holdClock = true;
+  autoIncidents = false;
+  signalProgram = "actuated";
+  const advancePeriod = async (seconds: number, stage: string) => {
+    for (let i = 0; i < Math.ceil(seconds * 10); i++) {
+      advance(0.1);
+      if (i % 100 === 99) {
+        post({ type: "experimentProgress", program: config.program, stage, doneSec: (i + 1) / 10, totalSec: seconds });
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      }
+    }
+  };
+  await advancePeriod(warmup, "warmup");
+  signalProgram = config.program;
+  experimentCounts = new Map(config.stations.filter((s) => s.edge >= 0 && s.edge < G.edges.count).map((s) => [s.edge, 0]));
+  const completedBefore = completed;
+  await advancePeriod(measure, "measure");
+  const metrics = collectMetrics();
+  metrics.completed = completed - completedBefore;
+  metrics.throughputMin = Math.round(metrics.completed * 60 / measure);
+  const stationFlows = config.stations.map((s) => ({
+    edge: s.edge, observed: s.flow,
+    simulated: Math.round((experimentCounts?.get(s.edge) ?? 0) * 3600 / measure),
+  }));
+  post({ type: "experimentResult", seed: config.seed, program: config.program,
+    warmupSec: warmup, measureSec: measure, metrics, stationFlows });
+}
+
 self.onmessage = (ev: MessageEvent<MainToWorker>) => {
   const msg = ev.data;
   if (msg.type === "init") {
     districtCount = msg.districtCount;
     districtInfo = msg.districts ?? [];
+    if (msg.experiment) randomSeed = msg.experiment.seed | 0;
     init(msg.graphBuffer);
-    setInterval(tick, 33);
+    if (msg.experiment) setTimeout(() => void runExperiment(msg.experiment!), 0);
+    else setInterval(tick, 33);
   } else if (msg.type === "params") {
     if (msg.density !== undefined) targetDensity = msg.density;
     if (msg.simSpeed !== undefined) simSpeed = msg.simSpeed;

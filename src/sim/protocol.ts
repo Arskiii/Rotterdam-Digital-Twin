@@ -5,6 +5,8 @@ export interface InitMsg {
   graphBuffer: ArrayBuffer;
   districtCount: number;
   districts: { name: string; x: number; y: number }[];
+  /** A separate, headless worker used for reproducible comparisons. */
+  experiment?: { seed: number; program: "actuated" | "coordinated" | "fixed"; clockMin: number; density: number; warmupSec: number; measureSec: number; stations: { edge: number; flow: number }[] };
 }
 
 export interface ParamsMsg {
@@ -143,3 +145,13 @@ export interface EventMsg {
 }
 
 export type WorkerToMain = ReadyMsg | InitProgressMsg | FrameMsg | MetricsMsg | CongestionMsg | EventMsg;
+
+export interface ExperimentResultMsg {
+  type: "experimentResult";
+  seed: number;
+  program: "actuated" | "coordinated" | "fixed";
+  warmupSec: number;
+  measureSec: number;
+  metrics: MetricsMsg;
+  stationFlows: { edge: number; observed: number; simulated: number }[];
+}

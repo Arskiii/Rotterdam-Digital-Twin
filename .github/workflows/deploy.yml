@@ -50,9 +50,17 @@ jobs:
           node-version: "20"
           cache: "npm"
       - run: npm ci
+      - name: Refresh released CBS neighborhood figures
+        if: github.ref == 'refs/heads/main'
+        continue-on-error: true
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cbs-venv"
+          "$RUNNER_TEMP/cbs-venv/bin/pip" install --disable-pip-version-check openpyxl==3.1.5
+          "$RUNNER_TEMP/cbs-venv/bin/python" scripts/fetch-cbs-neighborhoods.py
       - run: npm run build
         env:
           VITE_LIVE_SIGNALS_URL: ${{ vars.LIVE_SIGNALS_URL }}
+          VITE_OBSERVATION_API_URL: ${{ vars.OBSERVATION_API_URL }}
       - uses: actions/configure-pages@v6
         if: github.ref == 'refs/heads/main'
         with:

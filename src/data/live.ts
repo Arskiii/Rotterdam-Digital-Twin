@@ -40,11 +40,11 @@ export interface LiveSnapshot {
 }
 
 const LIVE_BRANCH_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/live/live.json";
-// The live branch is served with cache-control max-age=300 and a cache-busting
-// query string does not get past it, so five minutes is a hard floor on how
-// fresh this data can be however often the workflow publishes. Polling faster
-// than the source cadence just re-reads the same cached object.
-const POLL_MS = 120_000;
+const OBSERVATION_URL = import.meta.env.VITE_OBSERVATION_API_URL?.trim() || "";
+// The GitHub raw fallback has cache-control max-age=300 and its cache-busting
+// query string does not help. A configured observation service can deliver
+// faster, so poll that path once a minute; the GitHub-only path needs less.
+const POLL_MS = OBSERVATION_URL ? 60_000 : 120_000;
 
 /**
  * Thresholds are set against what the delivery path can actually achieve, not
@@ -117,7 +117,7 @@ export function admitSnapshot(raw: unknown, current: LiveSnapshot | null): "inva
 
 export class LiveFeed {
   snapshot: LiveSnapshot | null = null;
-  source: "branch" | "local" | null = null;
+  source: "service" | "branch" | "local" | null = null;
   private localUrl: string;
   private onUpdate: (snap: LiveSnapshot) => void;
   private lastT = "";
@@ -153,8 +153,13 @@ export class LiveFeed {
   }
 
   private async poll() {
-    // the refreshed branch first, the committed copy as fallback
-    for (const [source, url] of [["branch", LIVE_BRANCH_URL], ["local", this.localUrl]] as const) {
+    // Prefer a configured observation service; retain GitHub and the bundled
+    // copy as fallbacks when it is unavailable or older than a known snapshot.
+    const sources: ["service" | "branch" | "local", string][] = [
+      ...(OBSERVATION_URL ? [["service", OBSERVATION_URL] as ["service", string]] : []),
+      ["branch", LIVE_BRANCH_URL], ["local", this.localUrl],
+    ];
+    for (const [source, url] of sources) {
       let snap: LiveSnapshot;
       try {
         const res = await fetch(url, { cache: "no-cache" });
@@ -167,10 +172,10 @@ export class LiveFeed {
       // weather and tide, so they are accepted and simply offer less
       const verdict = admitSnapshot(snap, this.snapshot);
       if (verdict === "invalid") continue;
-      if (verdict === "stale") return; // a fallback must not undo a fresher publish
-      this.source = source;
+      if (verdict === "stale") continue; // try other paths, but never undo a fresher publish
       if (snap.t !== this.lastT) {
         this.lastT = snap.t;
+        this.source = source;
         this.snapshot = snap;
         // Deliberately outside the fetch try/catch. Folding the handler into
         // it meant a bug anywhere downstream looked exactly like an offline
@@ -178,6 +183,9 @@ export class LiveFeed {
         // app sat there with no data and nothing in the console.
         this.onUpdate(snap);
       }
+      // A service can be reachable yet lag its publisher. When it is already
+      // several minutes old, check the mirror before declaring this poll done.
+      if (source === "service" && this.ageMin() > 3) continue;
       return;
     }
   }
