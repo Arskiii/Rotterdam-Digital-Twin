@@ -26,6 +26,11 @@ traffic simulation — wrapped in a dark tactical operations UI.
   gables and dormers), packed into 354 one-kilometer tiles (28 MB) that
   stream in around the camera and swap with the block model per tile;
   flat-roofed buildings keep their prisms, which are already the true shape
+- **Resilience overlays** from [Rotterdam's DGO GIS](https://diensten.rotterdam.nl/arcgis/rest/services/SO_IBURO/DGO_data/MapServer):
+  distance to cool resting places at 38°C (75/150/300/700 m classes),
+  modelled water depth over 25 cm, and cumulative day/night noise exposure.
+  Enable them individually in Map layers. These are static planning maps,
+  not live flood, noise, or heat measurements. The rasters load only when selected.
 
 **Live multimodal simulation** (dedicated web worker):
 
@@ -76,6 +81,10 @@ traffic simulation — wrapped in a dark tactical operations UI.
 - **SETUP** — fleet density, physics rate, signal cycle scale, time of day, incident
   injection, render scale. Every control is disabled outside SIMULATION,
   scenarios and the signal trial included, with one button back to it.
+  The signal trial holds the model clock fixed, pauses automatic incidents,
+  restores the prior settings, and exports its three sequential observations.
+  It is exploratory: random arrivals and the initial traffic state still vary,
+  so the trial does not claim a causal winner.
 - **TRANSIT** (dock) — how the network is running, line by line: vehicles out,
   median running delay over that line's own reporting trips, its worst trip,
   and the sample behind both. The aggregate neither the map nor a departure
@@ -202,6 +211,9 @@ as a few minutes old, and only genuine outages show amber or red.
 - **UDAP iVRI registry**: all 82 official smart-traffic-light installations in the
   coverage area match one of our signal clusters (Rotterdam 61/61 ≤ 75 m, median 28 m)
   — `node scripts/validate-signals.mjs`.
+- **Observed iVRI readiness**: an optional, authenticated bridge can display
+  authorized SPaT states as small upper rings on mapped signal heads. Without
+  provider access it stays empty and says so; the normal bulbs remain simulated.
 - **NWB road register** (PDOK): 94.3% of 70,367 official road segments (89% of km)
   covered — motorways 98.4% of km; the residual is ferries, rural dike tracks and
   bbox-edge clipping — `node scripts/validate-roads.mjs`.
@@ -248,6 +260,9 @@ npm run fetch-heights   # 3D BAG measured heights → data/heights-3dbag.json (o
 npm run build-data      # → public/data/*.bin + meta.json (~17 MB)
 npm run fetch-roofs     # 3D BAG LoD2.2 roof geometry → public/data/roofs/ (28 MB;
                         #   downloads ~600 MB of CityJSON, cached + resumable)
+npm run fetch-resilience # Rotterdam GIS modelled cooling, water depth and noise
+                         #   → public/data/resilience/ (~1.3 MB); rerun when
+                         #   the municipality republishes its planning maps
 npm run fetch-stops     # RET stop names/coords → data/gtfs-stops.json (byte-range
                         #   reads, ~1.5 MB of a 215 MB zip)
 npm run fetch-timetable # RET metro/tram schedule → data/ret-timetable.bin (3.3 MB;
@@ -266,6 +281,7 @@ scripts/
   fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings + parts, water, rail)
   fetch-heights.mjs  3D BAG WFS fetch → measured roof heights per building
   fetch-lod2.mjs     3D BAG CityJSON fetch → true LoD2.2 roof tiles (public/data/roofs/)
+  fetch-resilience.mjs Rotterdam GIS exports → citywide modelled risk rasters
   fetch-live.mjs     live snapshot: NDW traffic + bridges, OVapi GTFS-RT vehicles
                      and departure boards, RWS water, Buienradar weather,
                      Luchtmeetnet air → public/data/live/live.json
@@ -289,6 +305,7 @@ src/
   render/city.ts     road ribbons + line overlay, water shader, building extrusion
   render/dynamic.ts  signal points, instanced vehicles, congestion lines
   render/drone.ts    wireframe drone viewer (unit card)
+  render/resilience.ts  lazy GIS risk overlays, kept separate from live conditions
   ui/chrome.ts       DOM chrome (header, rail, cards, dock, boot)
   ui/app.ts          application controller: pages, units, telemetry, events
   ui/search.ts       the place index and its matcher (pure, no DOM)
@@ -302,5 +319,9 @@ public/
 Tests sit beside what they cover (`*.test.ts`) and run without a DOM.
 
 Deploys to GitHub Pages via `.github/workflows/deploy.yml` (pushes to `main`).
+
+Authorized live traffic-light states can be connected through the optional
+bridge in `server/live-signals.mjs`; see [live iVRI access](docs/ivri-access.md).
+Provider credentials and public-display permission are not included.
 
 Map data © OpenStreetMap contributors, ODbL.

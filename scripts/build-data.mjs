@@ -12,6 +12,7 @@
 //   buildings.bin  tiled quantized extrusion footprints (pre-triangulated roofs)
 
 import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import earcut from "earcut";
@@ -1059,6 +1060,7 @@ let districtBounds = 0;
   }
   const meta = {
     version: 2,
+    graphSha256: createHash("sha256").update(readFileSync(join(OUT, "graph.bin"))).digest("hex"),
     origin: ORIGIN,
     extent: { minX, minY, maxX, maxY },
     counts: {

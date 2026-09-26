@@ -129,11 +129,15 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="buildings" checked /><span class="box"></span>Structures</label>
           <label><input type="checkbox" data-layer="roads" checked /><span class="box"></span>Road network</label>
           <label><input type="checkbox" data-layer="signals" checked /><span class="box"></span>Signal units</label>
+          <label><input type="checkbox" data-layer="observed-signals" checked /><span class="box"></span>Observed iVRI states</label>
           <label><input type="checkbox" data-layer="vehicles" checked /><span class="box"></span>Vehicle tracks</label>
           <label><input type="checkbox" data-layer="bikes" checked /><span class="box"></span>Bike tracks</label>
           <label><input type="checkbox" data-layer="pedestrians" checked /><span class="box"></span>Pedestrians</label>
           <label><input type="checkbox" data-layer="congestion" /><span class="box"></span>Congestion flux</label>
           <label><input type="checkbox" data-layer="water" checked /><span class="box"></span>Hydro surface</label>
+          <label><input type="checkbox" data-layer="cooling" /><span class="box"></span>Cooling access</label>
+          <label><input type="checkbox" data-layer="flood" /><span class="box"></span>Water depth &gt;25 cm</label>
+          <label><input type="checkbox" data-layer="noise" /><span class="box"></span>Noise exposure</label>
           <label><input type="checkbox" data-layer="rail" checked /><span class="box"></span>Rail grid</label>
           <label><input type="checkbox" data-layer="transit" checked /><span class="box"></span>Transit fleet</label>
           <label><input type="checkbox" data-layer="bounds" checked /><span class="box"></span>District bounds</label>
@@ -141,7 +145,9 @@ export function buildChrome(root: HTMLElement) {
           <label><input type="checkbox" data-layer="air" /><span class="box"></span>Air quality</label>
           <label><input type="checkbox" data-layer="fixes" checked /><span class="box"></span>Transit RT fixes</label>
           <label><input type="checkbox" data-layer="labels" checked /><span class="box"></span>Unit labels</label>
-          <div class="lp-note" id="lp-synthetic">Vehicle, bike and pedestrian tracks are modelled traffic on the real street graph, obeying the real signals. Volume follows Rotterdam's clock and the measured sensor flows; no individual car is a real one.</div>
+          <div class="lp-note" id="lp-synthetic">Vehicle, bike and pedestrian tracks are modelled traffic on the real street graph, following simulated phases at mapped signal locations. Volume follows Rotterdam's clock and the measured sensor flows; no individual car is a real one.</div>
+          <div class="lp-note">Cooling (75/150/300/700 m), water depth (&gt;25 cm) and noise (54–&gt;70 dB) are <b>modelled risk maps</b>, not current conditions. <a href="https://diensten.rotterdam.nl/arcgis/rest/services/SO_IBURO/DGO_data/MapServer" target="_blank" rel="noopener noreferrer">Rotterdam GIS ↗</a></div>
+          <div class="lp-note">Small upper rings = fresh observed iVRI heads. Simulated signal bulbs remain separate. <span id="ivri-feed-status">No authorized feed connected</span>.</div>
         </div>
 
         <div id="toasts" role="status" aria-live="polite" aria-atomic="false"></div>
@@ -150,7 +156,7 @@ export function buildChrome(root: HTMLElement) {
         <section id="page-setup" class="page" aria-label="Setup"></section>
       </div>
 
-      <div id="attribution">MAP DATA © OPENSTREETMAP CONTRIBUTORS</div>
+      <div id="attribution">MAP DATA © OPENSTREETMAP CONTRIBUTORS · © 3DBAG DOOR TUDELFT3D EN 3DGI</div>
 
       <div id="dock">
         <div id="dock-tabs" role="tablist" aria-label="Dock">

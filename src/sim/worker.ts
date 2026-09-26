@@ -114,6 +114,7 @@ let autoIncidents = true;
 
 // clocks
 let simTime = 0;
+let holdClock = false;
 let clockMin = 8 * 60 + 12;
 const CLOCK_RATE = 72;
 let completed = 0;
@@ -1076,7 +1077,7 @@ function tick() {
   // On the live map the clock is Rotterdam's: one real second is one second,
   // so the ambient fleet thins out and fills up when the city does. In the
   // simulation it runs at CLOCK_RATE, a day every twenty minutes.
-  clockMin = (clockMin + (real * (liveClock ? 1 : CLOCK_RATE * simSpeed)) / 60) % 1440;
+  if (!holdClock) clockMin = (clockMin + (real * (liveClock ? 1 : CLOCK_RATE * simSpeed)) / 60) % 1440;
 
   // larger substeps at high physics rates keep 12k+ agents affordable
   const maxStep = simSpeed >= 4 ? 0.1 : 0.055;
@@ -1227,6 +1228,7 @@ self.onmessage = (ev: MessageEvent<MainToWorker>) => {
     if (msg.autoIncidents !== undefined) autoIncidents = msg.autoIncidents;
     if (msg.timeOfDayMin !== undefined) clockMin = msg.timeOfDayMin;
     if (msg.liveClock !== undefined) liveClock = msg.liveClock;
+    if (msg.holdClock !== undefined) holdClock = msg.holdClock;
     if (msg.speedFactor !== undefined) weatherFactor = Math.min(1, Math.max(0.7, msg.speedFactor));
   } else if (msg.type === "liveBridges") {
     const next = new Map<string, number[]>();

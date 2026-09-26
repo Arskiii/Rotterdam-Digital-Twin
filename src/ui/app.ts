@@ -136,9 +136,13 @@ export class App {
   private trial: {
     stage: number;
     stageStartSim: number;
+    clockMin: number;
+    priorProgram: "actuated" | "coordinated" | "fixed";
+    priorAutoIncidents: boolean;
     acc: { n: number; speed: number; queued: number; thr: number; wait: number };
-    results: { program: string; speed: number; queued: number; thr: number; wait: number }[];
+    results: { program: string; speed: number; queued: number; thr: number; wait: number; samples: number }[];
   } | null = null;
+  private lastTrial: { runAt: string; clockMin: number; stageSeconds: number; results: NonNullable<App["trial"]>["results"]; caveat: string } | null = null;
   // street-intel spatial index (built lazily from graph geometry)
   private streetGrid: { cellOff: Int32Array; list: Int32Array; xy: Float32Array; edge: Uint32Array; minX: number; minY: number; nx: number; ny: number } | null = null;
   private hoverPx = { x: -1, y: -1 };
@@ -165,6 +169,7 @@ export class App {
     public meshes: CityMeshes,
     public layers: {
       signals: SignalsLayer;
+      observedSignals: import("../render/observed-signals").ObservedSignalsLayer;
       vehicles: VehiclesLayer;
       congestion: CongestionLayer;
       transit: TransitLayer;
@@ -173,6 +178,7 @@ export class App {
       airLayer?: import("../render/dynamic").AirLayer;
       fixesLayer?: import("../render/transit").LiveTransitLayer;
       stopsLayer?: import("../render/transit").LiveStopsLayer;
+      resilience: import("../render/resilience").ResilienceLayers;
     },
     public worker: Worker
   ) {
@@ -888,7 +894,7 @@ export class App {
     this.setSearchOpen(false);
     this.setPage("map");
     this.scene.flyTo(new THREE.Vector3(h.x, 0, -h.y), h.dist, 1100);
-    this.log("ok", `MOVED TO ${escapeHtml(h.label.toUpperCase())} — ${escapeHtml(h.sub.toUpperCase())}`);
+    this.log("ok", `MOVED TO ${h.label.toUpperCase()} — ${h.sub.toUpperCase()}`);
   }
 
   // ---------- live departure boards ----------
@@ -969,7 +975,7 @@ export class App {
                       ? `<span class="bd-early">${late}'</span>`
                       : `<span class="bd-ontime">ON TIME</span>`;
               return `<div class="bd-row">
-                <span class="bd-line k${kind}">${String(line).toUpperCase()}</span>
+                <span class="bd-line k${kind}">${escapeHtml(String(line).toUpperCase())}</span>
                 <span class="bd-kind">${KIND[kind] ?? ""}</span>
                 <span class="bd-dest">${escapeHtml(dest || "—")}</span>
                 <span class="bd-when">${when}</span>
@@ -1015,7 +1021,7 @@ export class App {
         <span style="font-size:9px;letter-spacing:.16em;color:var(--text-faint)">NDW STATION</span>
         <button id="station-close" aria-label="Close station card">✕</button>
       </div>
-      <div style="font-weight:700;font-size:11.5px;margin-bottom:8px">${(s.name || "UNNAMED SITE").toUpperCase()}</div>
+      <div style="font-weight:700;font-size:11.5px;margin-bottom:8px">${escapeHtml((s.name || "UNNAMED SITE").toUpperCase())}</div>
       ${row("MEASURED @ CAPTURE", `${fmtInt(s.flow)} VEH/H`)}
       ${row("EXPECTED NOW", cal ? `${fmtInt(expected)} VEH/H` : "—")}
       ${row("SIMULATED NOW", cal ? `${fmtInt(simFlow)} VEH/H` : "MEASURING…")}
@@ -1166,6 +1172,7 @@ export class App {
     // a mode that cannot run is not a mode
     if (m === "sim" && (!this.simAvailable || App.PHONE)) m = "live";
     const prevMode = this.mode;
+    if (prevMode === "sim" && m !== "sim" && this.trial) this.cancelTrial();
     this.mode = m;
     this.ui.modeBtns.forEach((b) => {
       const on = b.dataset.mode === m;
@@ -1715,6 +1722,17 @@ export class App {
         this.meshes.junctions.visible = on;
         break;
       case "water": this.meshes.water.visible = on; break;
+      case "cooling":
+      case "flood":
+      case "noise":
+        void this.layers.resilience.set(layer, on).catch((error) => {
+          console.warn(`Resilience layer ${layer} failed`, error);
+          const box = this.ui.layerBoxes.find((item) => item.dataset.layer === layer);
+          if (box) box.checked = false;
+          this.persistLayerStates();
+          this.toast("warn", "MODELLED ROTTERDAM GIS LAYER UNAVAILABLE — TRY AGAIN WHEN DATA IS ONLINE");
+        });
+        break;
       case "rail": this.meshes.rail.visible = on; break;
       case "transit": this.layers.transit.group.visible = on; break;
       case "bounds":
@@ -1731,6 +1749,7 @@ export class App {
         if (!on) this.closeBoard();
         break;
       case "signals": this.layers.signals.points.visible = on; break;
+      case "observed-signals": this.layers.observedSignals.points.visible = on; break;
       case "vehicles":
         this.layers.vehicles.cars.mesh.visible = on;
         this.layers.vehicles.trucks.mesh.visible = on;
@@ -1796,7 +1815,7 @@ export class App {
       }
       case "event":
         this.log(msg.level, msg.text, msg.x !== undefined && msg.y !== undefined ? { x: msg.x, y: msg.y, live: msg.live } : undefined);
-        if (msg.level === "crit" || msg.level === "warn") this.toast(msg.level, msg.text);
+        if (msg.level === "crit" || msg.level === "warn") this.toast(msg.level, escapeHtml(msg.text));
         break;
       case "ready":
         this.log("ok", `SIM CORE ONLINE — ${fmtInt(msg.laneKm)} LANE-KM UNDER CONTROL`);
@@ -1827,7 +1846,7 @@ export class App {
         if (this.track.missFrames > 20) {
           const label = this.track.label;
           this.releaseTrack("TARGET LOST");
-          this.toast("warn", `TARGET LOST — <b>${label}</b> LEFT THE GRID`);
+          this.toast("warn", `TARGET LOST — <b>${escapeHtml(label)}</b> LEFT THE GRID`);
         }
       } else {
         this.track.missFrames = 0;
@@ -2085,16 +2104,35 @@ export class App {
       this.toast("warn", "TRIAL ALREADY RUNNING");
       return;
     }
+    if (this.mode !== "sim" || !this.metrics || this.paused) {
+      this.toast("warn", "SIGNAL TRIAL NEEDS A RUNNING SIMULATION");
+      return;
+    }
+    const priorProgram = (document.querySelector<HTMLButtonElement>("#su-signal button.on")?.dataset.v ?? "actuated") as "actuated" | "coordinated" | "fixed";
+    const priorAutoIncidents = (document.getElementById("su-auto-inc") as HTMLInputElement | null)?.checked ?? false;
     const first = App.TRIAL_PROGRAMS[0];
-    this.worker.postMessage({ type: "params", signalProgram: first });
+    this.worker.postMessage({ type: "params", signalProgram: first, holdClock: true,
+      timeOfDayMin: this.metrics.clockMin, autoIncidents: false });
     this.trial = {
       stage: 0,
       stageStartSim: this.metrics?.simTime ?? 0,
+      clockMin: this.metrics.clockMin,
+      priorProgram,
+      priorAutoIncidents,
       acc: { n: 0, speed: 0, queued: 0, thr: 0, wait: 0 },
       results: [],
     };
-    this.log("info", `INFRASTRUCTURE TRIAL STARTED — 3 SIGNAL PROGRAMS × ${App.TRIAL_STAGE_SIM_S / 60} SIM-MIN (RAISE PHYSICS RATE TO SHORTEN)`);
+    this.log("info", `EXPLORATORY SIGNAL TRIAL STARTED — 3 PROGRAMS × ${App.TRIAL_STAGE_SIM_S / 60} SIM-MIN; CLOCK HELD, AUTOMATIC INCIDENTS PAUSED`);
     this.toast("info", "<b>SIGNAL TRIAL RUNNING</b> — STAGE 1/3: ACTUATED");
+  }
+
+  private cancelTrial() {
+    const trial = this.trial;
+    if (!trial) return;
+    this.worker.postMessage({ type: "params", signalProgram: trial.priorProgram,
+      holdClock: false, autoIncidents: trial.priorAutoIncidents });
+    this.trial = null;
+    this.log("warn", "SIGNAL TRIAL CANCELLED — PREVIOUS MODEL SETTINGS RESTORED");
   }
 
   private trialTick(m: MetricsMsg) {
@@ -2118,6 +2156,7 @@ export class App {
       queued: t.acc.queued / n,
       thr: t.acc.thr / n,
       wait: t.acc.wait / n,
+      samples: t.acc.n,
     });
     t.stage++;
     if (t.stage < App.TRIAL_PROGRAMS.length) {
@@ -2135,11 +2174,16 @@ export class App {
         `TRIAL ${r.program}: ${r.speed.toFixed(1)} KM/H MEAN · ${Math.round(r.queued)} QUEUED · ${Math.round(r.thr)} TRIPS/MIN · WAIT ${r.wait.toFixed(0)}S`
       );
     }
-    const best = [...t.results].sort((a, b) => b.speed - a.speed)[0];
-    this.log("ok", `TRIAL VERDICT — ${best.program} DELIVERS BEST FLOW (${best.speed.toFixed(1)} KM/H NETWORK MEAN)`);
-    this.toast("info", `<b>TRIAL COMPLETE</b> — ${best.program} WINS · SEE MESSAGES FOR THE COMPARISON`);
-    this.worker.postMessage({ type: "params", signalProgram: "actuated" });
+    this.lastTrial = { runAt: new Date().toISOString(), clockMin: t.clockMin,
+      stageSeconds: App.TRIAL_STAGE_SIM_S, results: t.results,
+      caveat: "Sequential exploratory model run, with different initial traffic states and random arrivals. Do not interpret differences as a causal or citywide forecast." };
+    this.log("info", "TRIAL COMPLETE — SEQUENTIAL MODEL OBSERVATIONS, NOT A CONTROLLED CAUSAL COMPARISON");
+    this.toast("info", "<b>TRIAL COMPLETE</b> — SEE MESSAGES OR EXPORT THE OBSERVATIONS");
+    this.worker.postMessage({ type: "params", signalProgram: t.priorProgram,
+      holdClock: false, autoIncidents: t.priorAutoIncidents });
     this.trial = null;
+    const exportButton = document.getElementById("su-trial-export") as HTMLButtonElement | null;
+    if (exportButton) exportButton.disabled = false;
     this.setDock("messages");
   }
 
@@ -2527,19 +2571,37 @@ export class App {
   log(level: "info" | "warn" | "crit" | "ok", text: string, loc?: { x: number; y: number; live?: boolean }) {
     const el = document.createElement("div");
     el.className = "msg";
-    let links = "";
-    if (loc) {
-      // fly the camera to where it happened; live events also link the real
-      // location on OpenStreetMap (the NDW feed has no per-incident page)
-      links = ` <button class="msg-fly" data-x="${loc.x.toFixed(1)}" data-y="${loc.y.toFixed(1)}">◎ VIEW</button>`;
+    const time = document.createElement("span");
+    time.className = "t";
+    time.textContent = fmtTimestamp(new Date(), TIMEZONE);
+    const severity = document.createElement("span");
+    severity.className = `lvl ${level}`;
+    severity.textContent = level.toUpperCase();
+    const message = document.createElement("span");
+    message.textContent = text;
+    if (loc && Number.isFinite(loc.x) && Number.isFinite(loc.y)) {
+      // The real feed supplies names. Keep those as text, and construct links
+      // from validated numeric coordinates rather than interpolating HTML.
+      const fly = document.createElement("button");
+      fly.className = "msg-fly";
+      fly.dataset.x = loc.x.toFixed(1);
+      fly.dataset.y = loc.y.toFixed(1);
+      fly.textContent = "◎ VIEW";
+      message.append(" ", fly);
       if (loc.live) {
         const org = this.data.meta.origin;
         const lat = org.lat + loc.y / 110574;
         const lon = org.lon + loc.x / (111320 * Math.cos((org.lat * Math.PI) / 180));
-        links += ` <a class="msg-src" href="https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}#map=17/${lat.toFixed(5)}/${lon.toFixed(5)}" target="_blank" rel="noopener">MAP ↗</a>`;
+        const map = document.createElement("a");
+        map.className = "msg-src";
+        map.href = `https://www.openstreetmap.org/?mlat=${lat.toFixed(5)}&mlon=${lon.toFixed(5)}#map=17/${lat.toFixed(5)}/${lon.toFixed(5)}`;
+        map.target = "_blank";
+        map.rel = "noopener noreferrer";
+        map.textContent = "MAP ↗";
+        message.append(" ", map);
       }
     }
-    el.innerHTML = `<span class="t">${fmtTimestamp(new Date(), TIMEZONE)}</span><span class="lvl ${level}">${level.toUpperCase()}</span><span>${text}${links}</span>`;
+    el.append(time, severity, message);
     this.ui.msgList.prepend(el);
     while (this.ui.msgList.children.length > 220) this.ui.msgList.lastChild?.remove();
     this.msgCount++;
@@ -2828,7 +2890,7 @@ export class App {
       ?.writeText(text)
       .then(() => this.toast("info", "<b>SITREP COPIED</b> TO CLIPBOARD"))
       .catch(() => this.toast("warn", "CLIPBOARD BLOCKED — SITREP LOGGED TO MESSAGES"));
-    for (const l of lines) this.log("info", escapeHtml(l));
+    for (const l of lines) this.log("info", l);
   }
 
   private renderBrief() {
@@ -3122,7 +3184,8 @@ export class App {
         <div style="display:flex;gap:10px;margin-top:12px;align-items:center">
           <button class="action-btn" id="su-sc-clear">Clear scenario</button>
           <button class="action-btn" id="su-trial" style="border-color:#1e4a2a;color:var(--green)">Run signal trial — A/B/C</button>
-          <span style="font-size:9px;color:var(--text-faint);letter-spacing:.08em">TRIAL SEQUENCES ACTUATED → GREEN WAVE → FIXED (4 SIM-MIN EACH) AND REPORTS THE BEST-FLOWING PROGRAM</span>
+          <button class="action-btn" id="su-trial-export" disabled>Export trial JSON</button>
+          <span style="font-size:9px;color:var(--text-faint);letter-spacing:.08em">SEQUENTIAL MODEL TRIAL: ACTUATED → GREEN WAVE → FIXED (4 SIM-MIN EACH). CLOCK HELD; RANDOM ARRIVALS AND INITIAL TRAFFIC STATES STILL DIFFER. EXPLORATORY ONLY.</span>
         </div>
       </div>`;
 
@@ -3255,6 +3318,15 @@ export class App {
     $("su-trial").addEventListener("click", () => {
       this.startTrial();
       this.setPage("map");
+    });
+    $("su-trial-export").addEventListener("click", () => {
+      if (!this.lastTrial) return;
+      const url = URL.createObjectURL(new Blob([JSON.stringify(this.lastTrial, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "rotterdam-signal-trial.json";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
     });
     // The note said "switch to SIMULATION" and left you to find the switch.
     $("smn-go").addEventListener("click", () => {

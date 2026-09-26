@@ -2,6 +2,7 @@
 
 export interface Meta {
   version: number;
+  graphSha256: string; // binds authorized SPaT head indices to this exact graph
   origin: { lat: number; lon: number };
   extent: { minX: number; minY: number; maxX: number; maxY: number };
   counts: {
