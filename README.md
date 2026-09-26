@@ -263,10 +263,13 @@ console collapses to a full-bleed map with compact chrome, and the canvas takes
 standard touch gestures (one-finger pan, two-finger pinch/rotate).
 
 The Intelligence page is at `/intelligence/` and works without the 3D renderer.
-The Pages build refreshes released CBS neighborhood totals from the official
-2025 workbook. If CBS is unreachable, the page shows an unavailable state
-instead of invented figures. To regenerate locally, install
-`openpyxl==3.1.5` and run `npm run fetch-cbs-neighborhoods`. Regenerate the
+The Pages build tries to refresh released CBS neighborhood totals from the official
+2025 workbook. If CBS is unreachable, it uses the dated, attributed snapshot
+of 87 neighborhoods in the repository, sourced from BuurtZicht's public JSON
+profiles of CBS table 86165NED. Missing measures remain null. To refresh
+locally from CBS, install `openpyxl==3.1.5` and run
+`npm run fetch-cbs-neighborhoods`. The BuurtZicht snapshot can be refreshed with
+`python3 scripts/fetch-buurtzicht-neighborhoods.py`. Regenerate the
 sampled road-water screen with Pillow and `npm run build-exposure` after
 rebuilding the graph or resilience raster.
 

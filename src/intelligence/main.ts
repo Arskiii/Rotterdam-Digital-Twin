@@ -97,12 +97,14 @@ function renderCbs() {
   }
   const query = ($("#neighborhood-search") as HTMLInputElement).value.trim().toLocaleLowerCase();
   const rows = cbs.neighborhoods.filter((row) => `${row.name} ${row.code}`.toLocaleLowerCase().includes(query));
-  status.textContent = `${rows.length} of ${cbs.neighborhoods.length} Rotterdam neighborhoods · CBS KWB 2025 · retrieved ${when(cbs.retrievedAt)}`;
+  const viaBuurtzicht = cbs.source.startsWith("https://buurtzicht.nl/");
+  status.textContent = `${rows.length} of ${cbs.neighborhoods.length} Rotterdam neighborhoods · CBS KWB 2025${viaBuurtzicht ? " via BuurtZicht" : ""} · retrieved ${when(cbs.retrievedAt)}`;
+  const hasIncome = cbs.neighborhoods.some((row) => row.lowIncomeHouseholdsPct != null);
   results.replaceChildren(table([
     { text: "Neighborhood" }, { text: "CBS code" }, { text: "Residents", numeric: true },
     { text: "Age 65+", numeric: true }, { text: "Households", numeric: true },
-    { text: "Lower-income households", numeric: true },
-  ], rows.map((row) => [row.name, row.code, format(row.residents), format(row.age65Plus), format(row.households), format(row.lowIncomeHouseholdsPct, "%")])));
+    ...(hasIncome ? [{ text: "Lower-income households", numeric: true }] : []),
+  ], rows.map((row) => [row.name, row.code, format(row.residents), format(row.age65Plus), format(row.households), ...(hasIncome ? [format(row.lowIncomeHouseholdsPct, "%")] : [])])));
 }
 function renderExposure() {
   if (!exposure) return;
