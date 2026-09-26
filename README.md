@@ -85,6 +85,13 @@ traffic simulation — wrapped in a dark tactical operations UI.
   restores the prior settings, and exports its three sequential observations.
   It is exploratory: random arrivals and the initial traffic state still vary,
   so the trial does not claim a causal winner.
+- **INTELLIGENCE** (top navigation, separate accessible page) — source, age,
+  coverage, reuse terms and limits for observations; a bridge and rain road
+  access stress test; public CBS neighborhood totals; and a second signal
+  comparison that gives all three programs the same seeded warmup. It reports
+  held-out NDW flow error and labels the model unvalidated when that error is
+  high. JSON outputs and methods are documented in
+  `public/docs/intelligence-api.html`.
 - **TRANSIT** (dock) — how the network is running, line by line: vehicles out,
   median running delay over that line's own reporting trips, its worst trip,
   and the sample behind both. The aggregate neither the map nor a departure
@@ -195,10 +202,14 @@ The cadence is two minutes rather than one because
 `raw.githubusercontent.com` serves the live branch with `cache-control:
 max-age=300`, and a cache-busting query string does not get past it (verified
 — `x-cache: HIT` either way, identical body). Five minutes is a hard floor on
-how fresh this data can reach a browser, so publishing faster buys nothing
+how fresh this data can reach a browser through this path, so publishing faster buys nothing
 downstream and only doubles the load on NDW and OVapi, who serve these feeds
 for free. The freshness chip is calibrated to that floor: a healthy feed reads
-as a few minutes old, and only genuine outages show amber or red.
+as a few minutes old, and genuine outages show amber or red. The Intelligence
+page exposes each feed's own observation time; a recent package can contain
+an older river or weather reading. A separately hosted observation service can
+remove the GitHub raw cache delay when a destination and ingest secret are
+configured; see `public/docs/intelligence-api.html`.
 
 **Calibration & validation against official data:**
 
@@ -246,9 +257,18 @@ then Vite, so CI cannot publish a build whose parsers or migrations have
 drifted.
 
 Open `http://localhost:5173`. Left-drag pans, right-drag orbits, scroll zooms toward the
-cursor. Everything in the UI is live. The layout is responsive: on phones the
+cursor. The UI distinguishes observations from simulation and static planning
+data. The layout is responsive: on phones the
 console collapses to a full-bleed map with compact chrome, and the canvas takes
 standard touch gestures (one-finger pan, two-finger pinch/rotate).
+
+The Intelligence page is at `/intelligence/` and works without the 3D renderer.
+The Pages build refreshes released CBS neighborhood totals from the official
+2025 workbook. If CBS is unreachable, the page shows an unavailable state
+instead of invented figures. To regenerate locally, install
+`openpyxl==3.1.5` and run `npm run fetch-cbs-neighborhoods`. Regenerate the
+sampled road-water screen with Pillow and `npm run build-exposure` after
+rebuilding the graph or resilience raster.
 
 ## Rebuild the city data
 

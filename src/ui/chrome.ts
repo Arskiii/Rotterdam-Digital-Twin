@@ -38,6 +38,7 @@ export function buildChrome(root: HTMLElement) {
         <button class="nav-btn" data-page="brief">Brief</button>
         <button class="nav-btn on" data-page="map" aria-current="page">Unit&nbsp;Map</button>
         <button class="nav-btn" data-page="setup">Setup</button>
+        <a class="nav-btn" href="./intelligence/">Intelligence</a>
       </nav>
       <div id="topmeta">
         <span class="meta-item" id="live-chip" title="Live city feeds" style="display:none"><span id="live-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3ddc84;margin-right:6px"></span><span id="live-text">LIVE</span></span>

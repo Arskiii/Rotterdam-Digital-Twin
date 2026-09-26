@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { fileURLToPath } from "node:url";
 
 // Relative base ("./") makes asset URLs work no matter the repo-name casing
 // or subpath GitHub Pages serves us under. Override with VITE_BASE=/ if you
@@ -8,6 +9,12 @@ export default defineConfig({
   build: {
     target: "es2022",
     sourcemap: true,
+    rolldownOptions: {
+      input: {
+        main: fileURLToPath(new URL("./index.html", import.meta.url)),
+        intelligence: fileURLToPath(new URL("./intelligence/index.html", import.meta.url)),
+      },
+    },
   },
   server: {
     host: true,
