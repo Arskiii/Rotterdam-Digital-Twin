@@ -17,6 +17,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
+import { dutchStationTime } from "./lib/station-time.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = process.argv.includes("--out")
@@ -668,7 +669,7 @@ async function fetchWeather() {
     j.actual?.stationmeasurements?.find((s) => /rotterdam/i.test(s.stationname ?? ""));
   if (!st) throw new Error("Buienradar: Rotterdam station missing");
   return {
-    t: st.timestamp,
+    t: dutchStationTime(st.timestamp),
     temp: st.temperature ?? null,
     wind: st.windspeed ?? null, // m/s
     dir: st.winddirectiondegrees ?? null,
@@ -706,17 +707,22 @@ async function airStations() {
 async function fetchAir() {
   const stations = await airStations();
   const s = [];
+  let oldestMeasuredAt = Infinity;
+  const now = Date.now();
   for (const st of stations) {
     try {
       const j = await getJson(`https://api.luchtmeetnet.nl/open_api/measurements?station_number=${st.number}&order_by=timestamp_measured&order_direction=desc&page=1`);
       const latest = {};
       for (const m of j.data ?? []) {
-        if (latest[m.formula] === undefined && Date.now() - Date.parse(m.timestamp_measured) < 4 * 3_600_000) {
-          latest[m.formula] = +(+m.value).toFixed(1);
+        const measuredAt = Date.parse(m.timestamp_measured);
+        if (latest[m.formula] === undefined && Number.isFinite(measuredAt) &&
+            measuredAt <= now + 60_000 && now - measuredAt < 4 * 3_600_000 && Number.isFinite(+m.value)) {
+          latest[m.formula] = { value: +(+m.value).toFixed(1), measuredAt };
         }
       }
       if (latest.NO2 !== undefined || latest.PM25 !== undefined) {
-        s.push([st.x, st.y, latest.NO2 ?? null, latest.PM25 ?? null, st.name]);
+        s.push([st.x, st.y, latest.NO2?.value ?? null, latest.PM25?.value ?? null, st.name]);
+        for (const item of [latest.NO2, latest.PM25]) if (item) oldestMeasuredAt = Math.min(oldestMeasuredAt, item.measuredAt);
       }
     } catch {
       /* station offline */
@@ -724,7 +730,7 @@ async function fetchAir() {
     await new Promise((r) => setTimeout(r, 100));
   }
   if (!s.length) throw new Error("Luchtmeetnet: no measurements");
-  return { t: new Date().toISOString(), s };
+  return { t: new Date(oldestMeasuredAt).toISOString(), s };
 }
 
 // ---------------- main ----------------

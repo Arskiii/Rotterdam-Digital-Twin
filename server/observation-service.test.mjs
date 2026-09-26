@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +16,11 @@ describe("observation receiver", () => {
     expect(() => validateCitySnapshot({ ...snapshot, traffic: { ...snapshot.traffic, s: [[0, "bad", 40]] } }, now)).toThrow();
     expect(() => validateCitySnapshot({ ...snapshot, bridges: [{ name: "x", edges: [-1] }] }, now)).toThrow();
     expect(() => validateCitySnapshot({ ...snapshot, traffic: { ...snapshot.traffic, s: Array(5001).fill([0, 1, 2]) } }, now)).toThrow();
+    expect(() => validateCitySnapshot({ ...snapshot, vehicles: { t: snapshot.t, v: [[1, 2, 0, {}, "trip", 1, 0, "", 0]] } }, now)).toThrow();
+    expect(() => validateCitySnapshot({ ...snapshot, departures: { t: snapshot.t, stops: [], dep: {} } }, now)).toThrow();
+    expect(() => validateCitySnapshot({ ...snapshot, weather: { t: snapshot.t, rain: 0, temp: null, wind: null, dir: null, gust: null, desc: {} } }, now)).toThrow();
+    expect(() => validateCitySnapshot({ ...snapshot, air: { t: snapshot.t, s: [[0, 0, 5, null, { bad: true }]] } }, now)).toThrow();
+    expect(() => validateCitySnapshot({ v: 3, t: snapshot.t }, now)).toThrow();
   });
   it("requires a strong secret and exact public site origin", () => {
     expect(() => createObservationHandler({ token: "short", readOrigin: "https://example.org", storePath: "/tmp/a" })).toThrow();
@@ -52,6 +57,20 @@ describe("observation receiver", () => {
       expect((await send("GET", "/api/live", { origin: "https://other.org" })).status).toBe(403);
       const summary = JSON.parse((await send("GET", "/api/v1/observations")).body);
       expect(summary.observations.find((row) => row.id === "ndw-traffic").count).toBe(1);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+  it("does not serve a malformed persisted snapshot after restart", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "observations-"));
+    const path = join(directory, "latest.json");
+    await writeFile(path, JSON.stringify({ v: 3, t: new Date().toISOString(), bridges: {} }));
+    const handler = createObservationHandler({ token: "x".repeat(32), readOrigin: "https://example.org", storePath: path });
+    const request = Object.assign(Readable.from([]), { method: "GET", url: "/api/live", headers: {} });
+    const response = { status: 0, setHeader() {}, writeHead(status) { this.status = status; }, end() {} };
+    try {
+      await handler(request, response);
+      expect(response.status).toBe(503);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }

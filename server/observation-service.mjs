@@ -6,6 +6,11 @@ import { pathToFileURL } from "node:url";
 
 const MAX_BYTES = 512_000;
 const MAX_OBSERVATION_AGE_MS = 20 * 60_000;
+const record = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+const text = (value, limit) => typeof value === "string" && value.length <= limit;
+const validDate = (value) => typeof value === "string" && Number.isFinite(Date.parse(value));
+const time = (value, now) => validDate(value) && Date.parse(value) <= now + 60_000;
+const point = (value) => Number.isFinite(value?.x) && Number.isFinite(value?.y);
 
 function equalToken(value, expected) {
   if (!expected || typeof value !== "string" || !value.startsWith("Bearer ")) return false;
@@ -15,29 +20,49 @@ function equalToken(value, expected) {
 }
 
 export function validateCitySnapshot(value, now = Date.now()) {
-  if (!value || typeof value !== "object" || Array.isArray(value) ||
+  if (!record(value) ||
       !Number.isInteger(value.v) || value.v < 2 || value.v > 3 ||
-      typeof value.t !== "string" || !Number.isFinite(Date.parse(value.t)) ||
-      Date.parse(value.t) > now + 60_000 || now - Date.parse(value.t) > MAX_OBSERVATION_AGE_MS) {
+      !time(value.t, now) || now - Date.parse(value.t) > MAX_OBSERVATION_AGE_MS ||
+      !["traffic", "bridges", "incidents", "vehicles", "departures", "water", "weather", "air"].some((key) => Object.hasOwn(value, key))) {
     throw new Error("Invalid or stale city snapshot");
   }
   const limits = { traffic: 5000, bridges: 500, incidents: 500, vehicles: 10_000, departures: 1000, air: 1000 };
-  if (value.traffic && (!Array.isArray(value.traffic.s) || value.traffic.s.length > limits.traffic)) throw new Error("Traffic limit");
-  if (value.bridges && (!Array.isArray(value.bridges) || value.bridges.length > limits.bridges)) throw new Error("Bridge limit");
-  if (value.incidents && (!Array.isArray(value.incidents) || value.incidents.length > limits.incidents)) throw new Error("Incident limit");
-  if (value.vehicles && (!Array.isArray(value.vehicles.v) || value.vehicles.v.length > limits.vehicles)) throw new Error("Vehicle limit");
-  if (value.departures && (!value.departures.dep || typeof value.departures.dep !== "object" || Object.keys(value.departures.dep).length > limits.departures)) throw new Error("Departure limit");
-  if (value.air && (!Array.isArray(value.air.s) || value.air.s.length > limits.air)) throw new Error("Air limit");
-  if (value.traffic && (typeof value.traffic.t !== "string" || !Number.isFinite(Date.parse(value.traffic.t)) ||
-      !value.traffic.s.every((row) => Array.isArray(row) && row.length === 3 && row.every(Number.isFinite)))) throw new Error("Invalid traffic");
-  if (value.bridges && !value.bridges.every((bridge) => typeof bridge.name === "string" && bridge.name.length <= 100 &&
-      Array.isArray(bridge.edges) && bridge.edges.length <= 50 && bridge.edges.every((edge) => Number.isInteger(edge) && edge >= 0 && edge <= 250_000))) throw new Error("Invalid bridges");
-  if (value.incidents && !value.incidents.every((incident) => Number.isFinite(incident.x) && Number.isFinite(incident.y) &&
-      Number.isInteger(incident.kind) && incident.kind >= 0 && incident.kind <= 4 && typeof incident.name === "string" && incident.name.length <= 200)) throw new Error("Invalid incidents");
-  if (value.vehicles && (typeof value.vehicles.t !== "string" || !Number.isFinite(Date.parse(value.vehicles.t)) ||
-      !value.vehicles.v.every((row) => Array.isArray(row) && row.length === 9 && row.slice(0, 3).every(Number.isFinite)))) throw new Error("Invalid vehicles");
-  if (value.water && (!Number.isFinite(value.water.cm) || typeof value.water.t !== "string" || !Number.isFinite(Date.parse(value.water.t)))) throw new Error("Invalid water");
-  if (value.weather && (!Number.isFinite(value.weather.rain) || typeof value.weather.t !== "string" || !Number.isFinite(Date.parse(value.weather.t)))) throw new Error("Invalid weather");
+  if ("traffic" in value && (!record(value.traffic) || !time(value.traffic.t, now) ||
+      !Number.isFinite(value.traffic.todMin) || !Array.isArray(value.traffic.s) || value.traffic.s.length > limits.traffic ||
+      !value.traffic.s.every((row) => Array.isArray(row) && row.length === 3 &&
+        Number.isInteger(row[0]) && row[0] >= 0 && Number.isFinite(row[1]) && row[1] >= 0 && Number.isFinite(row[2]) && row[2] >= 0))) throw new Error("Invalid traffic");
+  if ("bridges" in value && (!Array.isArray(value.bridges) || value.bridges.length > limits.bridges ||
+      !value.bridges.every((bridge) => record(bridge) && text(bridge.name, 100) && point(bridge) && validDate(bridge.until) &&
+        Array.isArray(bridge.edges) && bridge.edges.length <= 50 && bridge.edges.every((edge) => Number.isInteger(edge) && edge >= 0 && edge <= 250_000)))) throw new Error("Invalid bridges");
+  if ("incidents" in value && (!Array.isArray(value.incidents) || value.incidents.length > limits.incidents ||
+      !value.incidents.every((incident) => record(incident) && point(incident) &&
+        Number.isInteger(incident.kind) && incident.kind >= 0 && incident.kind <= 4 &&
+        Number.isInteger(incident.edge) && incident.edge >= -1 && incident.edge <= 250_000 &&
+        text(incident.name, 200) && validDate(incident.until)))) throw new Error("Invalid incidents");
+  if ("vehicles" in value && (!record(value.vehicles) || !time(value.vehicles.t, now) ||
+      !Array.isArray(value.vehicles.v) || value.vehicles.v.length > limits.vehicles ||
+      !value.vehicles.v.every((row) => Array.isArray(row) && row.length === 9 &&
+        row.slice(0, 3).every(Number.isFinite) && text(row[3], 40) && text(row[4], 120) &&
+        Number.isFinite(row[5]) && Number.isFinite(row[6]) && text(row[7], 120) && Number.isFinite(row[8])) ||
+      (value.vehicles.plan !== undefined && (!record(value.vehicles.plan) || Object.keys(value.vehicles.plan).length > limits.vehicles ||
+        !Object.entries(value.vehicles.plan).every(([id, points]) => id.length <= 120 && Array.isArray(points) && points.length <= 100 &&
+          points.every((point) => Array.isArray(point) && point.length === 3 && point.every(Number.isFinite))))))) throw new Error("Invalid vehicles");
+  if ("departures" in value && (!record(value.departures) || !time(value.departures.t, now) ||
+      !record(value.departures.stops) || !record(value.departures.dep) ||
+      Object.keys(value.departures.stops).length > limits.departures || Object.keys(value.departures.dep).length > limits.departures ||
+      !Object.entries(value.departures.stops).every(([id, stop]) => id.length <= 120 && Array.isArray(stop) && stop.length === 3 &&
+        text(stop[0], 150) && Number.isFinite(stop[1]) && Number.isFinite(stop[2])) ||
+      !Object.entries(value.departures.dep).every(([id, rows]) => id.length <= 120 && Array.isArray(rows) && rows.length <= 100 &&
+        rows.every((row) => Array.isArray(row) && row.length === 7 && text(row[0], 40) && Number.isFinite(row[1]) &&
+          text(row[2], 150) && Number.isFinite(row[3]) && Number.isFinite(row[4]) && Number.isFinite(row[5]) && text(row[6], 120))))) throw new Error("Invalid departures");
+  if ("air" in value && (!record(value.air) || !time(value.air.t, now) || !Array.isArray(value.air.s) || value.air.s.length > limits.air ||
+      !value.air.s.every((row) => Array.isArray(row) && row.length === 5 && Number.isFinite(row[0]) && Number.isFinite(row[1]) &&
+        (row[2] === null || Number.isFinite(row[2])) && (row[3] === null || Number.isFinite(row[3])) && text(row[4], 100)))) throw new Error("Invalid air");
+  if ("water" in value && (!record(value.water) || !text(value.water.station, 100) || !Number.isFinite(value.water.cm) ||
+      !Number.isFinite(value.water.trend) || !time(value.water.t, now))) throw new Error("Invalid water");
+  if ("weather" in value && (!record(value.weather) || !time(value.weather.t, now) || !Number.isFinite(value.weather.rain) ||
+      !["temp", "wind", "dir", "gust"].every((key) => value.weather[key] === null || Number.isFinite(value.weather[key])) ||
+      !text(value.weather.desc, 100))) throw new Error("Invalid weather");
   return value;
 }
 
@@ -47,8 +72,7 @@ export function createObservationHandler({ token, readOrigin, storePath }) {
   if (!storePath) throw new Error("OBSERVATION_STORE_PATH is required");
   let latest = null;
   const ready = readFile(storePath, "utf8").then((raw) => {
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed.t === "string") latest = parsed;
+    latest = validateCitySnapshot(JSON.parse(raw));
   }).catch(() => {});
   let writing = Promise.resolve();
 

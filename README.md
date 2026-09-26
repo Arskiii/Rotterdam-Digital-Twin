@@ -207,7 +207,10 @@ downstream and only doubles the load on NDW and OVapi, who serve these feeds
 for free. The freshness chip is calibrated to that floor: a healthy feed reads
 as a few minutes old, and genuine outages show amber or red. The Intelligence
 page exposes each feed's own observation time; a recent package can contain
-an older river or weather reading. A separately hosted observation service can
+an older river or weather reading. Buienradar's timezone-free Rotterdam station
+clock is converted from Europe/Amsterdam to UTC at collection; the air-quality
+timestamp is the oldest included measurement, not the package time. A separately
+hosted observation service can
 remove the GitHub raw cache delay when a destination and ingest secret are
 configured; see `public/docs/intelligence-api.html`.
 
