@@ -23,6 +23,14 @@ const load = async <T>(path: string): Promise<T> => {
   if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
   return response.json() as Promise<T>;
 };
+let graphPromise: Promise<ArrayBuffer> | null = null;
+function loadGraph(): Promise<ArrayBuffer> {
+  graphPromise ??= fetch(`${dataBase}graph.bin`).then((response) => {
+    if (!response.ok) throw new Error("Road graph unavailable");
+    return response.arrayBuffer();
+  }).catch((error) => { graphPromise = null; throw error; });
+  return graphPromise;
+}
 let latest: LiveSnapshot | null = null;
 let meta: Meta | null = null;
 let exposure: Exposure | null = null;
@@ -125,7 +133,7 @@ async function scenario(event: Event) {
     const flood = ($("#flood-input") as HTMLInputElement).checked;
     const bridgeValue = ($("#bridge-select") as HTMLSelectElement).value;
     const bridge = bridgeValue.startsWith("live:") ? latest?.bridges?.[Number(bridgeValue.slice(5))] : null;
-    const graph = await fetch(`${dataBase}graph.bin`).then((response) => { if (!response.ok) throw new Error("Road graph unavailable"); return response.arrayBuffer(); });
+    const graph = await loadGraph();
     const closed = new Set<number>(flood ? exposure.exposedEdges : []);
     if (bridge) bridge.edges.forEach((edge) => closed.add(edge));
     else exposure.erasmusBridgeEdges.forEach((edge) => closed.add(edge));
@@ -156,7 +164,9 @@ function renderScenarioResult(rows: AccessRow[], assumptions: { bridge: string; 
 }
 
 async function runArm(program: ExperimentResultMsg["program"], seed: number, stations: { edge: number; flow: number }[], clockMin: number): Promise<ExperimentResultMsg> {
-  const graph = await fetch(`${dataBase}graph.bin`).then((response) => { if (!response.ok) throw new Error("Road graph unavailable"); return response.arrayBuffer(); });
+  // Workers take ownership of transferred buffers; keep the cached source for
+  // later arms and scenario checks, and transfer only a copy to this worker.
+  const graph = (await loadGraph()).slice(0);
   const worker = new Worker(new URL("../sim/worker.ts", import.meta.url), { type: "module" });
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => { worker.terminate(); reject(new Error(`${program} run exceeded three minutes`)); }, 180_000);

@@ -5,16 +5,17 @@ export interface FeedQuality { id: string; label: string; observedAt: string | n
 const age = (time: string | null, now: number) => {
   if (!time) return null;
   const t = Date.parse(time);
-  return Number.isFinite(t) ? Math.max(0, Math.round((now - t) / 60000)) : null;
+  // A reading dated well into the future is invalid, not magically current.
+  return Number.isFinite(t) && t <= now + 60_000 ? Math.max(0, Math.round((now - t) / 60000)) : null;
 };
 export function qualityRows(snap: LiveSnapshot | null, now = Date.now()): FeedQuality[] {
   const rows: Omit<FeedQuality, "ageMin" | "status">[] = [
     { id: "traffic", label: "Road sensor flow", observedAt: snap?.traffic?.t ?? null, count: snap?.traffic?.s?.length ?? 0, source: "NDW Open Data", licence: "Publisher terms", caveat: "Sensor coverage is uneven; values do not describe every road." },
-    { id: "bridges", label: "Bridge openings", observedAt: snap?.t ?? null, count: snap?.bridges?.length ?? 0, source: "NDW situations", licence: "Publisher terms", caveat: "Zero can mean no reported opening; it is not proof every bridge is closed to ships." },
+    { id: "bridges", label: "Bridge openings", observedAt: snap?.bridges ? snap.t : null, count: snap?.bridges?.length ?? 0, source: "NDW situations", licence: "Publisher terms", caveat: "Zero can mean no reported opening; it is not proof every bridge is closed to ships." },
     { id: "transit", label: "Transit vehicle fixes", observedAt: snap?.vehicles?.t ?? null, count: snap?.vehicles?.v?.length ?? 0, source: "OVapi GTFS-RT", licence: "Publisher terms", caveat: "Positions may lag; route paths between fixes are interpolated." },
     { id: "water", label: "Maas water level", observedAt: snap?.water?.t ?? null, count: snap?.water ? 1 : 0, source: "Rijkswaterstaat Boompjes", licence: "CC0", caveat: "One river gauge is not a neighborhood flood measurement." },
     { id: "weather", label: "Weather and rain", observedAt: snap?.weather?.t ?? null, count: snap?.weather ? 1 : 0, source: "Buienradar", licence: "Publisher terms", caveat: "Station observation, not a KNMI radar forecast." },
-    { id: "air", label: "Air measurements", observedAt: snap?.air?.t ?? null, count: snap?.air?.s?.length ?? 0, source: "Luchtmeetnet", licence: "Publisher terms", caveat: "Monitor locations do not represent each street." },
+    { id: "air", label: "Air measurements", observedAt: snap?.air?.t ?? null, count: snap?.air?.s?.length ?? 0, source: "Luchtmeetnet", licence: "Publisher terms", caveat: "Age is the oldest included measurement; monitor locations do not represent each street." },
   ];
   return rows.map((row) => {
     const ageMin = age(row.observedAt, now);

@@ -1,12 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { admitSnapshot, upgradeV1, type LiveSnapshot } from "./live";
+import { admitSnapshot, readSnapshotJson, upgradeV1, type LiveSnapshot } from "./live";
+import packagedSnapshot from "../../public/data/live/live.json";
 
 const T = "2026-08-21T09:19:44.558Z";
 const OLDER = "2026-08-21T08:00:00.000Z";
 const NEWER = "2026-08-21T10:00:00.000Z";
 
 const base = (over: Partial<LiveSnapshot> = {}): LiveSnapshot =>
-  ({ v: 3, t: T, ...over }) as LiveSnapshot;
+  ({ v: 3, t: T, bridges: [], ...over }) as LiveSnapshot;
 
 describe("upgradeV1", () => {
   it("moves the line out of the slot v2 gave the trip id", () => {
@@ -53,12 +54,24 @@ describe("admitSnapshot", () => {
     expect(admitSnapshot({ v: 3 }, null)).toBe("invalid");
     expect(admitSnapshot({ t: T }, null)).toBe("invalid");
     expect(admitSnapshot({ v: 0, t: T }, null)).toBe("invalid");
+    expect(admitSnapshot({ v: 3, t: T }, null)).toBe("invalid");
     expect(admitSnapshot("<!doctype html>", null)).toBe("invalid");
   });
 
   it("rejects a snapshot whose timestamp will not parse", () => {
     // A 404 page or a truncated write can still be valid JSON.
     expect(admitSnapshot({ v: 3, t: "not a date" }, null)).toBe("invalid");
+  });
+  it("rejects future or structurally broken external feeds before rendering", () => {
+    const now = Date.parse(T);
+    expect(admitSnapshot(base({ t: "2026-08-21T10:30:00.000Z" }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ v: 4 }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ bridges: {} as never }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ vehicles: { t: T, v: {} as never } }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ traffic: { t: T, todMin: 0, s: {} as never } }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ bridges: [null as never] }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ vehicles: { t: T, v: [null as never] } }), null, now)).toBe("invalid");
+    expect(admitSnapshot(base({ departures: { t: T, stops: [], dep: {} } as never }), null, now)).toBe("invalid");
   });
 
   it("refuses to replace a fresher snapshot with a staler one", () => {
@@ -95,5 +108,20 @@ describe("admitSnapshot", () => {
     expect(admitSnapshot(snap, null)).toBe("ok");
     expect(snap.weather?.temp).toBe(17);
     expect(snap.water?.cm).toBe(-20);
+  });
+  it("accepts the complete packaged producer shape", () => {
+    expect(admitSnapshot(structuredClone(packagedSnapshot), null)).toBe("ok");
+  });
+});
+
+describe("live JSON response", () => {
+  it("rejects an oversized streamed payload even without content-length", async () => {
+    const response = new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new Uint8Array(2_000_001)); controller.close(); },
+    }));
+    await expect(readSnapshotJson(response)).rejects.toThrow("too large");
+  });
+  it("reads a normal snapshot", async () => {
+    await expect(readSnapshotJson(new Response(JSON.stringify(base())))).resolves.toEqual(base());
   });
 });
