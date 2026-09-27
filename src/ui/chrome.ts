@@ -1,7 +1,8 @@
 // Builds the full SurveilTrack DOM chrome and returns element refs.
 
 import { icons } from "./icons";
-import { BRAND, LOCATION_LABEL, UNITS } from "../config";
+import { BRAND, UNITS } from "../config";
+import { buildHeader } from "./header";
 
 const TICKS = `<i class="tick tl"></i><i class="tick tr"></i><i class="tick bl"></i><i class="tick br"></i>`;
 
@@ -27,25 +28,7 @@ export function buildChrome(root: HTMLElement) {
   </nav>
 
   <div id="stage">
-    <header id="topbar" class="brk">${TICKS}
-      <div id="brand">${icons.logo()} <span>${BRAND}</span></div>
-      <div id="mode-switch" role="group" aria-label="What the map is showing">
-        <button data-mode="live" class="on" aria-pressed="true">Live</button>
-        <button data-mode="sim" aria-pressed="false">Simulation</button>
-        <button data-mode="history" aria-pressed="false">History</button>
-      </div>
-      <nav id="topnav" aria-label="Pages">
-        <button class="nav-btn" data-page="brief">Brief</button>
-        <button class="nav-btn on" data-page="map" aria-current="page">Unit&nbsp;Map</button>
-        <button class="nav-btn" data-page="setup">Setup</button>
-        <a class="nav-btn" href="./intelligence/">Intelligence</a>
-      </nav>
-      <div id="topmeta">
-        <span class="meta-item" id="live-chip" title="Live city feeds" style="display:none"><span id="live-dot" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3ddc84;margin-right:6px"></span><span id="live-text">LIVE</span></span>
-        <span class="meta-item" id="loc-chip">${icons.pin()} <span>${LOCATION_LABEL}</span></span>
-        <span class="meta-item">${icons.clock()} <span id="clock">--:--</span></span>
-      </div>
-    </header>
+    ${buildHeader({ page: "map" })}
 
     <main id="viewport">
       <canvas id="scene-canvas" aria-label="3D map of Rotterdam" role="img"></canvas>
@@ -229,7 +212,7 @@ export function buildChrome(root: HTMLElement) {
     liveChip: $("#live-chip"),
     liveDot: $("#live-dot"),
     liveText: $("#live-text"),
-    navBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#topnav .nav-btn")),
+    navBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#topnav button[data-page]")),
     modeBtns: Array.from(root.querySelectorAll<HTMLButtonElement>("#mode-switch button")),
     sceneCanvas: $<HTMLCanvasElement>("#scene-canvas"),
     viewport: $("#viewport"),

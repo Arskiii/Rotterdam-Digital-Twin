@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import type { Chrome } from "./chrome";
 import { setMeter, barGlyphHTML } from "./chrome";
+import { readMapNavigation } from "./header";
 import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
 import type { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "../render/dynamic";
@@ -263,6 +264,10 @@ export class App {
     // before restoreSettings, which calls setMode and touches the same boxes
     this.withdrawPhoneControls();
     this.restoreSettings();
+    // Shared navigation links override a saved mode for this visit only.
+    const navigation = readMapNavigation(window.location.search);
+    if (navigation.mode) this.setMode(navigation.mode);
+    if (navigation.page) this.setPage(navigation.page);
     this.log("info", "UPLINK ESTABLISHED — SURVEILTRACK NODE 04 ONLINE");
     this.log("info", `CITY GRID LOADED — ${fmtInt(this.data.meta.counts.roadKm)} KM ROADWAY / ${fmtInt(this.data.meta.counts.signalsInventory)} SIGNAL UNITS`);
     this.selectUnit(this.units[0], false);

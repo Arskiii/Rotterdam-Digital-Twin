@@ -1,8 +1,13 @@
+import "../style.css";
 import "./style.css";
+import { mountIntelligenceChrome, updateIntelligenceHeader } from "./chrome";
+
 import { LiveFeed, type LiveSnapshot } from "../data/live";
 import type { ExperimentResultMsg } from "../sim/protocol";
 import { qualityRows, heldoutStations, validateHoldout } from "./model";
 import { calculateHospitalAccess, HOSPITALS, type AccessRow } from "./routing";
+
+mountIntelligenceChrome();
 
 const dataBase = new URL("../data/", window.location.href).href;
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector<T>(selector)!;
@@ -40,6 +45,7 @@ let lastTrial: { runAt: string; seed: number; clockMin: number; observedAt: stri
 const feed = new LiveFeed(dataBase, (snapshot) => { latest = snapshot; renderSources(); renderConditions(); renderBridgeOptions(); });
 
 function renderSources() {
+  updateIntelligenceHeader(feed);
   const status = $("#snapshot-status");
   status.textContent = latest ? `Snapshot ${when(latest.t)} · delivery: ${feed.source === "service" ? "observation service" : feed.source === "branch" ? "GitHub live mirror" : "packaged fallback"}` : "No observation snapshot yet";
   const cards = $("#source-cards");
@@ -80,6 +86,8 @@ function renderBridgeOptions() {
 
 function table(headers: { text: string; numeric?: boolean }[], rows: (string | number | null)[][]): HTMLElement {
   const wrap = document.createElement("div"); wrap.className = "table-scroll";
+  wrap.tabIndex = 0; wrap.setAttribute("role", "region");
+  wrap.setAttribute("aria-label", `${headers[0].text} results table`);
   const table = document.createElement("table");
   const thead = table.createTHead(), tr = thead.insertRow();
   for (const heading of headers) {
@@ -235,3 +243,6 @@ void Promise.allSettled([load<Meta>("meta.json"), load<Exposure>("exposure.json"
   if (results[3].status === "fulfilled") ndw = results[3].value;
   renderCbs(); renderExposure();
 });
+
+// Keep the shared header and source ages honest between feed publications.
+window.setInterval(() => { renderSources(); renderConditions(); }, 60_000);
