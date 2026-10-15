@@ -27,6 +27,7 @@
     "apply-heights": "node scripts/apply-heights.mjs",
     "audit-buildings": "node scripts/audit-buildings.mjs",
     "check-workflows": "node scripts/check-publish-guards.mjs",
+    "validate-model": "node scripts/validate-model.mjs",
     "check-timetable": "NODE_USE_ENV_PROXY=1 node scripts/check-timetable.mjs"
   },
   "dependencies": {

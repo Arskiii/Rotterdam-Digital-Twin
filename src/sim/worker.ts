@@ -102,6 +102,10 @@ let ndwEdgeFlow: Map<number, number> | null = null;
 let ndwTodMin = 0;
 let liveClock = false; // clock follows Rotterdam, not the simulation
 let experimentCounts: Map<number, number> | null = null;
+// speed sampled on measured edges during an experiment: per undirected edge,
+// the sum of motorized speeds over every vehicle-step, and the step count
+let experimentSpeedSum: Float64Array | null = null;
+let experimentSpeedN: Uint32Array | null = null;
 let ndwCounts: Map<number, number> | null = null; // sim vehicle-passes per matched edge
 let ndwWindowStartSim = 0;
 let ndwSimVehH = 0; // smoothed aggregate
@@ -827,6 +831,10 @@ function stepVehicles(dt: number) {
     if (mode === 0 || mode === 3) {
       edgeVSum[e] += nv / Math.max(1, dSpeed[d]);
       edgeVN[e] = Math.min(65000, edgeVN[e] + 1);
+      if (experimentSpeedN && experimentSpeedN[e] !== 0xffffffff) {
+        experimentSpeedSum![e] += nv;
+        experimentSpeedN[e]++;
+      }
     }
   }
 }
@@ -1235,11 +1243,18 @@ function tick() {
 async function runExperiment(config: NonNullable<InitMsg["experiment"]>) {
   const warmup = Math.max(0, Math.min(120, config.warmupSec));
   const measure = Math.max(30, Math.min(300, config.measureSec));
-  targetDensity = Math.max(200, Math.min(4000, config.density));
+  targetDensity = Math.max(200, Math.min(8000, config.density));
   clockMin = Math.max(0, Math.min(1439, config.clockMin));
   holdClock = true;
   autoIncidents = false;
   signalProgram = "actuated";
+  if (config.speedFactor !== undefined) weatherFactor = Math.min(1, Math.max(0.7, config.speedFactor));
+  // A closure is in place from the first step, so warmup traffic already
+  // routes around it, just as it would on a day the road is shut.
+  for (const e of config.closedEdges ?? []) {
+    if (e < 0 || e >= G.edges.count) continue;
+    for (const d of [e * 2, e * 2 + 1]) if (dExists[d]) dBlocked[d] = 1;
+  }
   const advancePeriod = async (seconds: number, stage: string) => {
     for (let i = 0; i < Math.ceil(seconds * 10); i++) {
       advance(0.1);
@@ -1252,6 +1267,10 @@ async function runExperiment(config: NonNullable<InitMsg["experiment"]>) {
   await advancePeriod(warmup, "warmup");
   signalProgram = config.program;
   experimentCounts = new Map(config.stations.filter((s) => s.edge >= 0 && s.edge < G.edges.count).map((s) => [s.edge, 0]));
+  // 0xffffffff marks "not measured" so the hot loop needs one typed-array read
+  experimentSpeedSum = new Float64Array(G.edges.count);
+  experimentSpeedN = new Uint32Array(G.edges.count).fill(0xffffffff);
+  for (const e of experimentCounts.keys()) experimentSpeedN[e] = 0;
   const completedBefore = completed;
   await advancePeriod(measure, "measure");
   const metrics = collectMetrics();
@@ -1260,6 +1279,8 @@ async function runExperiment(config: NonNullable<InitMsg["experiment"]>) {
   const stationFlows = config.stations.map((s) => ({
     edge: s.edge, observed: s.flow,
     simulated: Math.round((experimentCounts?.get(s.edge) ?? 0) * 3600 / measure),
+    simulatedKmh: s.edge >= 0 && s.edge < G.edges.count && experimentSpeedN![s.edge] > 0 && experimentSpeedN![s.edge] !== 0xffffffff
+      ? Math.round(36 * experimentSpeedSum![s.edge] / experimentSpeedN![s.edge]) / 10 : null,
   }));
   post({ type: "experimentResult", seed: config.seed, program: config.program,
     warmupSec: warmup, measureSec: measure, metrics, stationFlows });

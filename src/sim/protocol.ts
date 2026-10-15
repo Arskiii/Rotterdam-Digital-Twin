@@ -6,7 +6,19 @@ export interface InitMsg {
   districtCount: number;
   districts: { name: string; x: number; y: number }[];
   /** A separate, headless worker used for reproducible comparisons. */
-  experiment?: { seed: number; program: "actuated" | "coordinated" | "fixed"; clockMin: number; density: number; warmupSec: number; measureSec: number; stations: { edge: number; flow: number }[] };
+  experiment?: {
+    seed: number;
+    program: "actuated" | "coordinated" | "fixed";
+    clockMin: number;
+    density: number;
+    warmupSec: number;
+    measureSec: number;
+    stations: { edge: number; flow: number }[];
+    /** Undirected edges closed to cars for the whole run (a what-if). */
+    closedEdges?: number[];
+    /** Motorized speed multiplier for the whole run, e.g. wet roads (0.7..1). */
+    speedFactor?: number;
+  };
 }
 
 export interface ParamsMsg {
@@ -153,5 +165,6 @@ export interface ExperimentResultMsg {
   warmupSec: number;
   measureSec: number;
   metrics: MetricsMsg;
-  stationFlows: { edge: number; observed: number; simulated: number }[];
+  /** simulatedKmh: mean motorized speed on the edge over the measurement, null when nothing drove it */
+  stationFlows: { edge: number; observed: number; simulated: number; simulatedKmh: number | null }[];
 }

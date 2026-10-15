@@ -129,3 +129,8 @@
   .intelligence-page .controls button, .intelligence-page .controls select, .intelligence-page .controls input[type=number], .intelligence-page #neighborhood-search { min-height: 44px; }
   .intelligence-page .jump a { min-height: 44px; }
 }
+.intelligence-page .search-label select { border: 1px solid var(--line-bright); border-radius: 0; padding: 9px 10px; background: var(--bg-inset); color: var(--text); font: inherit; max-width: 100%; }
+.intelligence-page .verdict { max-width: 1080px; margin: 0 0 16px; padding: 12px 14px; background: var(--bg-panel-2); border-left: 2px solid #e6bc52; font-size: 12px; line-height: 1.8; }
+.intelligence-page ul.minor { padding-left: 18px; }
+.intelligence-page ul.minor li { margin: 4px 0; }
+.intelligence-page #proof > h3 { margin-top: 28px; }

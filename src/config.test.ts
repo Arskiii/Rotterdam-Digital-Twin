@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import meta from "../public/data/meta.json";
 import city from "../city.config.json";
 import { DISTRICTS } from "./config";
 
@@ -7,8 +7,6 @@ import { DISTRICTS } from "./config";
 // district seeds baked into meta.json are what the sim attributes roads to,
 // and the UI labels them from the config.
 describe("city config", () => {
-  const meta = JSON.parse(readFileSync(new URL("../public/data/meta.json", import.meta.url), "utf8"));
-
   it("matches the projection origin the data was built with", () => {
     expect(meta.origin).toEqual(city.origin);
   });
@@ -16,8 +14,8 @@ describe("city config", () => {
   it("names the same districts, in the same order, at the same seeds", () => {
     const M_PER_LAT = 110574;
     const M_PER_LON = 111320 * Math.cos((city.origin.lat * Math.PI) / 180);
-    expect(meta.districts.map((d: { key: string }) => d.key)).toEqual(DISTRICTS.map((d) => d.key));
-    meta.districts.forEach((d: { x: number; y: number }, i: number) => {
+    expect(meta.districts.map((d) => d.key)).toEqual(DISTRICTS.map((d) => d.key));
+    meta.districts.forEach((d, i) => {
       expect(Math.abs(d.x - (DISTRICTS[i].lon - city.origin.lon) * M_PER_LON)).toBeLessThan(1);
       expect(Math.abs(d.y - (DISTRICTS[i].lat - city.origin.lat) * M_PER_LAT)).toBeLessThan(1);
     });
