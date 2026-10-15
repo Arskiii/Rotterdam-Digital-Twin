@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import earcut from "earcut";
+import { ORIGIN, px, py, DISTRICTS } from "./lib/city.mjs";
 import { loadMeasuredGrid, loadLandmarks, applyLandmarks, heightForFootprint, PointGrid, clampH } from "./lib-heights.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -24,11 +25,7 @@ const OUT = join(ROOT, "public", "data");
 mkdirSync(OUT, { recursive: true });
 
 // ---------------- projection ----------------
-const ORIGIN = { lat: 51.92, lon: 4.48 };
-const M_PER_LAT = 110574;
-const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
-const px = (lon) => (lon - ORIGIN.lon) * M_PER_LON;
-const py = (lat) => (lat - ORIGIN.lat) * M_PER_LAT;
+// projection and district seeds: city.config.json via scripts/lib/city.mjs
 
 // ---------------- road classes ----------------
 const CLASS = {
@@ -68,23 +65,7 @@ function modeMaskOf(cls, tags) {
   return m;
 }
 
-const DISTRICTS = [
-  { key: "centrum", name: "Centrum", lat: 51.9204, lon: 4.4794 },
-  { key: "noord", name: "Noord", lat: 51.9345, lon: 4.4705 },
-  { key: "delfshaven", name: "Delfshaven", lat: 51.9092, lon: 4.4363 },
-  { key: "overschie", name: "Overschie", lat: 51.9411, lon: 4.4269 },
-  { key: "hillegersberg", name: "Hillegersberg-Schiebroek", lat: 51.9565, lon: 4.4779 },
-  { key: "kralingen", name: "Kralingen-Crooswijk", lat: 51.9257, lon: 4.5155 },
-  { key: "alexander", name: "Prins Alexander", lat: 51.9553, lon: 4.5477 },
-  { key: "feijenoord", name: "Feijenoord", lat: 51.8988, lon: 4.5052 },
-  { key: "ijsselmonde", name: "IJsselmonde", lat: 51.8853, lon: 4.5433 },
-  { key: "charlois", name: "Charlois", lat: 51.8797, lon: 4.4699 },
-  { key: "waalhaven", name: "Waalhaven-Eemhaven", lat: 51.8898, lon: 4.4179 },
-  { key: "pernis", name: "Pernis", lat: 51.8865, lon: 4.3885 },
-  { key: "hoogvliet", name: "Hoogvliet", lat: 51.8632, lon: 4.3623 },
-  { key: "schiedam", name: "Schiedam", lat: 51.9186, lon: 4.3991 },
-  { key: "capelle", name: "Capelle a/d IJssel", lat: 51.9297, lon: 4.5776 },
-].map((d) => ({ ...d, x: px(d.lon), y: py(d.lat) }));
+// district seeds come from city.config.json (see scripts/lib/city.mjs)
 
 function nearestDistrict(x, y) {
   let best = 0, bd = Infinity;

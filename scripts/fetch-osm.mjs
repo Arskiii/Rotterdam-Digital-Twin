@@ -16,7 +16,8 @@ mkdirSync(RAW, { recursive: true });
 // municipalities (Schiedam, Capelle) so the network doesn't dead-end at the
 // city limits. The far-west port (Botlek/Europoort/Maasvlakte) and Hoek van
 // Holland are excluded: 25 km of near-empty industrial terrain.
-export const BBOX = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 };
+import { BBOX } from "./lib/city.mjs";
+export { BBOX };
 
 const ENDPOINTS = [
   "https://maps.mail.ru/osm/tools/overpass/api/interpreter",

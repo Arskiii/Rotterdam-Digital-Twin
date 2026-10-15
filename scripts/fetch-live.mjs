@@ -18,16 +18,13 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { dutchStationTime } from "./lib/station-time.mjs";
+import { BBOX, ORIGIN, M_PER_LAT, M_PER_LON } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = process.argv.includes("--out")
   ? process.argv[process.argv.indexOf("--out") + 1]
   : join(ROOT, "public", "data", "live", "live.json");
 
-const BBOX = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 };
-const ORIGIN = { lat: 51.92, lon: 4.48 };
-const M_PER_LAT = 110574;
-const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
 const px = (lon) => +(((lon - ORIGIN.lon) * M_PER_LON).toFixed(1));
 const py = (lat) => +(((lat - ORIGIN.lat) * M_PER_LAT).toFixed(1));
 const inBbox = (lat, lon) => lat > BBOX.s && lat < BBOX.n && lon > BBOX.w && lon < BBOX.e;

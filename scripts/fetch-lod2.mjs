@@ -34,7 +34,7 @@ const OUT = join(ROOT, "public", "data", "roofs");
 mkdirSync(RAW, { recursive: true });
 mkdirSync(OUT, { recursive: true });
 
-const BBOX = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 }; // keep in sync with fetch-osm.mjs
+import { BBOX } from "./lib/city.mjs";
 const TILE = 1000; // meters, must match build-data.mjs
 const SIMPLIFY_TOL = 0.3; // m, collinear-vertex removal within roof rings
 const MIN_FACE_AREA = 1.2; // m², culls micro roof fragments

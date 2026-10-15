@@ -1,0 +1,27 @@
+{
+  "id": "rotterdam",
+  "name": "Rotterdam",
+  "label": "ROTTERDAM, NL",
+  "timezone": "Europe/Amsterdam",
+  "origin": { "lat": 51.92, "lon": 4.48 },
+  "bbox": { "s": 51.84, "w": 4.34, "n": 52.0, "e": 4.62 },
+  "transitStopsBbox": { "s": 51.79, "w": 4.03, "n": 52.12, "e": 4.72 },
+  "cbsMunicipality": "GM0599",
+  "districts": [
+    { "key": "centrum", "name": "Centrum", "lat": 51.9204, "lon": 4.4794 },
+    { "key": "noord", "name": "Noord", "lat": 51.9345, "lon": 4.4705 },
+    { "key": "delfshaven", "name": "Delfshaven", "lat": 51.9092, "lon": 4.4363 },
+    { "key": "overschie", "name": "Overschie", "lat": 51.9411, "lon": 4.4269 },
+    { "key": "hillegersberg", "name": "Hillegersberg-Schiebroek", "lat": 51.9565, "lon": 4.4779 },
+    { "key": "kralingen", "name": "Kralingen-Crooswijk", "lat": 51.9257, "lon": 4.5155 },
+    { "key": "alexander", "name": "Prins Alexander", "lat": 51.9553, "lon": 4.5477 },
+    { "key": "feijenoord", "name": "Feijenoord", "lat": 51.8988, "lon": 4.5052 },
+    { "key": "ijsselmonde", "name": "IJsselmonde", "lat": 51.8853, "lon": 4.5433 },
+    { "key": "charlois", "name": "Charlois", "lat": 51.8797, "lon": 4.4699 },
+    { "key": "waalhaven", "name": "Waalhaven-Eemhaven", "lat": 51.8898, "lon": 4.4179 },
+    { "key": "pernis", "name": "Pernis", "lat": 51.8865, "lon": 4.3885 },
+    { "key": "hoogvliet", "name": "Hoogvliet", "lat": 51.8632, "lon": 4.3623 },
+    { "key": "schiedam", "name": "Schiedam", "lat": 51.9186, "lon": 4.3991 },
+    { "key": "capelle", "name": "Capelle a/d IJssel", "lat": 51.9297, "lon": 4.5776 }
+  ]
+}

@@ -5,11 +5,8 @@
 import { readFileSync, existsSync } from "node:fs";
 
 // ---------------- local projection (must match build-data.mjs) ----------------
-export const ORIGIN = { lat: 51.92, lon: 4.48 };
-export const M_PER_LAT = 110574;
-export const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
-export const px = (lon) => (lon - ORIGIN.lon) * M_PER_LON;
-export const py = (lat) => (lat - ORIGIN.lat) * M_PER_LAT;
+import { ORIGIN, M_PER_LAT, M_PER_LON, px, py } from "./lib/city.mjs";
+export { ORIGIN, M_PER_LAT, M_PER_LON, px, py };
 export const invPx = (x) => x / M_PER_LON + ORIGIN.lon;
 export const invPy = (y) => y / M_PER_LAT + ORIGIN.lat;
 

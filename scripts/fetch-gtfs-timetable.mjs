@@ -28,6 +28,7 @@ import { writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipIndex, entryLines, splitCsv, header } from "./lib/gtfs-zip.mjs";
+import { BBOX, ORIGIN, M_PER_LAT, M_PER_LON } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "data", "ret-timetable.bin");
@@ -84,10 +85,7 @@ async function main() {
   // The area the live fetcher draws vehicles in (its BBOX), plus 3 km so a
   // service that stops just outside but runs through is still kept. Stop
   // coordinates come from data/gtfs-stops.json, already in this projection.
-  const ORIGIN = { lat: 51.92, lon: 4.48 };
-  const M_PER_LAT = 110574;
-  const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
-  const DRAWN = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 };
+  const DRAWN = BBOX;
   const MARGIN = 3000;
   const bx0 = (DRAWN.w - ORIGIN.lon) * M_PER_LON - MARGIN;
   const bx1 = (DRAWN.e - ORIGIN.lon) * M_PER_LON + MARGIN;

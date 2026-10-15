@@ -14,14 +14,9 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BBOX, ORIGIN, px, py } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BBOX = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 };
-const ORIGIN = { lat: 51.92, lon: 4.48 };
-const M_PER_LAT = 110574;
-const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
-const px = (lon) => (lon - ORIGIN.lon) * M_PER_LON;
-const py = (lat) => (lat - ORIGIN.lat) * M_PER_LAT;
 
 // ---- parse routable edges from graph.bin (v4) into a sample grid ----
 const buf = readFileSync(join(ROOT, "public", "data", "graph.bin"));

@@ -24,7 +24,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { px, py, rdToWgs, wgsToRd } from "./lib-heights.mjs";
 
-const BBOX = { s: 51.84, w: 4.34, n: 52.0, e: 4.62 }; // keep in sync with fetch-osm.mjs
+import { BBOX } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const RAW = join(ROOT, "data", "raw3dbag");
