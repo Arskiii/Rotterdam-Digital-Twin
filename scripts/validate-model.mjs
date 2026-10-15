@@ -4,7 +4,7 @@
 //
 //   node scripts/validate-model.mjs --archive <archive work tree>
 //        [--days 45] [--seeds 1,2,3] [--density 5200] [--external-share <0..0.9>]
-//        [--out public/data/model-validation.json]
+//        [--out public/data/model-validation.json] [--dump rows.json]
 //
 // For each time slot (morning peak, midday, evening peak) this takes the
 // median of every station's archived weekday readings within ±30 minutes,
@@ -35,6 +35,8 @@ const DENSITY = Number(arg("--density", "5200")); // the live map's default
 // unset: the engine's own default, which is what the published check must score
 const EXTERNAL_SHARE = arg("--external-share", null) === null ? undefined : Number(arg("--external-share"));
 const OUT = arg("--out", join(ROOT, "public", "data", "model-validation.json"));
+const DUMP = arg("--dump", null); // optional: every station row per slot, for diagnosis
+const dumped = {};
 const WARMUP = 120, MEASURE = 300, WINDOW_MIN = 30;
 const SLOTS = [
   { label: "Morning peak", clockMin: 8 * 60 },
@@ -164,6 +166,7 @@ async function main() {
       };
     }).filter((row) => row.edge >= 0 && (row.obsFlow > 0 || row.obsKmh !== null));
     const scale = V.fitFlowScale(rows);
+    dumped[slot.label] = { scale, rows };
     const held = rows.filter((row) => row.heldOut);
     const groups = new Map();
     for (const row of rows) groups.set(row.corridor, [...(groups.get(row.corridor) ?? []), row]);
@@ -205,6 +208,7 @@ async function main() {
     ],
   };
   writeFileSync(OUT, JSON.stringify(report, null, 1) + "\n");
+  if (DUMP) writeFileSync(DUMP, JSON.stringify(dumped));
   console.log(`wrote ${OUT}`);
 }
 
