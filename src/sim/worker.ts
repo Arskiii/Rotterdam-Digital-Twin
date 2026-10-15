@@ -237,6 +237,7 @@ function init(buf: ArrayBuffer) {
 
   post({ type: "initProgress", frac: 0.74 });
   buildSpawnTables();
+  buildGateways();
   post({ type: "initProgress", frac: 0.9 });
   buildCorridors();
   post({ type: "initProgress", frac: 0.97 });
@@ -288,6 +289,117 @@ function sampleSpawnEdge(mode: number): number {
     else hi = mid;
   }
   return spawnEdges[mode][lo];
+}
+
+// ---------------- external zone: traffic that enters or leaves the map ----------------
+//
+// The graph is clipped to the city bbox, so every motorway carriageway that
+// crosses it ends in a dead end: inbound lanes nobody can reach, outbound
+// lanes that lead nowhere. Those pieces fall outside the car core, a quarter
+// of the motorway kilometres, and without help no simulated car ever drives
+// them. Treating the map edge as an external zone fixes that: trips start on
+// the inbound dead ends and finish on the outbound ones, as through traffic
+// (A4 to A16) or as traffic entering or leaving the city.
+const GATE_EDGE_M = 1500; // a dead end this close to the network's edge is a gateway
+const GATE_CLASS_W = [3, 2, 1]; // motorway, trunk, primary; minor roads are not gateways
+const THROUGH_MIN_M = 4000; // a through trip crosses the city, not one interchange
+/** Share of car trips that start or end outside the map; fitted against NDW (see validate-model). */
+const EXTERNAL_SHARE = 0.35;
+let externalShare = EXTERNAL_SHARE;
+let gateIn = new Int32Array(0); // directed edges leaving an inbound dead end
+let gateOut = new Int32Array(0); // directed edges arriving at an outbound dead end
+let gateInCum = new Float64Array(0);
+let gateOutCum = new Float64Array(0);
+
+function sampleCum(list: Int32Array, cum: Float64Array): number {
+  if (!cum.length) return -1;
+  const r = rand() * cum[cum.length - 1];
+  let lo = 0, hi = cum.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (cum[mid] < r) lo = mid + 1;
+    else hi = mid;
+  }
+  return list[lo];
+}
+
+function buildGateways() {
+  const N = G.nodeCount;
+  const carEdge = (d: number) => dExists[d] && (G.edges.modeMask[d >> 1] & MODE_CAR) !== 0;
+  const outDeg = new Uint16Array(N), inDeg = new Uint16Array(N);
+  const inList: number[][] = Array.from({ length: N }, () => []);
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let d = 0; d < M; d++) {
+    if (!carEdge(d)) continue;
+    outDeg[dSource[d]]++; inDeg[dTarget[d]]++;
+    inList[dTarget[d]].push(d);
+    for (const n of [dSource[d], dTarget[d]]) {
+      const x = G.nodesXY[n * 2], y = G.nodesXY[n * 2 + 1];
+      if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+  }
+  // which nodes the core can reach, and which can reach the core
+  const flood = (forward: boolean) => {
+    const seen = new Uint8Array(N), stack: number[] = [];
+    for (let n = 0; n < N; n++) if (G.inCore[n] & MODE_CAR) { seen[n] = 1; stack.push(n); }
+    while (stack.length) {
+      const n = stack.pop()!;
+      const next = forward
+        ? Array.from(outList.subarray(outOff[n], outOff[n + 1]), (d) => (carEdge(d) ? dTarget[d] : -1))
+        : inList[n].map((d) => dSource[d]);
+      for (const m of next) if (m >= 0 && !seen[m]) { seen[m] = 1; stack.push(m); }
+    }
+    return seen;
+  };
+  const fromCore = flood(true), toCore = flood(false);
+  const nearEdge = (n: number) => {
+    const x = G.nodesXY[n * 2], y = G.nodesXY[n * 2 + 1];
+    return Math.min(x - minX, maxX - x, y - minY, maxY - y) < GATE_EDGE_M;
+  };
+  const ins: number[] = [], inW: number[] = [], outs: number[] = [], outW: number[] = [];
+  for (let n = 0; n < N; n++) {
+    if (!nearEdge(n)) continue;
+    if (inDeg[n] === 0 && outDeg[n] > 0 && toCore[n]) {
+      for (let i = outOff[n]; i < outOff[n + 1]; i++) {
+        const d = outList[i], w = GATE_CLASS_W[G.edges.cls[d >> 1]] ?? 0;
+        if (carEdge(d) && w > 0) { ins.push(d); inW.push(w); }
+      }
+    } else if (outDeg[n] === 0 && inDeg[n] > 0 && fromCore[n]) {
+      for (const d of inList[n]) {
+        const w = GATE_CLASS_W[G.edges.cls[d >> 1]] ?? 0;
+        if (w > 0) { outs.push(d); outW.push(w); }
+      }
+    }
+  }
+  const cum = (w: number[]) => { let acc = 0; return Float64Array.from(w, (v) => (acc += v)); };
+  gateIn = Int32Array.from(ins); gateInCum = cum(inW);
+  gateOut = Int32Array.from(outs); gateOutCum = cum(outW);
+  console.log(`gateways: ${gateIn.length} inbound, ${gateOut.length} outbound`);
+}
+
+/** A trip with at least one end outside the map: through, inbound or outbound. */
+function spawnExternal() {
+  if (!gateIn.length || !gateOut.length) return spawn(0);
+  const kind = rand();
+  for (let tries = 0; tries < 4; tries++) {
+    let a: number, b: number;
+    if (kind < 0.4) {
+      a = sampleCum(gateIn, gateInCum);
+      const ax = G.nodesXY[dSource[a] * 2], ay = G.nodesXY[dSource[a] * 2 + 1];
+      b = -1;
+      for (let k = 0; k < 10 && b < 0; k++) {
+        const cand = sampleCum(gateOut, gateOutCum);
+        const cx = G.nodesXY[dTarget[cand] * 2], cy = G.nodesXY[dTarget[cand] * 2 + 1];
+        if (Math.hypot(cx - ax, cy - ay) > THROUGH_MIN_M) b = cand;
+      }
+      if (b < 0) continue;
+    } else if (kind < 0.7) {
+      a = sampleCum(gateIn, gateInCum); b = sampleSpawnEdge(0);
+    } else {
+      a = sampleSpawnEdge(0); b = sampleCum(gateOut, gateOutCum);
+    }
+    if (launch(0, a, b, TRUCK_SHARE * 2.4)) return; // the ring carries the port's freight
+  }
 }
 
 // ---------------- A* routing ----------------
@@ -432,35 +544,40 @@ function spawn(mode: number, originEdge = -1, truckChance = TRUCK_SHARE) {
         if (dd > minR && dd < maxR) { b = cand; break; }
       }
     }
-    if (b < 0 || (a >> 1) === (b >> 1)) continue;
-    const r = route(a, b, mode);
-    if (!r || r.length < 3) continue;
-    const id = freeList.pop()!;
-    vRoutes[id] = r;
-    vRouteIdx[id] = 0;
-    vMode[id] = mode === 0 && rand() < truckChance ? 3 : mode;
-    const m = vMode[id];
-    vEdge[id] = a;
-    vS[id] = Math.min(8, dLen[a] * 0.3);
-    vV[id] = Math.min(modeSpeed(a, m), m === 2 ? 1.4 : 8);
-    vV0f[id] = m === 2 ? 0.85 + rand() * 0.4 : m === 3 ? 0.78 + rand() * 0.14 : 0.88 + rand() * 0.27;
-    vWait[id] = 0;
-    vAlive[id] = 1;
-    if (m !== 2) {
-      const tail = qTail[qBase(m) + a];
-      if (tail >= 0 && vS[tail] < vS[id] + V_LEN[m] + 2) {
-        vAlive[id] = 0;
-        freeList.push(id);
-        return;
-      }
-      enqueue(id, a);
-    } else {
-      vAhead[id] = -1;
-      vBehind[id] = -1;
-    }
-    activeByMode[m]++;
-    return;
+    if (launch(mode, a, b, truckChance)) return;
   }
+}
+
+/** Route a trip from edge a to edge b and put the vehicle on the road; false when no route. */
+function launch(mode: number, a: number, b: number, truckChance: number): boolean {
+  if (freeList.length === 0 || a < 0 || b < 0 || (a >> 1) === (b >> 1)) return false;
+  const r = route(a, b, mode);
+  if (!r || r.length < 3) return false;
+  const id = freeList.pop()!;
+  vRoutes[id] = r;
+  vRouteIdx[id] = 0;
+  vMode[id] = mode === 0 && rand() < truckChance ? 3 : mode;
+  const m = vMode[id];
+  vEdge[id] = a;
+  vS[id] = Math.min(8, dLen[a] * 0.3);
+  vV[id] = Math.min(modeSpeed(a, m), m === 2 ? 1.4 : 8);
+  vV0f[id] = m === 2 ? 0.85 + rand() * 0.4 : m === 3 ? 0.78 + rand() * 0.14 : 0.88 + rand() * 0.27;
+  vWait[id] = 0;
+  vAlive[id] = 1;
+  if (m !== 2) {
+    const tail = qTail[qBase(m) + a];
+    if (tail >= 0 && vS[tail] < vS[id] + V_LEN[m] + 2) {
+      vAlive[id] = 0;
+      freeList.push(id);
+      return true; // the lane is full: a real trip, just not this tick
+    }
+    enqueue(id, a);
+  } else {
+    vAhead[id] = -1;
+    vBehind[id] = -1;
+  }
+  activeByMode[m]++;
+  return true;
 }
 
 function despawn(id: number, finished: boolean) {
@@ -1138,7 +1255,10 @@ function advance(real: number) {
     const have = mode === 0 ? activeByMode[0] + activeByMode[3] : activeByMode[mode];
     const deficit = targets[mode] - have;
     const spawns = Math.min(mode === 0 ? 7 : 5, Math.max(0, Math.ceil(deficit * 0.02)));
-    for (let i = 0; i < spawns; i++) spawn(mode);
+    for (let i = 0; i < spawns; i++) {
+      if (mode === 0 && rand() < externalShare) spawnExternal();
+      else spawn(mode);
+    }
   }
 
   // scenario burst spawns (stadium egress / freight surge)
@@ -1248,6 +1368,7 @@ async function runExperiment(config: NonNullable<InitMsg["experiment"]>) {
   holdClock = true;
   autoIncidents = false;
   signalProgram = "actuated";
+  if (config.externalShare !== undefined) externalShare = Math.min(0.9, Math.max(0, config.externalShare));
   if (config.speedFactor !== undefined) weatherFactor = Math.min(1, Math.max(0.7, config.speedFactor));
   // A closure is in place from the first step, so warmup traffic already
   // routes around it, just as it would on a day the road is shut.

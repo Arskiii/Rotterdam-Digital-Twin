@@ -18,6 +18,8 @@ export interface InitMsg {
     closedEdges?: number[];
     /** Motorized speed multiplier for the whole run, e.g. wet roads (0.7..1). */
     speedFactor?: number;
+    /** Share of car trips entering or leaving the map; the engine default when omitted. */
+    externalShare?: number;
   };
 }
 
