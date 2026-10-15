@@ -238,9 +238,13 @@ configured; see `public/docs/intelligence-api.html`.
   Intelligence page): the engine runs headless at 08:00, 12:30 and 17:00 and is
   scored against the median of 33 archived weekdays of NDW readings, on a
   held-out 20% of stations. As of 15 Oct 2026 it does **not** meet the usual
-  calibration bar: GEH < 5 on 5–8% of held-out stations against the 85% TAG
-  M3.1 target, rank correlation ≈ 0.1, speeds 13–16 km/h off. It shows
-  plausible patterns, not flows fit for decisions. Regenerate with
+  calibration bar: GEH < 5 on 7–12% of held-out stations against the 85% TAG
+  M3.1 target, rank correlation 0.2–0.3, speeds 15–17 km/h off. It shows
+  plausible patterns, not flows fit for decisions. Through traffic entering
+  and leaving at the motorway boundary (35% of car trips) lifted the rank
+  correlation from about 0.1; much of the remaining flow error is on the
+  measurement side, where station flows add NDW's per-length-class counts to
+  the all-vehicle total and sum consecutive cross-sections of one road. Regenerate with
   `git worktree add /tmp/archive origin/archive && npm run validate-model -- --archive /tmp/archive`
   (about 3 minutes on four cores).
 - **Building heights**: footprints come from OSM's BAG import (the official
