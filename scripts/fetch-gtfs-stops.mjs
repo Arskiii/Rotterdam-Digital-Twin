@@ -18,6 +18,7 @@ import { writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { zipIndex, findEntry, readEntry, splitCsv, header as headerOf } from "./lib/gtfs-zip.mjs";
+import { CITY, ORIGIN, M_PER_LAT, M_PER_LON } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "data", "gtfs-stops.json");
@@ -26,10 +27,7 @@ const OUT = join(ROOT, "data", "gtfs-stops.json");
 // stop, and RET metro runs well past the modelled area — line B to Hoek van
 // Holland (lon 4.12), line E to Den Haag Centraal (lat 52.08), line D to De
 // Akkers. Without those the board would show "due 4 min" with no destination.
-const BBOX = { s: 51.79, w: 4.03, n: 52.12, e: 4.72 };
-const ORIGIN = { lat: 51.92, lon: 4.48 };
-const M_PER_LAT = 110574;
-const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
+const BBOX = CITY.transitStopsBbox;
 const px = (lon) => +(((lon - ORIGIN.lon) * M_PER_LON).toFixed(1));
 const py = (lat) => +(((lat - ORIGIN.lat) * M_PER_LAT).toFixed(1));
 

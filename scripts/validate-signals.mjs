@@ -11,13 +11,9 @@
 import { readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { BBOX, px, py } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const ORIGIN = { lat: 51.92, lon: 4.48 };
-const M_PER_LAT = 110574;
-const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
-const px = (lon) => (lon - ORIGIN.lon) * M_PER_LON;
-const py = (lat) => (lat - ORIGIN.lat) * M_PER_LAT;
 
 // ---- parse clusters out of graph.bin (v4) ----
 const buf = readFileSync(join(ROOT, "public", "data", "graph.bin"));
@@ -62,10 +58,11 @@ const official = gj.features
     y: py(f.geometry.coordinates[1]),
   }));
 
-// keep only installations inside the fetched bbox (lat 51.84–52.00, lon
-// 4.34–4.62) with a 250 m inset so boundary cabinets don't skew the numbers
+// keep only installations inside the fetched bbox with a ~250 m inset so
+// boundary cabinets don't skew the numbers
+const INSET_LAT = 0.0023, INSET_LON = 0.0036;
 const inArea = official.filter(
-  (o) => o.lon > 4.3436 && o.lon < 4.6164 && o.lat > 51.8423 && o.lat < 51.9977
+  (o) => o.lon > BBOX.w + INSET_LON && o.lon < BBOX.e - INSET_LON && o.lat > BBOX.s + INSET_LAT && o.lat < BBOX.n - INSET_LAT
 );
 console.log(`UDAP registry: ${official.length} iVRIs under authority "${authority}", ${inArea.length} inside coverage`);
 

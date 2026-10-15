@@ -90,7 +90,10 @@ traffic simulation — wrapped in a dark tactical operations UI.
   access stress test; public CBS neighborhood totals; and a second signal
   comparison that gives all three programs the same seeded warmup. It reports
   held-out NDW flow error and labels the model unvalidated when that error is
-  high. JSON outputs and methods are documented in
+  high. The bridge stress test can also be run through the traffic simulation
+  against an all-roads-open baseline (same seeds, baseline spread shown as
+  noise). A **published model check** scores the simulation against weeks of
+  archived NDW readings — see *Model check* below. JSON outputs and methods are documented in
   `public/docs/intelligence-api.html`.
 - **TRANSIT** (dock) — how the network is running, line by line: vehicles out,
   median running delay over that line's own reporting trips, its worst trip,
@@ -231,6 +234,15 @@ configured; see `public/docs/intelligence-api.html`.
 - **NWB road register** (PDOK): 94.3% of 70,367 official road segments (89% of km)
   covered — motorways 98.4% of km; the residual is ferries, rural dike tracks and
   bbox-edge clipping — `node scripts/validate-roads.mjs`.
+- **Model check** (`public/data/model-validation.json`, shown on the
+  Intelligence page): the engine runs headless at 08:00, 12:30 and 17:00 and is
+  scored against the median of 33 archived weekdays of NDW readings, on a
+  held-out 20% of stations. As of 15 Oct 2026 it does **not** meet the usual
+  calibration bar: GEH < 5 on 5–8% of held-out stations against the 85% TAG
+  M3.1 target, rank correlation ≈ 0.1, speeds 13–16 km/h off. It shows
+  plausible patterns, not flows fit for decisions. Regenerate with
+  `git worktree add /tmp/archive origin/archive && npm run validate-model -- --archive /tmp/archive`
+  (about 3 minutes on four cores).
 - **Building heights**: footprints come from OSM's BAG import (the official
   Dutch buildings register), so geometry is register-accurate. Heights resolve
   through a source chain — measured **3D BAG** roof heights (TU Delft,
@@ -277,6 +289,9 @@ sampled road-water screen with Pillow and `npm run build-exposure` after
 rebuilding the graph or resilience raster.
 
 ## Rebuild the city data
+
+The coverage bbox, projection origin and districts come from
+`city.config.json`; see `docs/new-city.md` for building another city.
 
 Processed binaries in `public/data/` are committed. To regenerate from OpenStreetMap:
 

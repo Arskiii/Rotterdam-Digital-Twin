@@ -24,6 +24,7 @@
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { DISTRICTS } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const arg = (name, dflt = null) => {
@@ -40,25 +41,10 @@ if (!SNAPSHOT || !DIR) {
 }
 
 const SLOT_MIN = 5; // archive resolution
-const ORIGIN = { lat: 51.92, lon: 4.48 };
-const M_PER_LAT = 110574;
-const M_PER_LON = 111320 * Math.cos((ORIGIN.lat * Math.PI) / 180);
 
 // ---------------- district attribution ----------------
-// Districts are Voronoi seeds over the projected plane (see src/config.ts), so
+// Districts are Voronoi seeds over the projected plane (city.config.json), so
 // a station belongs to whichever seed is nearest — the same rule the sim uses.
-
-const DISTRICTS = [
-  ["centrum", 51.9204, 4.4794], ["noord", 51.9345, 4.4705], ["delfshaven", 51.9092, 4.4363],
-  ["overschie", 51.9411, 4.4269], ["hillegersberg", 51.9565, 4.4779], ["kralingen", 51.9257, 4.5155],
-  ["alexander", 51.9553, 4.5477], ["feijenoord", 51.8988, 4.5052], ["ijsselmonde", 51.8853, 4.5433],
-  ["charlois", 51.8797, 4.4699], ["waalhaven", 51.8898, 4.4179], ["pernis", 51.8865, 4.3885],
-  ["hoogvliet", 51.8632, 4.3623], ["schiedam", 51.9186, 4.3991], ["capelle", 51.9297, 4.5776],
-].map(([key, lat, lon]) => ({
-  key,
-  x: (lon - ORIGIN.lon) * M_PER_LON,
-  y: (lat - ORIGIN.lat) * M_PER_LAT,
-}));
 
 function districtOf(x, y) {
   let best = 0;
