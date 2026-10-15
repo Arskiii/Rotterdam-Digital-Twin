@@ -3,7 +3,8 @@
 // the score.
 //
 //   node scripts/validate-model.mjs --archive <archive work tree>
-//        [--days 45] [--seeds 1,2,3] [--density 5200] [--out public/data/model-validation.json]
+//        [--days 45] [--seeds 1,2,3] [--density 5200] [--external-share <0..0.9>]
+//        [--out public/data/model-validation.json] [--dump rows.json]
 //
 // For each time slot (morning peak, midday, evening peak) this takes the
 // median of every station's archived weekday readings within ±30 minutes,
@@ -31,7 +32,11 @@ const ARCHIVE = arg("--archive", null);
 const DAYS = Number(arg("--days", "45")); // the fine tier keeps 45 days
 const SEEDS = arg("--seeds", "1,2,3").split(",").map(Number);
 const DENSITY = Number(arg("--density", "5200")); // the live map's default
+// unset: the engine's own default, which is what the published check must score
+const EXTERNAL_SHARE = arg("--external-share", null) === null ? undefined : Number(arg("--external-share"));
 const OUT = arg("--out", join(ROOT, "public", "data", "model-validation.json"));
+const DUMP = arg("--dump", null); // optional: every station row per slot, for diagnosis
+const dumped = {};
 const WARMUP = 120, MEASURE = 300, WINDOW_MIN = 30;
 const SLOTS = [
   { label: "Morning peak", clockMin: 8 * 60 },
@@ -135,7 +140,7 @@ async function main() {
     const results = [];
     for (let i = 0; i < SEEDS.length; i += workers) {
       const batch = SEEDS.slice(i, i + workers).map((seed) => runExperiment(urls.worker, graphBuf, meta.districts,
-        { seed, program: "actuated", clockMin: slot.clockMin, density: DENSITY, warmupSec: WARMUP, measureSec: MEASURE, stations }));
+        { seed, program: "actuated", clockMin: slot.clockMin, density: DENSITY, warmupSec: WARMUP, measureSec: MEASURE, stations, externalShare: EXTERNAL_SHARE }));
       results.push(...(await Promise.all(batch)));
     }
     // mean over seeds, per station edge
@@ -161,6 +166,7 @@ async function main() {
       };
     }).filter((row) => row.edge >= 0 && (row.obsFlow > 0 || row.obsKmh !== null));
     const scale = V.fitFlowScale(rows);
+    dumped[slot.label] = { scale, rows };
     const held = rows.filter((row) => row.heldOut);
     const groups = new Map();
     for (const row of rows) groups.set(row.corridor, [...(groups.get(row.corridor) ?? []), row]);
@@ -172,18 +178,21 @@ async function main() {
       observedDays: bucket.days.size, observedReadings: bucket.readings,
       flowScale: Math.round(scale * 100) / 100,
       heldOut: V.score(held, scale),
+      calibration: V.score(rows.filter((row) => !row.heldOut), scale),
       motorway: V.score(held.filter((row) => row.motorway), scale),
       urban: V.score(held.filter((row) => !row.motorway), scale),
       corridors,
     });
     const h = slots.at(-1).heldOut;
+    const c = slots.at(-1).calibration;
+    console.log(`  calibration: flow WMAPE ${c.flowWmapePct}%, GEH<5 ${c.gehUnder5Pct}%, rank r ${c.rankCorrelation}, speed MAE ${c.speedMaeKmh} km/h`);
     console.log(`  held-out: ${h.stations} stations, flow WMAPE ${h.flowWmapePct}%, GEH<5 ${h.gehUnder5Pct}%, rank r ${h.rankCorrelation}, speed MAE ${h.speedMaeKmh} km/h (bias ${h.speedBiasKmh})`);
   }
 
   const report = {
     generatedAt: new Date().toISOString(),
     window: { from: new Date(fromMs).toISOString(), to: new Date(newest).toISOString(), weekdays: weekdays.size },
-    runs: { seeds: SEEDS, density: DENSITY, warmupSec: WARMUP, measureSec: MEASURE, program: "actuated" },
+    runs: { seeds: SEEDS, density: DENSITY, warmupSec: WARMUP, measureSec: MEASURE, program: "actuated", externalShare: EXTERNAL_SHARE ?? "engine default" },
     slots,
     method: `Measured: median of each NDW station's archived weekday readings within ±${WINDOW_MIN} min of the slot (at least 3 readings). Simulated: mean over ${SEEDS.length} seeds of a ${MEASURE} s measurement after a ${WARMUP} s warmup at the live map's default density, actuated signals, clock held at the slot. One city-wide flow scale is fitted on the 80% calibration stations; held-out figures use the other 20% only. Corridor rows use all stations and so share that fitted scale.`,
     limitations: [
@@ -199,6 +208,7 @@ async function main() {
     ],
   };
   writeFileSync(OUT, JSON.stringify(report, null, 1) + "\n");
+  if (DUMP) writeFileSync(DUMP, JSON.stringify(dumped));
   console.log(`wrote ${OUT}`);
 }
 

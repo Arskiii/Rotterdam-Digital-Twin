@@ -36,6 +36,8 @@ export interface SlotReport {
   observedReadings: number;
   flowScale: number;
   heldOut: Score;
+  /** The 80% of stations the flow scale was fitted on; older reports lack it. */
+  calibration?: Score;
   motorway: Score;
   urban: Score;
   corridors: CorridorScore[];
@@ -44,7 +46,7 @@ export interface SlotReport {
 export interface ValidationReport {
   generatedAt: string;
   window: { from: string; to: string; weekdays: number };
-  runs: { seeds: number[]; density: number; warmupSec: number; measureSec: number; program: string };
+  runs: { seeds: number[]; density: number; warmupSec: number; measureSec: number; program: string; externalShare?: number | string };
   slots: SlotReport[];
   method: string;
   limitations: string[];
