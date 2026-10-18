@@ -1,47 +1,49 @@
-# UDAP access request — Rotterdam Digital Twin
+# Draft access request — Rotterdam Digital Twin
 
-**To:** info@talking-traffic.com\
-**Subject:** Aanvraag testtoegang UDAP SPaT/MAP — Rotterdam Digital Twin
+**To:** info@talking-traffic.com
+
+**Subject:** Aanvraag alleen-lezen SPaT/MAP-toegang voor Rotterdam Digital Twin
 
 Geachte heer/mevrouw,
 
-Namens **[organisatie]** verzoek ik om informatie en testtoegang voor een
-alleen-lezen koppeling met actuele SPaT- en MAP-gegevens via UDAP. Ons project,
-[Rotterdam Digital Twin](https://github.com/Arskiii/Rotterdam-Digital-Twin),
-toont een verkeerssimulatie van een deel van Rotterdam. Wij willen de actuele
-verkeerslichtstanden als afzonderlijke, duidelijk gemarkeerde observaties tonen;
-de simulatie zou deze gegevens niet gebruiken om echte verkeerslichten aan te sturen.
+Namens **[organisatie]** verzoek ik om informatie over een alleen-lezen koppeling
+met actuele SPaT- en MAP-gegevens van iVRI's in Rotterdam. Onze openbare
+[Rotterdam Digital Twin](https://github.com/Arskiii/Rotterdam-Digital-Twin)
+toont de stad, verkeerssimulatie en bronvermelde observaties. Met betrouwbare
+verkeerslichtgegevens kunnen wij het verschil tussen gemeten en gesimuleerd
+verkeer eerlijk laten zien en analyses van doorstroming, wachttijden en de
+toegankelijkheid voor fietsers en voetgangers beter onderbouwen. Dat kan
+bewoners, onderzoekers en beleidsmakers helpen om verkeersmaatregelen
+kritisch en op basis van dezelfde feiten te bespreken.
 
-Het interessegebied is ongeveer 51,914256–51,919576° N en
-4,480512–4,492979° E. Kunt u aangeven:
+Wij vragen alleen om signaalstanden, tijdstempels en de topologie die nodig is
+om deze correct op de kaart te plaatsen; niet om persoonsgegevens of
+individuele voertuigtrajecten. Het platform stuurt geen verkeerslichten aan
+en zal verouderde standen niet als actuele aanwijzing voor weggebruikers tonen.
 
-1. Welke iVRI's in dit gebied actuele SPaT/MAP-berichten leveren, en welke
-   testomgeving of voorbeeldberichten beschikbaar zijn?
-2. Welke procedure, certificering, overeenkomst en eventuele kosten gelden voor
-   alleen-lezen toegang door ons of via een bestaande gecertificeerde partner?
-3. Hoe we de MAP-intersection-, signal-group- en lane-identifiers met de fysieke
-   kruispunten mogen koppelen, en of een bestaande topologie-export beschikbaar is?
-4. Of de licentie het publiceren van actuele lichtstanden in een openbaar
-   digitaal model toestaat, inclusief de toegestane vertraging en bronvermelding?
-5. Bij wie we de formele aanvraag en technische vragen over deze use case het best
-   kunnen indienen?
+Ons interessegebied omvat de Rotterdamse stadskaart in het project, met 82
+iVRI-installaties uit het openbare UDAP-register. Kunt u aangeven:
 
-Onze applicatie bevat al een afgeschermde ontvangstservice voor vooraf gekoppelde
-observaties. De publieke weergave blijft uitgeschakeld totdat de benodigde rechten
-en echte gegevens beschikbaar zijn.
+1. Welke SPaT/MAP-feed en testomgeving voor dit gebied beschikbaar zijn?
+2. Welke overeenkomst, certificering, kosten en voorwaarden gelden voor
+   alleen-lezen toegang door ons of via een gecertificeerde partner?
+3. Hoe de MAP-identifiers voor kruispunten, rijstroken, verbindingen en
+   signaalgroepen mogen worden gekoppeld aan de fysieke situatie?
+4. Of actuele standen en eventuele historische fasegegevens openbaar getoond
+   of geanalyseerd mogen worden, en zo ja met welke vertraging, bronvermelding,
+   beveiligings- en bewaartermijnvoorwaarden?
+5. Wie de formele aanvraag en technische afstemming verzorgt?
 
-Organisatie: **[organisatie]**\
-Contactpersoon: **[naam]**\
-E-mail: **[e-mailadres]**\
-Telefoon: **[telefoonnummer]**
+Wij hebben een afgeschermde ontvangstservice voorbereid. Gemeten standen komen
+pas op de kaart nadat toegang, mapping en publicatierechten zijn bevestigd.
+Als een andere aanvraagroute voor deze publieke weergave geldt, horen wij dat
+graag.
+
+- Organisatie: **[organisatie]**
+- Contactpersoon: **[naam]**
+- E-mail: **[e-mailadres]**
+- Telefoon: **[telefoonnummer]**
 
 Met vriendelijke groet,
 
 **[naam]**
-
----
-
-The [Monotch onboarding guide](https://monotch.freshdesk.com/support/solutions/articles/6000282921-technical-support-page-for-csp-isp-listener-integration-on-udap)
-lists this participation address and required contact details. Its example use case
-is an emergency-vehicle listener, so the email asks the operator to confirm the
-right SPaT/MAP route for this project.

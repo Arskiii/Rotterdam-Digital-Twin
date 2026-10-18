@@ -86,9 +86,12 @@ loading show unavailable states, with saved reports still accessible for recover
 
 The Pages workflow now restores the latest unexpired history artifact from the same
 repository and branch. Fork artifacts and the current run are excluded. Refreshed
-history is uploaded with 14-day artifact retention before subsequent deployment
-health checks, so a later build failure does not discard collected observations.
-The old cache is a migration fallback. Public replay still holds at most seven days
+history is uploaded with 14-day artifact retention before its feed-health
+check, so a subsequent check failure does not discard collected observations.
+The collector runs alongside the existing city live refresh; its feed-health
+check reports warnings without blocking the city-wide map deployment. A subsequent
+site build restores the latest same-branch artifact, including the source snapshot.
+Public replay still holds at most seven days
 and 2,000 readings; this is bounded retention, not a permanent observation archive.
 Extended feed/build outages can still leave gaps.
 
@@ -103,7 +106,12 @@ The implementation follows GitHub's documented [artifact listing API](https://do
 
 ## Verification
 
-- All 66 JavaScript regression checks passed, including timing preset/settings equality,
+Integration with the current city/Intelligence platform additionally passes its
+137 Vitest checks. Its main map, signal bridge and Intelligence pages are retained;
+the scenario workspace is added at separate routes. The two signal bridges use
+separate browser URLs, environment variables and default ports.
+
+- All 66 scenario JavaScript regression checks passed, including timing preset/settings equality,
   input validation, time-scaled chart selection, directional result summaries, portable-network simulation equality,
   malformed reports, fingerprints, nearest-section matching, storage quota failure,
   bounded handoffs and branch-specific artifact selection.
@@ -111,7 +119,7 @@ The implementation follows GitHub's documented [artifact listing API](https://do
   corrupted history protection and simulated atomic-replace failure.
 - TypeScript and production bundle budgets with the default and repository-prefix
   base URLs. Lab initial JavaScript remains about 65 kB, below its 100 kB budget;
-  map routes remain about 651 kB, below 750 kB. The existing Three.js chunk warning
+  corridor editor routes remain about 651 kB, below 750 kB. The existing Three.js chunk warning
   still applies.
 - Desktop map-to-lab handoff, named save/reload/rerun, exported JSON import in a
   fresh production session, road clicking and sections with no observations.

@@ -1,0 +1,835 @@
+{
+ "generatedAt": "2026-10-15T21:34:53.046Z",
+ "window": {
+  "from": "2026-08-31T18:35:00.000Z",
+  "to": "2026-10-15T18:35:00.000Z",
+  "weekdays": 33
+ },
+ "runs": {
+  "seeds": [
+   1,
+   2,
+   3
+  ],
+  "density": 5200,
+  "warmupSec": 120,
+  "measureSec": 300,
+  "program": "actuated",
+  "externalShare": "engine default"
+ },
+ "slots": [
+  {
+   "label": "Morning peak",
+   "clockMin": 480,
+   "observedDays": 16,
+   "observedReadings": 65,
+   "flowScale": 14.57,
+   "heldOut": {
+    "stations": 131,
+    "flowWmapePct": 87.9,
+    "gehUnder5Pct": 11.5,
+    "rankCorrelation": 0.25,
+    "speedStations": 125,
+    "speedMaeKmh": 16.4,
+    "speedBiasKmh": -10.6
+   },
+   "calibration": {
+    "stations": 477,
+    "flowWmapePct": 80.1,
+    "gehUnder5Pct": 6.3,
+    "rankCorrelation": 0.28,
+    "speedStations": 452,
+    "speedMaeKmh": 15.4,
+    "speedBiasKmh": -12.1
+   },
+   "motorway": {
+    "stations": 89,
+    "flowWmapePct": 86,
+    "gehUnder5Pct": 7.9,
+    "rankCorrelation": 0.32,
+    "speedStations": 87,
+    "speedMaeKmh": 18.1,
+    "speedBiasKmh": -11.8
+   },
+   "urban": {
+    "stations": 42,
+    "flowWmapePct": 94.5,
+    "gehUnder5Pct": 19,
+    "rankCorrelation": -0.06,
+    "speedStations": 38,
+    "speedMaeKmh": 12.4,
+    "speedBiasKmh": -7.8
+   },
+   "corridors": [
+    {
+     "corridor": "A15",
+     "motorway": true,
+     "stations": 131,
+     "flowWmapePct": 84.2,
+     "gehUnder5Pct": 3.1,
+     "rankCorrelation": -0.03,
+     "speedStations": 122,
+     "speedMaeKmh": 17.7,
+     "speedBiasKmh": -16.7
+    },
+    {
+     "corridor": "A16",
+     "motorway": true,
+     "stations": 85,
+     "flowWmapePct": 65.1,
+     "gehUnder5Pct": 5.9,
+     "rankCorrelation": 0.28,
+     "speedStations": 85,
+     "speedMaeKmh": 15.7,
+     "speedBiasKmh": -11.1
+    },
+    {
+     "corridor": "A20",
+     "motorway": true,
+     "stations": 82,
+     "flowWmapePct": 94.5,
+     "gehUnder5Pct": 7.3,
+     "rankCorrelation": 0.21,
+     "speedStations": 81,
+     "speedMaeKmh": 17.8,
+     "speedBiasKmh": -9.3
+    },
+    {
+     "corridor": "A4",
+     "motorway": true,
+     "stations": 61,
+     "flowWmapePct": 68.4,
+     "gehUnder5Pct": 4.9,
+     "rankCorrelation": 0.32,
+     "speedStations": 60,
+     "speedMaeKmh": 19.2,
+     "speedBiasKmh": -17.6
+    },
+    {
+     "corridor": "A13",
+     "motorway": true,
+     "stations": 23,
+     "flowWmapePct": 77,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.38,
+     "speedStations": 23,
+     "speedMaeKmh": 15.5,
+     "speedBiasKmh": -15.1
+    },
+    {
+     "corridor": "A29",
+     "motorway": true,
+     "stations": 19,
+     "flowWmapePct": 121.3,
+     "gehUnder5Pct": 5.3,
+     "rankCorrelation": 0.22,
+     "speedStations": 19,
+     "speedMaeKmh": 16.9,
+     "speedBiasKmh": -6.3
+    },
+    {
+     "corridor": "A38",
+     "motorway": true,
+     "stations": 8,
+     "flowWmapePct": 258.5,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.67,
+     "speedStations": 8,
+     "speedMaeKmh": 15.1,
+     "speedBiasKmh": -11.8
+    },
+    {
+     "corridor": "Groene Kruisweg",
+     "motorway": false,
+     "stations": 6,
+     "flowWmapePct": 47.3,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.89,
+     "speedStations": 6,
+     "speedMaeKmh": 12,
+     "speedBiasKmh": -7.5
+    },
+    {
+     "corridor": "Kruithuisweg",
+     "motorway": false,
+     "stations": 6,
+     "flowWmapePct": 80.3,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.49,
+     "speedStations": 6,
+     "speedMaeKmh": 24.5,
+     "speedBiasKmh": -24.5
+    },
+    {
+     "corridor": "Hoofdweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 150,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.4,
+     "speedStations": 3,
+     "speedMaeKmh": 12.3,
+     "speedBiasKmh": -12.3
+    },
+    {
+     "corridor": "Kilweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 261.6,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.4,
+     "speedStations": 4,
+     "speedMaeKmh": 6.2,
+     "speedBiasKmh": -3.6
+    },
+    {
+     "corridor": "Motorway, unlabelled site",
+     "motorway": true,
+     "stations": 4,
+     "flowWmapePct": 154.8,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.4,
+     "speedStations": 4,
+     "speedMaeKmh": 13.4,
+     "speedBiasKmh": -10.6
+    },
+    {
+     "corridor": "Vondelingenweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 120,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.8,
+     "speedStations": 3,
+     "speedMaeKmh": 16.4,
+     "speedBiasKmh": -16.4
+    },
+    {
+     "corridor": "Matlingeweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 77.5,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 14.8,
+     "speedBiasKmh": -13.7
+    },
+    {
+     "corridor": "Prins Alexanderlaan",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 82.1,
+     "gehUnder5Pct": 33.3,
+     "rankCorrelation": 0,
+     "speedStations": 3,
+     "speedMaeKmh": 6.4,
+     "speedBiasKmh": -6.4
+    },
+    {
+     "corridor": "Reeweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 99.7,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -1,
+     "speedStations": 3,
+     "speedMaeKmh": 5.6,
+     "speedBiasKmh": 0.1
+    },
+    {
+     "corridor": "Rijksstraatweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 93.6,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.87,
+     "speedStations": 3,
+     "speedMaeKmh": 28.6,
+     "speedBiasKmh": -25.9
+    },
+    {
+     "corridor": "Schielandweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 67.2,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.5,
+     "speedStations": 2,
+     "speedMaeKmh": 19.1,
+     "speedBiasKmh": -15.6
+    },
+    {
+     "corridor": "Vaanweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 51.5,
+     "gehUnder5Pct": 33.3,
+     "rankCorrelation": 0.5,
+     "speedStations": 2,
+     "speedMaeKmh": 10.9,
+     "speedBiasKmh": -10.9
+    },
+    {
+     "corridor": "Zuiderparkweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 73.7,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 2.4,
+     "speedBiasKmh": -1.6
+    }
+   ]
+  },
+  {
+   "label": "Midday",
+   "clockMin": 750,
+   "observedDays": 11,
+   "observedReadings": 47,
+   "flowScale": 18.31,
+   "heldOut": {
+    "stations": 131,
+    "flowWmapePct": 96.3,
+    "gehUnder5Pct": 7.6,
+    "rankCorrelation": 0.28,
+    "speedStations": 124,
+    "speedMaeKmh": 14.8,
+    "speedBiasKmh": -10.1
+   },
+   "calibration": {
+    "stations": 477,
+    "flowWmapePct": 83.2,
+    "gehUnder5Pct": 4,
+    "rankCorrelation": 0.27,
+    "speedStations": 448,
+    "speedMaeKmh": 14.2,
+    "speedBiasKmh": -11.4
+   },
+   "motorway": {
+    "stations": 89,
+    "flowWmapePct": 100.4,
+    "gehUnder5Pct": 6.7,
+    "rankCorrelation": 0.36,
+    "speedStations": 87,
+    "speedMaeKmh": 16.8,
+    "speedBiasKmh": -12.2
+   },
+   "urban": {
+    "stations": 42,
+    "flowWmapePct": 83.4,
+    "gehUnder5Pct": 9.5,
+    "rankCorrelation": -0.11,
+    "speedStations": 37,
+    "speedMaeKmh": 9.9,
+    "speedBiasKmh": -5.3
+   },
+   "corridors": [
+    {
+     "corridor": "A15",
+     "motorway": true,
+     "stations": 131,
+     "flowWmapePct": 87.3,
+     "gehUnder5Pct": 3.1,
+     "rankCorrelation": 0.01,
+     "speedStations": 122,
+     "speedMaeKmh": 15.4,
+     "speedBiasKmh": -14
+    },
+    {
+     "corridor": "A16",
+     "motorway": true,
+     "stations": 85,
+     "flowWmapePct": 68.3,
+     "gehUnder5Pct": 4.7,
+     "rankCorrelation": 0.25,
+     "speedStations": 84,
+     "speedMaeKmh": 15.4,
+     "speedBiasKmh": -12.8
+    },
+    {
+     "corridor": "A20",
+     "motorway": true,
+     "stations": 82,
+     "flowWmapePct": 103.7,
+     "gehUnder5Pct": 4.9,
+     "rankCorrelation": 0.21,
+     "speedStations": 81,
+     "speedMaeKmh": 16.2,
+     "speedBiasKmh": -13.8
+    },
+    {
+     "corridor": "A4",
+     "motorway": true,
+     "stations": 61,
+     "flowWmapePct": 78.8,
+     "gehUnder5Pct": 8.2,
+     "rankCorrelation": 0.33,
+     "speedStations": 60,
+     "speedMaeKmh": 17.1,
+     "speedBiasKmh": -14.9
+    },
+    {
+     "corridor": "A13",
+     "motorway": true,
+     "stations": 23,
+     "flowWmapePct": 90,
+     "gehUnder5Pct": 4.3,
+     "rankCorrelation": 0.37,
+     "speedStations": 23,
+     "speedMaeKmh": 16.5,
+     "speedBiasKmh": -16
+    },
+    {
+     "corridor": "A29",
+     "motorway": true,
+     "stations": 19,
+     "flowWmapePct": 141.5,
+     "gehUnder5Pct": 5.3,
+     "rankCorrelation": 0.1,
+     "speedStations": 19,
+     "speedMaeKmh": 18.5,
+     "speedBiasKmh": -5.5
+    },
+    {
+     "corridor": "A38",
+     "motorway": true,
+     "stations": 8,
+     "flowWmapePct": 338.5,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.78,
+     "speedStations": 8,
+     "speedMaeKmh": 15.2,
+     "speedBiasKmh": -14.3
+    },
+    {
+     "corridor": "Groene Kruisweg",
+     "motorway": false,
+     "stations": 6,
+     "flowWmapePct": 46.7,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.89,
+     "speedStations": 6,
+     "speedMaeKmh": 11,
+     "speedBiasKmh": -6.2
+    },
+    {
+     "corridor": "Kruithuisweg",
+     "motorway": false,
+     "stations": 6,
+     "flowWmapePct": 94.5,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.09,
+     "speedStations": 6,
+     "speedMaeKmh": 18.3,
+     "speedBiasKmh": -17.6
+    },
+    {
+     "corridor": "Hoofdweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 107.8,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.6,
+     "speedStations": 3,
+     "speedMaeKmh": 12.7,
+     "speedBiasKmh": -12.7
+    },
+    {
+     "corridor": "Kilweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 129.7,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.32,
+     "speedStations": 4,
+     "speedMaeKmh": 4,
+     "speedBiasKmh": 3.5
+    },
+    {
+     "corridor": "Motorway, unlabelled site",
+     "motorway": true,
+     "stations": 4,
+     "flowWmapePct": 142.4,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.32,
+     "speedStations": 4,
+     "speedMaeKmh": 16.7,
+     "speedBiasKmh": -9.3
+    },
+    {
+     "corridor": "Vondelingenweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 63.8,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.95,
+     "speedStations": 3,
+     "speedMaeKmh": 13.2,
+     "speedBiasKmh": -13.2
+    },
+    {
+     "corridor": "Matlingeweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 77.7,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 19.1,
+     "speedBiasKmh": -19
+    },
+    {
+     "corridor": "Prins Alexanderlaan",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 59.8,
+     "gehUnder5Pct": 33.3,
+     "rankCorrelation": 0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 5.7,
+     "speedBiasKmh": -5.4
+    },
+    {
+     "corridor": "Reeweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 75.9,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0,
+     "speedStations": 3,
+     "speedMaeKmh": 5.3,
+     "speedBiasKmh": -1.6
+    },
+    {
+     "corridor": "Rijksstraatweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 93.2,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -1,
+     "speedStations": 3,
+     "speedMaeKmh": 28.1,
+     "speedBiasKmh": -23.9
+    },
+    {
+     "corridor": "Schielandweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 51.8,
+     "gehUnder5Pct": 33.3,
+     "rankCorrelation": 0.5,
+     "speedStations": 2,
+     "speedMaeKmh": 3.6,
+     "speedBiasKmh": 3.6
+    },
+    {
+     "corridor": "Vaanweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 61.3,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.5,
+     "speedStations": 2,
+     "speedMaeKmh": 13.9,
+     "speedBiasKmh": -13.9
+    },
+    {
+     "corridor": "Zuiderparkweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 69.8,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 4.2,
+     "speedBiasKmh": -2.8
+    }
+   ]
+  },
+  {
+   "label": "Evening peak",
+   "clockMin": 1020,
+   "observedDays": 12,
+   "observedReadings": 55,
+   "flowScale": 14.3,
+   "heldOut": {
+    "stations": 131,
+    "flowWmapePct": 88,
+    "gehUnder5Pct": 6.9,
+    "rankCorrelation": 0.18,
+    "speedStations": 125,
+    "speedMaeKmh": 16.5,
+    "speedBiasKmh": -3.2
+   },
+   "calibration": {
+    "stations": 476,
+    "flowWmapePct": 79.6,
+    "gehUnder5Pct": 5.7,
+    "rankCorrelation": 0.21,
+    "speedStations": 452,
+    "speedMaeKmh": 15.8,
+    "speedBiasKmh": -4.8
+   },
+   "motorway": {
+    "stations": 89,
+    "flowWmapePct": 86.7,
+    "gehUnder5Pct": 7.9,
+    "rankCorrelation": 0.29,
+    "speedStations": 87,
+    "speedMaeKmh": 18.5,
+    "speedBiasKmh": -2.5
+   },
+   "urban": {
+    "stations": 42,
+    "flowWmapePct": 91.9,
+    "gehUnder5Pct": 4.8,
+    "rankCorrelation": -0.2,
+    "speedStations": 38,
+    "speedMaeKmh": 12,
+    "speedBiasKmh": -4.7
+   },
+   "corridors": [
+    {
+     "corridor": "A15",
+     "motorway": true,
+     "stations": 131,
+     "flowWmapePct": 84.3,
+     "gehUnder5Pct": 3.1,
+     "rankCorrelation": -0.04,
+     "speedStations": 122,
+     "speedMaeKmh": 17.3,
+     "speedBiasKmh": -8.2
+    },
+    {
+     "corridor": "A16",
+     "motorway": true,
+     "stations": 84,
+     "flowWmapePct": 63.8,
+     "gehUnder5Pct": 1.2,
+     "rankCorrelation": 0.26,
+     "speedStations": 85,
+     "speedMaeKmh": 18.4,
+     "speedBiasKmh": 4.8
+    },
+    {
+     "corridor": "A20",
+     "motorway": true,
+     "stations": 82,
+     "flowWmapePct": 99.9,
+     "gehUnder5Pct": 9.8,
+     "rankCorrelation": 0.18,
+     "speedStations": 81,
+     "speedMaeKmh": 19.5,
+     "speedBiasKmh": -0.3
+    },
+    {
+     "corridor": "A4",
+     "motorway": true,
+     "stations": 61,
+     "flowWmapePct": 63.3,
+     "gehUnder5Pct": 8.2,
+     "rankCorrelation": 0.3,
+     "speedStations": 60,
+     "speedMaeKmh": 14.3,
+     "speedBiasKmh": -12.1
+    },
+    {
+     "corridor": "A13",
+     "motorway": true,
+     "stations": 23,
+     "flowWmapePct": 79.3,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.38,
+     "speedStations": 23,
+     "speedMaeKmh": 16.9,
+     "speedBiasKmh": -8.7
+    },
+    {
+     "corridor": "A29",
+     "motorway": true,
+     "stations": 19,
+     "flowWmapePct": 131.9,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.01,
+     "speedStations": 19,
+     "speedMaeKmh": 24,
+     "speedBiasKmh": 1.5
+    },
+    {
+     "corridor": "A38",
+     "motorway": true,
+     "stations": 8,
+     "flowWmapePct": 284.2,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.69,
+     "speedStations": 8,
+     "speedMaeKmh": 12.2,
+     "speedBiasKmh": -4.7
+    },
+    {
+     "corridor": "Groene Kruisweg",
+     "motorway": false,
+     "stations": 6,
+     "flowWmapePct": 53,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.77,
+     "speedStations": 6,
+     "speedMaeKmh": 11.2,
+     "speedBiasKmh": -6.3
+    },
+    {
+     "corridor": "Kruithuisweg",
+     "motorway": false,
+     "stations": 6,
+     "flowWmapePct": 68.2,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.09,
+     "speedStations": 6,
+     "speedMaeKmh": 22.5,
+     "speedBiasKmh": -17.7
+    },
+    {
+     "corridor": "Hoofdweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 127.1,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.6,
+     "speedStations": 3,
+     "speedMaeKmh": 11.3,
+     "speedBiasKmh": -11.3
+    },
+    {
+     "corridor": "Kilweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 210.7,
+     "gehUnder5Pct": 25,
+     "rankCorrelation": 0.8,
+     "speedStations": 4,
+     "speedMaeKmh": 4.2,
+     "speedBiasKmh": -0.4
+    },
+    {
+     "corridor": "Motorway, unlabelled site",
+     "motorway": true,
+     "stations": 4,
+     "flowWmapePct": 168.5,
+     "gehUnder5Pct": 25,
+     "rankCorrelation": -0.4,
+     "speedStations": 4,
+     "speedMaeKmh": 19,
+     "speedBiasKmh": 6.7
+    },
+    {
+     "corridor": "Vondelingenweg",
+     "motorway": false,
+     "stations": 4,
+     "flowWmapePct": 70.2,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 1,
+     "speedStations": 3,
+     "speedMaeKmh": 18.4,
+     "speedBiasKmh": -18.4
+    },
+    {
+     "corridor": "Matlingeweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 77,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 14.7,
+     "speedBiasKmh": -14.7
+    },
+    {
+     "corridor": "Prins Alexanderlaan",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 49.7,
+     "gehUnder5Pct": 33.3,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 4.6,
+     "speedBiasKmh": -1.3
+    },
+    {
+     "corridor": "Reeweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 51.8,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 5.2,
+     "speedBiasKmh": -0.9
+    },
+    {
+     "corridor": "Rijksstraatweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 93.9,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.87,
+     "speedStations": 3,
+     "speedMaeKmh": 26.3,
+     "speedBiasKmh": -23.6
+    },
+    {
+     "corridor": "Schielandweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 61.8,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": 0.5,
+     "speedStations": 2,
+     "speedMaeKmh": 20.3,
+     "speedBiasKmh": -15.8
+    },
+    {
+     "corridor": "Vaanweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 54.3,
+     "gehUnder5Pct": 33.3,
+     "rankCorrelation": 0.5,
+     "speedStations": 2,
+     "speedMaeKmh": 7.9,
+     "speedBiasKmh": -7.9
+    },
+    {
+     "corridor": "Zuiderparkweg",
+     "motorway": false,
+     "stations": 3,
+     "flowWmapePct": 69,
+     "gehUnder5Pct": 0,
+     "rankCorrelation": -0.5,
+     "speedStations": 3,
+     "speedMaeKmh": 3.4,
+     "speedBiasKmh": -1.3
+    }
+   ]
+  }
+ ],
+ "method": "Measured: median of each NDW station's archived weekday readings within ±30 min of the slot (at least 3 readings). Simulated: mean over 3 seeds of a 300 s measurement after a 120 s warmup at the live map's default density, actuated signals, clock held at the slot. One city-wide flow scale is fitted on the 80% calibration stations; held-out figures use the other 20% only. Corridor rows use all stations and so share that fitted scale.",
+ "limitations": [
+  "NDW stations combine every lane and both directions within 30 m; the simulation counts the one matched road edge, so parallel carriageways and ramps are a source of error the model cannot remove.",
+  "NDW speed is a detector average; simulated speed is the mean speed of cars on the matched edge. They measure the same road, not the same quantity.",
+  "Few city streets carry NDW sensors, so motorway figures rest on far more stations than urban ones.",
+  "The archive is sampled when the publishing job runs, not every five minutes, so some slots rest on few days.",
+  "A flow error this size means the model shows plausible patterns, not forecasts fit for operational decisions."
+ ],
+ "references": [
+  {
+   "label": "GEH statistic and the 85%-of-links criterion: DfT TAG unit M3.1, Highway Assignment Modelling",
+   "url": "https://www.gov.uk/government/publications/tag-unit-m3-1-highway-assignment-modelling"
+  },
+  {
+   "label": "NDW open data",
+   "url": "https://opendata.ndw.nu/"
+  }
+ ]
+}

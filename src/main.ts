@@ -1,125 +1,408 @@
-import { createScene } from "./render/scene";
-import { buildNetworkMesh, updateIntersectionQueueColors } from "./render/network";
-import { buildTrafficLightMeshes, updateTrafficLightColors } from "./render/lights";
-import { VehicleRenderer } from "./render/vehicles";
-import { World } from "./sim/world";
-import { createControls } from "./ui/controls";
-import { Sparkline } from "./ui/sparkline";
-import { installNavigation } from "./ui/platform";
-import { createQuickControls } from "./ui/quickControls";
+import "./style.css";
+import * as THREE from "three";
+import { buildChrome, setMeter } from "./ui/chrome";
+import { SceneCtx } from "./render/scene";
+import { buildCity, buildDistrictBounds, syncFog, setAmbient, releaseToGPU, RoofStreamer } from "./render/city";
+import type { RoofIndex } from "./data/loader";
+import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveIncidentsLayer } from "./render/dynamic";
+import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit";
+import { ResilienceLayers } from "./render/resilience";
+import { ObservedSignalsLayer } from "./render/observed-signals";
+import { pollObservedSignals } from "./data/live-signals";
+import { loadCity } from "./data/loader";
+import { LiveFeed, type LiveSnapshot } from "./data/live";
+import { watchForNewBuild } from "./data/buildwatch";
+import { registerServiceWorker } from "./data/sw-register";
+import { App } from "./ui/app";
 
-installNavigation("grid");
+const root = document.getElementById("app")!;
+const ui = buildChrome(root);
 
-const container = document.getElementById("app")!;
-const { renderer, scene, camera, controls } = createScene(container);
-
-const world = new World(42);
-const networkMesh = buildNetworkMesh(world.net);
-scene.add(networkMesh.group);
-const lightBundle = buildTrafficLightMeshes(world.net);
-scene.add(lightBundle.group);
-const vehicleRenderer = new VehicleRenderer(2000);
-scene.add(vehicleRenderer.mesh);
-
-// HUD elements.
-const hud = {
-  time: document.getElementById("m-time")!,
-  active: document.getElementById("m-active")!,
-  done: document.getElementById("m-done")!,
-  thru: document.getElementById("m-thru")!,
-  wait: document.getElementById("m-wait")!,
-  waitTail: document.getElementById("m-wait-tail")!,
-  waitMax: document.getElementById("m-wait-max")!,
-  stops: document.getElementById("m-stops")!,
-  delay: document.getElementById("m-delay")!,
-  phase: document.getElementById("m-phase")!,
-  demand: document.getElementById("m-demand")!,
-  queue: document.getElementById("m-queue")!,
-  fps: document.getElementById("m-fps")!,
-};
-
-const sparks = {
-  thru: new Sparkline(document.getElementById("s-thru") as HTMLCanvasElement, 120, "#7fb3ff"),
-  wait: new Sparkline(document.getElementById("s-wait") as HTMLCanvasElement, 120, "#ffd24a"),
-  worst: new Sparkline(document.getElementById("s-worst") as HTMLCanvasElement, 120, "#ff7d6b"),
-};
-
-function resetView() {
-  camera.position.set(220, 260, 260);
-  controls.target.set(0, 0, 0);
-  controls.update();
+const stageFracs: Record<string, number> = { grid: 0, signals: 0, structures: 0, sim: 0 };
+function paintBoot(stage: string, frac: number) {
+  stageFracs[stage] = Math.max(stageFracs[stage], frac);
+  const s = ui.bootStages[stage];
+  if (s) {
+    setMeter(s.bars, stageFracs[stage]);
+    s.pct.textContent = `${Math.round(stageFracs[stage] * 100)}%`;
+  }
 }
-const updateQuickControls = createQuickControls(world, resetView, () => {
-  camera.position.set(0, 550, 0.01);
-  controls.target.set(0, 0, 0);
-  controls.update();
-});
 
-createControls(
-  world,
-  () => {
-    world.reset();
-    sparks.thru.reset();
-    sparks.wait.reset();
-    sparks.worst.reset();
-    lastSparkSimTime = 0;
-  },
-  resetView,
-);
+// Data binaries live in-repo (public/data). Deployments that ship only source
+// (e.g. Vercel file deploys) fall back to the pinned GitHub mirror via jsDelivr.
+const DATA_FALLBACK =
+  "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@2ac52386897c1be74a128ca095acd73fc05a8f26/public/data/";
 
-let lastWall = performance.now();
-let fpsAccum = 0;
-let fpsCount = 0;
-let lastHudUpdate = 0;
-let lastSparkSimTime = 0;
+async function resolveDataBase(): Promise<string> {
+  const local = `${import.meta.env.BASE_URL}data/`;
+  try {
+    // A GET, not a HEAD. `Cache.match` is keyed by method, so a HEAD never
+    // matches the GET the service worker stored — which made this probe fail
+    // offline, send the boot to the jsDelivr mirror, and fail again there with
+    // the whole city sitting in a cache two lines away. The body is 2 KB and
+    // loadCity asks for the same file immediately afterwards, so it costs
+    // nothing and warms the entry it is about to read.
+    const res = await fetch(`${local}meta.json`);
+    if (res.ok) return local;
+  } catch {
+    /* fall through */
+  }
+  return DATA_FALLBACK;
+}
 
-function loop(now: number) {
-  const realDt = Math.min(0.1, (now - lastWall) / 1000);
-  lastWall = now;
+/**
+ * Stand-in for a sim core that would not start.
+ *
+ * The app posts parameter changes from seventeen places and reads frames from
+ * onmessage; none of it is load-bearing for the live map, and its metrics and
+ * frame fields are already nullable. Swallowing the messages keeps every one
+ * of those call sites honest without a null check apiece.
+ */
+function inertWorker(): Worker {
+  return {
+    postMessage() {},
+    addEventListener() {},
+    removeEventListener() {},
+    terminate() {},
+    onmessage: null,
+    onerror: null,
+    onmessageerror: null,
+    dispatchEvent: () => false,
+  } as unknown as Worker;
+}
 
-  world.step(realDt);
-  vehicleRenderer.sync(world.vehicles, world.net);
-  updateTrafficLightColors(lightBundle.handles, world.lights, world.metrics.simTime);
-  updateIntersectionQueueColors(networkMesh.padHandles, world.queueByIntersection);
+async function boot() {
+  const scene = new SceneCtx(ui.sceneCanvas);
 
-  controls.update();
-  renderer.render(scene, camera);
+  const dataBase = await resolveDataBase();
 
-  // Sparkline samples advance with sim time, so pause freezes them and 10× speed scrolls 10× faster.
-  while (world.metrics.simTime - lastSparkSimTime >= 1) {
-    lastSparkSimTime += 1;
-    sparks.thru.push(world.metrics.throughputPerMin());
-    sparks.wait.push(world.metrics.avgWait());
-    sparks.worst.push(world.metrics.worstWaitAvg());
+  // The sim engine boots on its own thread the moment graph.bin lands —
+  // in parallel with the rest of the download and all mesh building. Its
+  // init posts progress so SIM CORE keeps moving on slow devices, and a
+  // worker failure surfaces as a boot error instead of a silent hang.
+  let worker: Worker | null = null;
+  let simReady: Promise<void> | null = null;
+  const startSim = (graphBuffer: ArrayBuffer, meta: { districts: { name: string; x: number; y: number }[] }) => {
+    const w = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
+    worker = w;
+    paintBoot("sim", 0.04);
+    simReady = new Promise<void>((resolve, reject) => {
+      const h = (ev: MessageEvent) => {
+        if (ev.data?.type === "initProgress") paintBoot("sim", 0.04 + 0.92 * ev.data.frac);
+        else if (ev.data?.type === "ready") {
+          paintBoot("sim", 1);
+          w.removeEventListener("message", h);
+          resolve();
+        }
+      };
+      w.addEventListener("message", h);
+      // A worker that dies from memory pressure reports an empty message — the
+      // common case on phones, where the graph and its derived tables are a
+      // lot to hold beside a 3D scene. Saying "see console" there is useless:
+      // the device that fails is the one with no console.
+      w.addEventListener("error", (e) =>
+        reject(new Error(e.message || "out of memory, or workers are blocked in this browser"))
+      );
+      w.addEventListener("messageerror", () => reject(new Error("message decode error")));
+    });
+    simReady.catch(() => {}); // surfaced at the await below
+    const graphCopy = graphBuffer.slice(0);
+    w.postMessage(
+      {
+        type: "init",
+        graphBuffer: graphCopy,
+        districtCount: meta.districts.length,
+        districts: meta.districts.map((d) => ({ name: d.name, x: d.x, y: d.y })),
+      },
+      [graphCopy]
+    );
+  };
+
+  // roofs index is tiny — fetch it alongside everything else, attach later
+  const roofsIndexP: Promise<RoofIndex | null> = fetch(`${dataBase}roofs/index.json`)
+    .then((res) => (res.ok ? (res.json() as Promise<RoofIndex>) : null))
+    .catch(() => null);
+
+  // A phone never starts the simulation core. iOS refuses it under memory
+  // pressure anyway, and trying costs the boot a worker's worth of allocation
+  // and a failure path for a mode the phone is not offered. LIVE is the whole
+  // point on a phone and it needs no simulation.
+  if (App.PHONE) document.body.dataset.phone = "1";
+
+  const data = await loadCity(dataBase, paintBoot, App.PHONE ? undefined : startSim);
+  paintBoot("grid", 1);
+  paintBoot("signals", 1);
+  if (!simReady && !App.PHONE) startSim(data.graphBuffer!, data.meta);
+  // the worker has its copy; this one is 11 MB of bytes nobody will read again
+  data.graphBuffer = null;
+
+  const meshes = await buildCity(data, scene.scene, (f) => paintBoot("structures", 0.55 + f * 0.45));
+  paintBoot("structures", 1);
+
+  // true LoD2.2 roofs stream in around the camera when the data is present
+  let roofs: RoofStreamer | null = null;
+  roofsIndexP.then((index) => {
+    if (index) roofs = new RoofStreamer(dataBase, index, data.buildings, meshes.buildings);
+  });
+
+  const signals = new SignalsLayer(data.graph);
+  const vehicles = new VehiclesLayer();
+  const congestion = new CongestionLayer(data.graph);
+  const transit = new TransitLayer(data.transit);
+  const districtLines = buildDistrictBounds(data.districtBounds);
+  releaseToGPU(districtLines.geometry); // fixed boundaries, drawn once, never edited
+  const ndwLayer = new NdwLayer(data.ndw?.stations ?? []);
+  const airLayer = new AirLayer();
+  const fixesLayer = new LiveTransitLayer();
+  const stopsLayer = new LiveStopsLayer();
+  const liveIncidentsLayer = new LiveIncidentsLayer();
+  const resilience = new ResilienceLayers(dataBase, scene.scene);
+  const observedSignals = new ObservedSignalsLayer(data.graph);
+  scene.scene.add(signals.points, observedSignals.points, ...vehicles.meshes, congestion.lines, transit.group, districtLines, ndwLayer.points, airLayer.points, fixesLayer.group, stopsLayer.points, liveIncidentsLayer.points);
+
+  // The engine has been initializing since graph.bin arrived — usually done.
+  //
+  // A failure here used to end the boot with BOOT FAILURE and a blank city,
+  // which is the wrong trade: the simulation is only needed for SIMULATION
+  // mode. Everything a live map shows — real transit, departure boards,
+  // sensor congestion, incidents, weather, tide — is main-thread and comes
+  // from the snapshot. On a phone, where the sim core is most likely to be
+  // refused, the live map is also the only thing anyone wants. So the app
+  // carries on without it and says what is missing.
+  let simError: string | null = null;
+  try {
+    await simReady!;
+    paintBoot("sim", 1);
+  } catch (err) {
+    simError = (err as Error)?.message ?? String(err);
+    // `worker` is only ever assigned inside startSim's closure, so control-flow
+    // analysis still has it as null here — the annotation restores the truth
+    (worker as Worker | null)?.terminate();
+    worker = null;
+
+    // One retry, from the other side of the memory peak.
+    //
+    // The first attempt deliberately starts the moment graph.bin lands, to
+    // overlap worker init with the rest of the download — but that instant is
+    // also when this tab is heaviest, with the city's geometry still held in
+    // JavaScript on its way to the GPU. Measured on a phone-sized viewport,
+    // the difference either side of buildCity is 217 MB against 90. A worker
+    // refused for memory at the peak may well be granted after it.
+    //
+    // The graph is re-fetched rather than kept for the occasion: holding 11 MB
+    // against a retry that usually never happens is exactly the wrong trade,
+    // and this path can afford a download.
+    await new Promise((r) => setTimeout(r, 400)); // let the collector catch up
+    try {
+      const buf = await (await fetch(`${dataBase}graph.bin`)).arrayBuffer();
+      startSim(buf, data.meta);
+      await simReady!;
+      simError = null;
+    } catch (retryErr) {
+      simError = (retryErr as Error)?.message ?? String(retryErr);
+      (worker as Worker | null)?.terminate();
+      worker = null;
+    }
+    paintBoot("sim", 1);
+  }
+  const sim = (worker as Worker | null) ?? inertWorker();
+
+  const app = new App(ui, scene, data, meshes, { signals, observedSignals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer, stopsLayer, resilience }, sim);
+  if (simError) app.disableSim(simError);
+
+  const signalStatus = document.getElementById("ivri-feed-status");
+  pollObservedSignals(import.meta.env.VITE_LIVE_SIGNALS_URL?.trim() ?? "",
+    data.graph.signals.count + data.graph.aux.count, data.meta.graphSha256, (snapshot, state) => {
+      observedSignals.set(snapshot);
+      if (signalStatus) signalStatus.textContent = state;
+    });
+
+  // feed the NDW snapshot into the sim's calibration loop
+  if (data.ndw?.stations.length) {
+    sim.postMessage({
+      type: "ndw",
+      stations: data.ndw.stations.map((s) => ({ edge: s.edge, flow: s.flow })),
+      todMin: data.ndw.todMin,
+    });
   }
 
-  fpsAccum += realDt;
-  fpsCount++;
-  if (now - lastHudUpdate > 200) {
-    lastHudUpdate = now;
-    updateQuickControls();
-    const m = world.metrics;
-    const sp = world.spawner;
-    const demand = sp.spawned + sp.rejected;
-    hud.time.textContent = `${m.simTime.toFixed(1)} s`;
-    hud.active.textContent = String(world.vehicles.length);
-    hud.done.textContent = String(m.completed);
-    hud.thru.textContent = `${m.throughputPerMin().toFixed(1)} /min`;
-    hud.wait.textContent = `${m.avgWait().toFixed(1)} s`;
-    hud.waitTail.textContent = `${m.worstWaitAvg().toFixed(1)} s`;
-    hud.waitMax.textContent = `${m.maxActiveWait.toFixed(1)} s`;
-    hud.stops.textContent = m.avgStops().toFixed(2);
-    hud.delay.textContent = `${m.delayRatio().toFixed(2)}×`;
-    hud.phase.textContent = `${(m.phaseUtilization() * 100).toFixed(0)}%`;
-    hud.demand.textContent =
-      demand === 0 ? "100%" : `${((sp.spawned / demand) * 100).toFixed(0)}%`;
-    hud.queue.textContent = m.avgQueue().toFixed(1);
-    const fps = fpsCount / Math.max(0.0001, fpsAccum);
-    hud.fps.textContent = fps.toFixed(0);
-    fpsAccum = 0;
-    fpsCount = 0;
-  }
+  // ---- live city feeds: NDW traffic + bridges, OVapi transit, water, weather, air ----
+  let liveWater: LiveSnapshot["water"] | null = null;
+  const applyLive = (snap: LiveSnapshot) => {
+    if (snap.traffic?.s.length && data.ndw?.stations.length) {
+      // refresh station flows in place; unmeasured stations keep their snapshot value
+      const flows = data.ndw.stations.map((s) => s.flow);
+      for (const [i, flow] of snap.traffic.s) if (i < flows.length) flows[i] = flow;
+      sim.postMessage({
+        type: "ndw",
+        stations: data.ndw.stations.map((s, i) => ({ edge: s.edge, flow: flows[i] })),
+        todMin: snap.traffic.todMin,
+        live: true,
+      });
+    }
+    sim.postMessage({
+      type: "liveBridges",
+      bridges: (snap.bridges ?? []).map((b) => ({ name: b.name, edges: b.edges, x: b.x, y: b.y })),
+    });
+    // real incidents: markers for all, physics for accidents/obstructions/closures
+    liveIncidentsLayer.set(snap.incidents ?? []);
+    sim.postMessage({
+      type: "liveIncidents",
+      incidents: (snap.incidents ?? []).map((i) => ({ edge: i.edge, kind: i.kind, x: i.x, y: i.y, name: i.name })),
+    });
+    // live congestion: measured station speed vs the matched edge's limit
+    if (snap.traffic?.s.length && data.ndw?.stations.length) {
+      const ratios: (number | null)[] = data.ndw.stations.map(() => null);
+      for (const [i, , speed] of snap.traffic.s) {
+        const st = data.ndw.stations[i];
+        if (!st || !speed) continue;
+        const limit = data.graph.edges.speed[st.edge] || 50;
+        ratios[i] = Math.min(1.5, speed / limit);
+      }
+      ndwLayer.setLive(ratios);
+    }
+    if (snap.vehicles) {
+      const at = Date.parse(snap.vehicles.t);
+      fixesLayer.set(snap.vehicles.v, snap.vehicles.plan, Number.isFinite(at) ? at : undefined);
+    }
+    if (snap.departures) stopsLayer.set(snap.departures.stops, snap.departures.dep);
+    if (snap.air) airLayer.set(snap.air.s);
+    if (snap.weather) {
+      // wet roads slow motorized traffic
+      const rain = snap.weather.rain ?? 0;
+      sim.postMessage({ type: "params", speedFactor: rain > 2 ? 0.85 : rain > 0.2 ? 0.93 : 1 });
+    }
+    if (snap.water) liveWater = snap.water;
+    app.setLive(snap, live.fresh);
+  };
+  const live = new LiveFeed(dataBase, applyLive);
 
+  // A tab left open keeps refreshing its data but never its code
+  watchForNewBuild(() => app.offerReload());
+
+  // Hold the 27 MB of city binaries past the ten minutes GitHub Pages allows,
+  // so a second visit is instant and the map works with no network at all.
+  // Registered after the boot rather than before it: the first load gains
+  // nothing from a worker that is still installing, and a failure here must
+  // not be able to touch the load that matters.
+  void registerServiceWorker(data.meta);
+
+  // initial camera frame on the city center, looking north-north-east
+  scene.camera.position.set(-2600, 10600, 8600);
+  scene.controls.target.set(300, 0, -900);
+  scene.flyTo(new THREE.Vector3(300, 0, -900), 12800, 1600);
+
+  setTimeout(() => ui.boot.classList.add("done"), 350);
+  setTimeout(() => ui.boot.remove(), 1200);
+
+  const fpsBox = { frames: 0, t0: performance.now() };
+  const lineMat = meshes.roadLines.material as THREE.LineBasicMaterial;
+  let lastNow = performance.now();
+  let lastLiveChip = 0;
+  function loop(now: number) {
+    requestAnimationFrame(loop);
+    const realDt = Math.min(0.1, (now - lastNow) / 1000);
+    lastNow = now;
+    transit.update(app.paused ? 0 : realDt * app.simSpeed);
+    // live vehicles run on real time, never on the sim clock: a snapshot is a
+    // measurement of now, so it must not be scrubbed, paused or compressed
+    fixesLayer.update(); // real positions run on wall clock, never on sim time
+    scene.update();
+    syncFog(scene.fog);
+    // sim-clock daylight: dawn ~06:00, dusk ~21:30 (subtle, keeps the night-ops look)
+    const hh = app.clockMin / 60;
+    const sstep = (a: number, b: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    const daylight = sstep(5.4, 7.6, hh) * (1 - sstep(20.4, 22.6, hh));
+    setAmbient(0.78 + 0.5 * daylight);
+    // RET service level: skeleton fleet deep at night
+    transit.serviceLevel = hh > 0.5 && hh < 5.5 ? 0.35 : 1;
+    const waterMat = (meshes.water.material as THREE.ShaderMaterial).uniforms;
+    waterMat.uTime.value = now / 1000;
+    waterMat.fogNear.value = scene.fog.near;
+    waterMat.fogFar.value = scene.fog.far;
+    // 1px line overlay exists for far readability; drop it to a whisper up
+    // close where ribbons + junction plates carry the picture (kills junction
+    // spaghetti while keeping street definition)
+    const t = THREE.MathUtils.clamp((scene.distance - 1500) / 2300, 0, 1);
+    lineMat.opacity = 0.13 + 0.49 * t;
+    meshes.roadLines.visible = meshes.roads.visible;
+    roofs?.update(scene.controls.target, now);
+    liveIncidentsLayer.update(now / 1000);
+    // real Maas level (Boompjes gauge): the flat world puts quay lips near y 0,
+    // so NAP maps 1:1 onto mesh height, eased, clamped just below flood
+    if (liveWater) {
+      const target = THREE.MathUtils.clamp(-0.45 + liveWater.cm / 100, -1.6, -0.08);
+      const y = meshes.water.position.y;
+      if (Math.abs(target - y) > 0.002) {
+        meshes.water.position.y = y + (target - y) * 0.02;
+        meshes.water.updateMatrix();
+      }
+    }
+    if (now - lastLiveChip > 1000) {
+      lastLiveChip = now;
+      observedSignals.refresh();
+      const age = live.ageMin();
+      if (live.snapshot) {
+        ui.liveChip.style.display = "";
+        // the chip states the real age of the data rather than a green light:
+        // a snapshot the pipeline stopped feeding should look wrong, not fine
+        const health = live.health();
+        ui.liveDot.style.background =
+          health === "live" ? "#3ddc84" : health === "lagging" ? "#e3b23c" : "#d0453c";
+        const w = live.snapshot.weather;
+        const ageTxt = age < 1 ? "<1M" : `${Math.round(age)}M`;
+        if (health === "stale") {
+          ui.liveText.textContent = `FEED STALE — ${ageTxt} OLD`;
+        } else {
+          const parts = [`LIVE ${ageTxt}`];
+          if (w?.temp != null) parts.push(`${Math.round(w.temp)}°C`);
+          if (liveWater) parts.push(`MAAS ${liveWater.cm >= 0 ? "+" : ""}${liveWater.cm}CM`);
+          const all = live.snapshot.incidents ?? [];
+          const nWrk = all.filter((i) => i.kind === 4).length;
+          const nInc = all.length - nWrk;
+          const nBridge = live.snapshot.bridges?.length ?? 0;
+          if (nInc) parts.push(`${nInc} INC`);
+          if (nWrk) parts.push(`${nWrk} WRK`);
+          if (nBridge) parts.push(`${nBridge} BRUG`);
+          ui.liveText.textContent = parts.join(" · ");
+        }
+      }
+    }
+    app.frame(now);
+    scene.renderer.render(scene.scene, scene.camera);
+    fpsBox.frames++;
+    const span = now - fpsBox.t0;
+    if (span > 2500) {
+      // hidden-tab gap: restart the window
+      fpsBox.frames = 0;
+      fpsBox.t0 = now;
+    } else if (span > 1000) {
+      (window as unknown as { __fps: number }).__fps = Math.round((fpsBox.frames * 1000) / span);
+      fpsBox.frames = 0;
+      fpsBox.t0 = now;
+    }
+  }
   requestAnimationFrame(loop);
+
+  (window as unknown as { __meshes: unknown }).__meshes = meshes;
+  (window as unknown as { __layers: unknown }).__layers = { signals, vehicles, congestion };
+  (window as unknown as { __scene: unknown }).__scene = scene;
+  (window as unknown as { __app: unknown }).__app = app;
+  // headless perf probe: window.__bench(n) → avg ms per full render
+  (window as unknown as { __bench: (n?: number) => string }).__bench = (n = 30) => {
+    const t0 = performance.now();
+    for (let i = 0; i < n; i++) scene.renderer.render(scene.scene, scene.camera);
+    const ms = (performance.now() - t0) / n;
+    const info = scene.renderer.info.render;
+    return JSON.stringify({ msPerFrame: +ms.toFixed(2), calls: info.calls, tris: info.triangles });
+  };
 }
-requestAnimationFrame(loop);
+
+boot().catch((err) => {
+  console.error(err);
+  ui.bootError.style.display = "block";
+  ui.bootError.textContent = `BOOT FAILURE — ${err?.message ?? err}`;
+});

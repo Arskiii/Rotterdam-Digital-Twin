@@ -17,7 +17,7 @@ export function installNavigation(current: "map" | "lab" | "grid") {
   brand.append(subtitle);
   const nav = document.createElement("nav");
   nav.setAttribute("aria-label", "Main navigation");
-  for (const [key, label, path] of [["map", "City explorer", ""], ["lab", "Scenario lab", "lab/"], ["grid", "Playground", "grid/"]] as const) {
+  for (const [key, label, path] of [["city", "City explorer", ""], ["map", "Traffic editor", "v03/"], ["lab", "Scenario lab", "lab/"], ["grid", "Playground", "grid/"]] as const) {
     const link = document.createElement("a");
     link.href = siteUrl(path).href;
     link.textContent = label;

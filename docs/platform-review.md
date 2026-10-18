@@ -9,8 +9,8 @@ useful foundation. More layers alone will not establish decision quality.
 
 ### Experience
 
-- Rotterdam is the main entry point. The old map URL `/v03/` remains available;
-  the fictional grid is now `/grid/` and is labelled Playground.
+- The city-wide map and Intelligence platform remain the main entry points.
+  The corridor traffic editor is `/v03/`; the fictional grid is `/grid/`, labelled Playground.
 - Shared navigation connects the city explorer, scenario lab, and playground.
 - A dedicated map viewport and scrolling sidebar eliminate overlapping panels.
   Mobile layouts keep the map above a separate scrollable information panel.

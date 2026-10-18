@@ -1,233 +1,388 @@
-# Rotterdam Digital Twin
+# SurveilTrack — Rotterdam Intelligence Platform
 
-Browser-based 3D exploration and traffic simulation of Rotterdam. The main page
-opens the Rotterdam city explorer; `/v03/` remains a compatible map URL.
-`/lab/` compares signal strategies and `/grid/` provides a fictional 2×3 playground.
+A browser-based city intelligence platform for **the whole of Rotterdam**: the real street
+network, every mapped traffic light, a quarter-million buildings and a live agent-based
+traffic simulation — wrapped in a dark tactical operations UI.
 
-The explorer has a dedicated map viewport, responsive sidebar, source details,
-and quick pause, speed, top-view, and reset-view controls. Simulation metrics are
-explicitly distinguished from public observations. See [the platform review](docs/platform-review.md)
-for verified fixes, remaining model limits, and the proposed next priorities.
-See the [performance review](docs/performance-review.md) for worker-based scenario
-calculations, rendering improvements, measured bundle sizes, and enforced build budgets.
-The [corridor workflow review](docs/corridor-workflow.md) covers map selection,
-portable scenario reports, retained observation history, and their verification.
+## Scenario workspace
 
-## What it does
+The city map and Intelligence pages are joined by a [Scenario lab](lab/) for
+repeatable signal-plan comparisons, a [corridor traffic editor](v03/) and a
+[fictional grid playground](grid/). The lab provides timing presets, observation
+replay, paired worker runs, retained results while editing, and portable reports.
+Its study graph is separate from the city-wide simulation; **View on map** opens
+the corridor editor that supplied the report's road network.
 
-- Six signalized intersections on a grid network.
-- Cars enter from perimeter "stubs" via independent **Poisson processes** (you set total
-  cars/hour; arrivals at each entry are exponential inter-arrivals). Routes end at an exit.
-- Cars follow the **Intelligent Driver Model** (Treiber), so they decelerate behind leaders
-  and at red lights.
-- Choose fixed-time or vehicle-actuated signals. Fixed-time cycle settings and actuated
-  green/gap settings can be tuned while the simulation runs.
-- Live HUD: throughput, wait times, stops, delay ratio, queue, phase utilization, and demand met.
-- The Rotterdam page includes a network editor. Changes are saved in your browser and can
-  be exported or imported as JSON.
-- The Rotterdam page can show fresh, read-only traffic light observations above the
-  simulated lights when an authorized feed has been connected.
-- The Rotterdam page also shows source-labelled public data layers: OSM building
-  footprints and transit stops, Rotterdam's tree inventory, NDW measured traffic and
-  roadworks, nearby Luchtmeetnet readings, and CBS citywide housing energy statistics.
-- Official 3DBAG building heights and BAG construction years replace OSM building
-  estimates where available. Rotterdam GIS layers show modelled water depth, noise,
-  and access to cooling spaces.
-- `/lab/` replays retained NDW detector observations and compares traffic-light
-  settings with paired, repeatable model runs.
+See the [scenario workspace guide](docs/scenario-workspace.md) and
+[corridor workflow](docs/corridor-workflow.md) for provenance and model limits.
+`npm test` runs the city/Intelligence tests and the scenario regressions. Production
+builds check TypeScript, both suites, publication guards and scenario bundle budgets.
+Run the Python pipeline checks with
+`python3 -m unittest discover -s tests -p 'test_*.py'`.
+
+## What's inside
+
+**Real city data** (OpenStreetMap, ODbL):
+
+- ~5,100 km of roadway plus ~3,600 km of cycleways and footpaths across greater
+  Rotterdam (Hoogvliet → Nesselande, Overschie → IJsselmonde, plus Schiedam and
+  Capelle for network continuity and the full A4/A15/A16/A20 motorway ring)
+- **4,349 traffic-signal heads — 4,331 bound to the multimodal network**, clustered
+  into **472 signalized junctions** and standalone crossings, each running a
+  fixed-time two-phase controller
+- 264k building footprints extruded to sourced heights — **96.8% carry
+  measured 3D BAG (BAG × AHN LiDAR) roof heights**, the rest OSM
+  `height`/`building:levels` tags, `building:part` tower shafts as their own
+  prisms, and published heights anchoring the named skyline towers
+  (Zalmhaventoren 203 m, De Rotterdam, Maastoren, Delftse Poort, …) — plus 7k
+  water polygons (the Maas, harbours, the Rotte, lakes) and rail/metro/tram
+  lines
+- **True roofscape at street zoom**: 216k slanted-roof buildings carry their
+  real LoD2.2 roof geometry (3D BAG's LiDAR-reconstructed ridges, hips,
+  gables and dormers), packed into 354 one-kilometer tiles (28 MB) that
+  stream in around the camera and swap with the block model per tile;
+  flat-roofed buildings keep their prisms, which are already the true shape
+- **Resilience overlays** from [Rotterdam's DGO GIS](https://diensten.rotterdam.nl/arcgis/rest/services/SO_IBURO/DGO_data/MapServer):
+  distance to cool resting places at 38°C (75/150/300/700 m classes),
+  modelled water depth over 25 cm, and cumulative day/night noise exposure.
+  Enable them individually in Map layers. These are static planning maps,
+  not live flood, noise, or heat measurements. The rasters load only when selected.
+
+**Live multimodal simulation** (dedicated web worker):
+
+- Cars, **bikes and pedestrians** on one graph with per-edge mode masks and
+  per-mode reachable cores
+- IDM car-following on per-lane FIFO queues (separate car and bike lanes);
+  pedestrians free-flow and cross with the signals (walk when cars are held)
+- A\* time-cost routing per mode; cars reroute around incidents
+- **RET public transport**: trams and metros on their real OSM route relations,
+  braking into stops, dwelling, and continuing (~280 vehicles on 39 routes).
+  This is the *modelled* fleet — evenly spaced, not on the timetable — and it
+  runs in SIMULATION mode. The real trams and metros are a live feed; see below.
+- Signals: **vehicle-actuated by default** (Dutch-style gap-out green extension with
+  demand detection at stop lines), plus a **green-wave program** — 61 corridors of
+  same-street junctions with 45 km/h progression offsets — and fixed-time; signal
+  faults, cycle-scale control
+- Time-of-day demand curve (morning/evening peaks, 72× day compression)
+- Per-district telemetry: tracks, mean speed, queues, congestion index
+- **Target tracking**: click any car, bike, pedestrian, tram or metro to lock the
+  camera on it — live speed + zone readout, a fading breadcrumb trail, and the name
+  of the street it is on (10k-street name index); incidents appear as blinking map
+  markers; hovering any road shows name · class · limit · district
+- Day/night ambience follows the sim clock (dawn ≈ 06:00, dusk ≈ 21:30); the RET
+  fleet thins to night service after midnight; observation drones patrol their zones
+- **Flux replay**: the platform records the congestion picture every 10 s — scrub back
+  through the last 40 minutes on a timeline and watch rush hour build and dissolve
+- Real district boundaries (OSM admin polygons) with map labels
+
+**Platform UI** (the SurveilTrack look):
+
+- **UNIT MAP** — 3D city with drone observation units, unit detail card with live zone
+  telemetry, City/District/Street camera scales, layer control (structures, roads,
+  signals, vehicles, congestion flux, hydro, rail, labels)
+- **Search** (`/`) — one index over every named thing on the map: ~10k street
+  names from the graph, the 610 NDW sensor stations, every RET stop the live
+  feed publishes, and the fifteen districts. Diacritic- and
+  punctuation-insensitive, so `gravendijkwal` and `sgravendijkwal` both find
+  `'s-Gravendijkwal`. Arrow keys move, ⏎ flies the camera there. A street is
+  indexed on the most important way carrying its name, not the longest — Dutch
+  streets carry a named cycleway alongside the carriageway, and length alone
+  made the Coolsingel a cycleway.
+- **BRIEF** — mode-aware. In LIVE it leads with what was *measured* (stations
+  reporting, mean sensor speed, measured congestion against posted limits, real
+  incidents, transit in service); in SIMULATION with the model's own figures; in
+  HISTORY with the archive record under the scrub head. Every panel carries a
+  MEASURED or MODELLED chip, and a district with no reporting station is drawn
+  as absent rather than as free-flowing.
+- **SETUP** — fleet density, physics rate, signal cycle scale, time of day, incident
+  injection, render scale. Every control is disabled outside SIMULATION,
+  scenarios and the signal trial included, with one button back to it.
+  The signal trial holds the model clock fixed, pauses automatic incidents,
+  restores the prior settings, and exports its three sequential observations.
+  It is exploratory: random arrivals and the initial traffic state still vary,
+  so the trial does not claim a causal winner.
+- **INTELLIGENCE** (top navigation, separate accessible page) — source, age,
+  coverage, reuse terms and limits for observations; a bridge and rain road
+  access stress test; public CBS neighborhood totals; and a second signal
+  comparison that gives all three programs the same seeded warmup. It reports
+  held-out NDW flow error and labels the model unvalidated when that error is
+  high. The bridge stress test can also be run through the traffic simulation
+  against an all-roads-open baseline (same seeds, baseline spread shown as
+  noise). A **published model check** scores the simulation against weeks of
+  archived NDW readings — see *Model check* below. JSON outputs and methods are documented in
+  `public/docs/intelligence-api.html`.
+- **TRANSIT** (dock) — how the network is running, line by line: vehicles out,
+  median running delay over that line's own reporting trips, its worst trip,
+  and the sample behind both. The aggregate neither the map nor a departure
+  board can give you. Three states, and only one of them is a claim about
+  punctuality: **measured** (trips reported a delay), **running** (vehicles
+  out, nothing reporting a delay yet) and **not reporting** (the timetable
+  lists services and nothing is reporting at all). At 05:30 every rail line in
+  the city is the last of those — a rollup that averaged the zeroes would have
+  called that a perfect network. Defaults to the exceptions, because at rush
+  hour sixty of the eighty-four lines are running to time and those are the
+  rows nobody needs to read. Needs no simulation, so it works on a phone.
+- Dock: unit list, transit health, live statistics, district performance table,
+  coverage overview, message log
+- **Keyboard**: `/` search · `1`/`2`/`3` mode · `L` layers · `?` the list ·
+  `Esc` close or release. Focus is visible throughout, and
+  `prefers-reduced-motion` turns camera flights into cuts.
+- **Works offline.** A service worker holds the 27 MB of city binaries past the
+  ten minutes GitHub Pages allows, so a second visit is instant and the map
+  opens with no network at all. It never caches `live.json` (a measurement of
+  now) or `meta.json` (the version signal, which is how it knows to drop a
+  stale city). `?nosw=1` unregisters it and clears its caches.
+
+**Three maps, one city** — a mode switch in the header decides what you are
+looking at, because these are different questions and one map cannot answer
+all three honestly:
+
+- **LIVE** — only what was measured. Real transit vehicles, sensor-measured
+  congestion, real incidents and bridge openings. It deliberately does *not*
+  draw synthetic traffic: the NDW network gives flows at 610 stations, not
+  vehicle positions, so cars nobody observed would be fiction.
+- **SIMULATION** — the model, with the variables unlocked: fleet density,
+  demand curve, signal program, injected incidents.
+- **HISTORY** — the archive, scrubbed. Congestion over the last day, week or
+  month with incident ticks, reading out the moment you land on. The bar says
+  how much of the window the archive actually holds, and turns amber under two
+  thirds of it: the record starts when the refresh loop started, and a 30-day
+  chart drawn from two days of readings is flat and empty for most of its
+  width — which reads as a quiet city rather than an absent record.
+
+**Live city feeds** (refreshed every 2 minutes by `.github/workflows/deploy.yml`
+onto the `live` branch; the app polls it and falls back to the committed
+snapshot — the header chip shows the snapshot's real age, and once it goes
+stale the app says so instead of presenting old traffic as current):
+
+- **NDW live traffic** (opendata.ndw.nu, minutely): real flows for the 610
+  matched stations re-feed the calibration loop continuously instead of a
+  one-off snapshot, and the sensor-net layer colors each station by measured
+  speed against its edge's limit — live congestion, green → amber → red
+- **Live incidents** (NDW situation feed): real accidents, obstructions, jams
+  and road closures inside the coverage area render as pulsing markers, and
+  the matched edges slow down (accidents to 35% capacity) or sever (closures)
+  in the sim, with event-log announcements naming the street
+- **Bascule bridge openings** (NDW situation feed): a bridge open for shipping
+  severs its car edges in the sim until it closes — traffic reroutes live
+- **Real transit, with identity** (OVapi GTFS-RT): every tram, metro, bus and
+  Waterbus ferry in the coverage area, carrying its line, trip, the stop it is
+  working toward and whether it is berthed. Click one to follow it; the
+  readout gives the age of its position fix rather than a speed, because
+  OVapi publishes neither speed nor bearing for rail and inventing one would
+  be a fabricated measurement. Heading comes from where a vehicle was actually
+  observed to move.
+- **Departure boards**: click any RET metro or tram station for what is
+  coming, where it is going, in how many minutes and how late it is running.
+  Scheduled time + live running delay, which is the arithmetic a platform
+  display does; rows with no live position say SCHED rather than implying a
+  measurement that does not exist. Grouped by parent station, so Beurs shows
+  all five metro lines rather than one board per platform.
+- **Maas water level** (Rijkswaterstaat, Boompjes tide gauge): the river
+  surface rides the real tide; **weather** (Buienradar Rotterdam): rain slows
+  motorized traffic; **air quality** (Luchtmeetnet, 9 DCMR stations): NO₂/PM2.5
+  as a toggleable station layer
+- `npm run fetch-live` produces the snapshot on demand
+
+**The archive** — every snapshot is folded into a history on the `archive`
+branch by `scripts/archive-live.mjs`, so the platform can answer what the city
+was doing last Tuesday at 08:20:
+
+- `c/YYYY/MM/DD/HH.bin` — coarse: per district plus city scalars (weather,
+  tide, incidents, transit count, air), one record per 5 minutes, ~1 KB an
+  hour, kept indefinitely (~9 MB a year)
+- `f/YYYY/MM/DD/HH.bin` — fine: every NDW station's flow and speed at the same
+  cadence, ~22 KB an hour, pruned to a rolling 45-day window
+- `e/YYYY-MM.json` — incidents and bridge openings, deduped
+- Appends are idempotent, so a re-run over the same snapshot changes nothing
+
+**Why the refresh job looks the way it does.** For most of this repo's life
+the `schedule:` trigger never fired at all — zero `schedule` events in the run
+history, and observed refresh gaps of up to five hours, so "every 5 minutes"
+really meant "whenever someone pressed the button". It now fires reliably from
+`deploy.yml`, and only from there: a second workflow added later with the same
+cron never armed once. Two lessons are baked in as a result.
+
+The job stays in `deploy.yml` because that is the file whose cron demonstrably
+works in this repo. Moving it out stopped the refresh dead.
+
+There is exactly one publisher of `live` and `archive`, and it writes a
+`vercel.json` onto each. Both branches hold data, not an app, so Vercel's git
+integration otherwise builds them on every push and fails — one failed
+deployment every five minutes. When two workflows published `live` and only
+one wrote the guard, each force-push replaced the other's tree and the
+failures came back intermittently. Any future publisher of these branches must
+write that file.
+
+Within a run the job loops rather than fetching once and exiting, so the
+snapshot stays current between sparse firings instead of ageing out.
+
+The cadence is two minutes rather than one because
+`raw.githubusercontent.com` serves the live branch with `cache-control:
+max-age=300`, and a cache-busting query string does not get past it (verified
+— `x-cache: HIT` either way, identical body). Five minutes is a hard floor on
+how fresh this data can reach a browser through this path, so publishing faster buys nothing
+downstream and only doubles the load on NDW and OVapi, who serve these feeds
+for free. The freshness chip is calibrated to that floor: a healthy feed reads
+as a few minutes old, and genuine outages show amber or red. The Intelligence
+page exposes each feed's own observation time; a recent package can contain
+an older river or weather reading. Buienradar's timezone-free Rotterdam station
+clock is converted from Europe/Amsterdam to UTC at collection; the air-quality
+timestamp is the oldest included measurement, not the package time. A separately
+hosted observation service can
+remove the GitHub raw cache delay when a destination and ingest secret are
+configured; see `public/docs/intelligence-api.html`.
+
+**Calibration & validation against official data:**
+
+- **NDW real traffic counts** (opendata.ndw.nu): `npm run fetch-ndw` ingests the national
+  loop-detector network — 1,687 live sites in the coverage area, grouped into 613
+  stations matched onto our edges. The sim counts its own vehicles passing every
+  station and reports live sim-vs-measured flow (normalized via the demand curve);
+  SETUP → Auto-calibrate scales fleet density toward parity and reports the residual
+  as a 1:N representation factor.
+- **UDAP iVRI registry**: all 82 official smart-traffic-light installations in the
+  coverage area match one of our signal clusters (Rotterdam 61/61 ≤ 75 m, median 28 m)
+  — `node scripts/validate-signals.mjs`.
+- **Observed iVRI readiness**: an optional, authenticated bridge can display
+  authorized SPaT states as small upper rings on mapped signal heads. Without
+  provider access it stays empty and says so; the normal bulbs remain simulated.
+- **NWB road register** (PDOK): 94.3% of 70,367 official road segments (89% of km)
+  covered — motorways 98.4% of km; the residual is ferries, rural dike tracks and
+  bbox-edge clipping — `node scripts/validate-roads.mjs`.
+- **Model check** (`public/data/model-validation.json`, shown on the
+  Intelligence page): the engine runs headless at 08:00, 12:30 and 17:00 and is
+  scored against the median of 33 archived weekdays of NDW readings, on a
+  held-out 20% of stations. As of 15 Oct 2026 it does **not** meet the usual
+  calibration bar: GEH < 5 on 7–12% of held-out stations against the 85% TAG
+  M3.1 target, rank correlation 0.2–0.3, speeds 15–17 km/h off. It shows
+  plausible patterns, not flows fit for decisions. Through traffic entering
+  and leaving at the motorway boundary (35% of car trips) lifted the rank
+  correlation from about 0.1; much of the remaining flow error is on the
+  measurement side, where station flows add NDW's per-length-class counts to
+  the all-vehicle total and sum consecutive cross-sections of one road. Regenerate with
+  `git worktree add /tmp/archive origin/archive && npm run validate-model -- --archive /tmp/archive`
+  (about 3 minutes on four cores).
+- **Building heights**: footprints come from OSM's BAG import (the official
+  Dutch buildings register), so geometry is register-accurate. Heights resolve
+  through a source chain — measured **3D BAG** roof heights (TU Delft,
+  BAG × AHN LiDAR, CC BY 4.0; **96.8% of all footprints** in the committed
+  data; `npm run fetch-heights` + `npm run apply-heights` regenerates) → OSM
+  `height` / `building:levels` tags and `building:part` shafts → published
+  heights for 17 named towers (`scripts/landmark-heights.json`, verified
+  against the skyline literature) → a deterministic 5–11 m low-rise estimate
+  for the remaining unmatched fabric. Podium+tower pands whose area-weighted
+  percentile reads the podium are verified against 3D BAG roof planes before
+  taking the tower height, which also rejects crane/pylon returns in the point
+  cloud. `npm run audit-buildings` reports the distribution and checks every
+  named tower against its published height (currently 17/17 within ±7 m; 28
+  prisms over 100 m vs ~27 such buildings in the literature).
 
 ## Run locally
 
 ```bash
 npm install
 npm run dev
+npm test        # vitest: binary parsers, snapshot migrations, archive
+                # patterns, the search matcher, the format helpers
 ```
 
-Open the URL Vite prints (default `http://127.0.0.1:5173/`) for Rotterdam, or append
-`grid/` for the playground, or `lab/` for replay and scenarios. Drag to orbit, scroll to zoom, right-drag to pan. The
-control panel on the right applies settings while the simulation runs. The development
-server listens on localhost by default.
+`npm run build` runs the workflow guards, `tsc --noEmit`, the test suite and
+then Vite, so CI cannot publish a build whose parsers or migrations have
+drifted.
 
-Run the regression checks and production build with:
+Open `http://localhost:5173`. Left-drag pans, right-drag orbits, scroll zooms toward the
+cursor. The UI distinguishes observations from simulation and static planning
+data. The layout is responsive: on phones the
+console collapses to a full-bleed map with compact chrome, and the canvas takes
+standard touch gestures (one-finger pan, two-finger pinch/rotate).
+
+The Intelligence page is at `/intelligence/` and works without the 3D renderer.
+The Pages build tries to refresh released CBS neighborhood totals from the official
+2025 workbook. If CBS is unreachable, it uses the dated, attributed snapshot
+of 87 neighborhoods in the repository, sourced from BuurtZicht's public JSON
+profiles of CBS table 86165NED. Missing measures remain null. To refresh
+locally from CBS, install `openpyxl==3.1.5` and run
+`npm run fetch-cbs-neighborhoods`. The BuurtZicht snapshot can be refreshed with
+`python3 scripts/fetch-buurtzicht-neighborhoods.py`. Regenerate the
+sampled road-water screen with Pillow and `npm run build-exposure` after
+rebuilding the graph or resilience raster.
+
+## Rebuild the city data
+
+The coverage bbox, projection origin and districts come from
+`city.config.json`; see `docs/new-city.md` for building another city.
+
+Processed binaries in `public/data/` are committed. To regenerate from OpenStreetMap:
 
 ```bash
-npm test
-python3 -m unittest discover -s tests -p 'test_*.py'
-npm run build
+npm run fetch-data      # tiled Overpass downloads → data/raw/ (~280 MB, resumable)
+npm run fetch-heights   # 3D BAG measured heights → data/heights-3dbag.json (optional)
+npm run build-data      # → public/data/*.bin + meta.json (~17 MB)
+npm run fetch-roofs     # 3D BAG LoD2.2 roof geometry → public/data/roofs/ (28 MB;
+                        #   downloads ~600 MB of CityJSON, cached + resumable)
+npm run fetch-resilience # Rotterdam GIS modelled cooling, water depth and noise
+                         #   → public/data/resilience/ (~1.3 MB); rerun when
+                         #   the municipality republishes its planning maps
+npm run fetch-stops     # RET stop names/coords → data/gtfs-stops.json (byte-range
+                        #   reads, ~1.5 MB of a 215 MB zip)
+npm run fetch-timetable # RET metro/tram schedule → data/ret-timetable.bin (3.3 MB;
+                        #   streams 1 GB of stop_times, filtered on the fly).
+                        #   Rerun when RET republishes — a few times a year.
 ```
 
-## Rotterdam data layers
-
-The `/v03/` page distinguishes **simulation** from **observations**. Its layer panel
-shows each source, observation or snapshot time, and geographic scope. Public data is
-display-only; it does not change simulated vehicle demand, traffic-light states, or
-model performance metrics.
-
-| Layer | Source | Scope and cadence |
-| --- | --- | --- |
-| 3D buildings | [3DBAG LoD1.2](https://docs.3dbag.nl/nl/delivery/webservices/) and [PDOK BAG](https://api.pdok.nl/kadaster/bag/ogc/v2?f=html&lang=en) | This tile; 3DBAG's measured roof height above local ground is joined to BAG construction year where possible. OSM building footprints remain a fallback if this feed is unavailable. © 3DBAG door tudelft3d en 3DGI. |
-| Transit stops | Bundled [OpenStreetMap](https://www.openstreetmap.org/copyright) extract | This tile; mapped stop locations, with no live departures. |
-| Water depth, noise, cooling access | [Rotterdam DGO GIS](https://diensten.rotterdam.nl/arcgis/rest/services/SO_IBURO/DGO_data/MapServer) | This tile; modelled risk and accessibility, not current flood, noise, or temperature readings. The cooling surface samples source classes on a 28×20 grid. |
-| Street trees | [Rotterdam tree inventory](https://diensten.rotterdam.nl/arcgis/rest/services/SB_Infra/Bomen/MapServer) | This tile; model height follows the inventory's height band when available. |
-| Traffic speed and flow, planned disruptions | [NDW open data](https://opendata.ndw.nu/) | Sensor readings and active/upcoming records inside this tile. These are periodically refreshed snapshots, not a live stream. Old readings are hidden. |
-| Air quality | [Luchtmeetnet station NL10418](https://www.luchtmeetnet.nl/meetpunten?component=NO2&station=NL10418) | Nearby station; preliminary NO₂, PM₂.₅ and PM₁₀ readings. Not a tile-wide estimate. |
-| Water level | [Rijkswaterstaat water data](https://rijkswaterstaatdata.nl/waterdata/) | Nearby stations only when a valid recent reading exists. The current feed has no valid recent value for this area. |
-| Housing energy | [CBS table 86333NED](https://www.cbs.nl/nl-nl/cijfers/detail/86333NED) | Rotterdam municipality annual averages; not neighborhood or building consumption. |
-
-The static site reads `public/data/rotterdam-snapshot.json`. Refresh it locally with
-`python3 scripts/update_public_data.py`; the Pages workflow refreshes it every 30
-minutes before building. If a source is unavailable, the updater retains the previous
-section and the page marks observations stale using their actual timestamps. The
-public-data updater needs no API secrets. The workflow validates snapshot health and
-fails a build if the traffic snapshot is over four hours old, detector observations
-are over two hours old, or 3DBAG buildings are missing.
-`python3 scripts/update_history.py` retains up to seven days of genuine NDW
-snapshots. The Pages workflow restores the latest same-branch history artifact and
-retains each refreshed file for 14 days, before later build checks. Cache restore is
-only a migration fallback. Extended outages can still leave gaps; replay marks long
-gaps rather than drawing a continuous observation line. The bundled snapshot also
-ages outside scheduled deployment.
-
-## Scenario lab and calibration limits
-
-Open `/lab/` to replay one detector's retained speed and flow observations. You can
-import a session-only JSON file with a `readings` array, or a simple CSV with columns
-`id,name,lat,lon,observedAt,speedKmh,vehiclesPerHour` (up to 1 MB or 3,000 rows).
-Choose a road section in the explorer, inspect its detector coverage and freshness,
-then select **Test this section in the lab**. This transfers the exact edited road
-network in the same browser session, avoiding another 8.3 MB map download. A direct
-lab visit loads the bundled OSM tile and saved browser road edits. Sections without
-matched observations allow model comparisons but cannot fit demand; missing road
-IDs never silently switch to another corridor.
-
-The pilot demand fit tests seven demand settings against speed from the nearest road
-within 40 m. It leaves demand unchanged when the best model is more than 5 km/h from
-the measured training speed. At least six distinct observation times enable a later
-chronological holdout check. NDW does not expose direction for the two detectors in
-this tile, so measured flow cannot be fairly compared with the model's two-direction
-corridor flow. Current bundled history is short; an adequate history must accumulate
-through scheduled builds or be imported. One corridor cannot establish citywide
-calibration.
-
-Scenario comparison runs each setting with the same three random seeds, a 60-second
-warmup, and a 300-second measurement window. It shows means and run-to-run ranges for
-throughput, travel, wait, queue, demand served, and matched-corridor estimates. The
-export includes settings, browser network overrides, observation samples, and individual runs. These are model outcomes, not a
-traffic forecast; use them for exploratory comparisons until route choice, detector
-direction, and more corridors have been validated.
-
-After a comparison, enter a report name and select **Save report**. Up to three
-named reports persist in this browser; saving an existing name replaces it. Export
-JSON for a portable copy, then use **Open report JSON** in another session. Reports
-embed the road graph, selected observations, origin, signal settings, seeds, model
-version, results and SHA-256 dataset fingerprints. Reopening restores those inputs;
-a different model version permits viewing saved results but disables rerunning.
-Saved reports can open even when the bundled map or a corridor handoff fails to load.
-Storage failures leave earlier reports intact and show an error. These reports are
-local browser files, with no account-based synchronization.
-
-Live iVRI traffic-light states, real-time public-transport departures, and official
-[KNMI weather feeds](https://developer.dataplatform.knmi.nl/edr-api) still require
-provider access or credentials. No synthetic value is shown as an observation.
-
-## Deploy
-
-Pushes to `main` publish to **GitHub Pages**; the active development branch runs
-the same build and checks without publishing. The schedule rebuilds the default
-branch every 30 minutes. The workflow is in `.github/workflows/deploy.yml`. To enable:
-
-1. In the GitHub repo: **Settings → Pages → Build and deployment → Source: GitHub Actions**.
-2. Push. The site will appear at `https://<your-user>.github.io/Rotterdam-Digital-Twin/`.
-
-GitHub Pages is free for public repositories.
-
-## Live traffic light observations
-
-The Rotterdam page supports a separate observed-light overlay. The **lower bulb** and
-all cars, phase logic, and metrics remain simulated; a **smaller upper bulb** appears
-only for a mapped observation no older than 15 seconds. The HUD shows feed status,
-source, mapped count, and update age. With no feed configured it says “Not configured”.
-
-The browser reads JSON from `VITE_LIVE_SIGNALS_URL`. Put the full URL in an ignored
-`.env.local` file, then rebuild the site. Never put provider credentials in a `VITE_`
-variable: these values are included in the public browser bundle. For GitHub Pages,
-set the repository variable `LIVE_SIGNALS_URL` to the HTTPS bridge URL; the deploy
-workflow passes it to the build.
-
-`server/live-signals.mjs` is a minimal Node bridge for an authorized upstream adapter.
-It accepts already decoded and **map-matched** observations via authenticated
-`POST /api/signals` and serves fresh readings via `GET /api/signals`. Start it with a
-random secret of at least 32 characters in `LIVE_SIGNALS_INGEST_TOKEN`. It binds to
-`127.0.0.1:8787` by default; place it behind HTTPS for a deployed site. Reads are
-disabled by default. After permission to display the provider data publicly is
-confirmed, set `LIVE_SIGNALS_PUBLIC_READ=true` and
-`LIVE_SIGNALS_READ_ORIGIN=https://<your-user>.github.io` (the exact site origin).
-Set `LIVE_SIGNALS_HOST` and `LIVE_SIGNALS_PORT` if your deployment requires them.
-Run the bridge with `npm run start:live-signals`.
-
-The adapter posts this JSON shape, using actual UTC observation times:
-
-```json
-{
-  "source": "approved-provider-name",
-  "updatedAt": "2026-09-24T12:00:00.000Z",
-  "signals": [
-    { "edgeId": "osm-inbound-edge-id", "state": "red", "observedAt": "2026-09-24T12:00:00.000Z" }
-  ]
-}
-```
-
-`edgeId` must identify the matching inbound edge in this app's OSM network. A provider's
-SPaT signal group ID is **not** an OSM edge ID. An upstream connector must obtain the
-authorized SPaT and MAP feeds, match each signal group to an inbound edge, and verify
-the mapping against the real intersection before posting. This repo contains no UDAP
-credentials or provider connector because access and interface details depend on the
-approved data agreement. If turn lanes on one inbound edge have different signal
-states, omit that edge until it can be represented per lane. An OSM signal tag alone
-does not provide live state.
-
-For access, request read-only SPaT and MAP data covering the bundled OSM area
-(`51.914256–51.919576° N, 4.480512–4.492979° E`) from [NDW](https://www.ndw.nu/service/contact).
-Ask about iVRI/UDAP service-provider onboarding, certification or research-partner
-options, coverage, test credentials, and permission to display current states on a
-public digital twin. [CROW's UDAP interface specification](https://kennisbank.crow.nl/public/gastgebruiker/IVRI/iVRI_specificaties/16_IDD_UDAP-FI/113953)
-defines the SPaT/MAP route; [its test process](https://www.crow.nl/Onderwerpen/landelijke-mobiliteitsstandaarden/landelijke-ivri-standaarden/testbed-en-testproces/)
-describes certification requirements. These permissions and credentials must be
-obtained from the data owner; the integration does not confer access by itself.
-[Monotch's UDAP listener onboarding guide](https://monotch.freshdesk.com/support/solutions/articles/6000282921-technical-support-page-for-csp-isp-listener-integration-on-udap)
-also gives a participation route via `info@talking-traffic.com`; it asks for an
-organization, named contact, email address, and phone number. That guide is for an
-emergency-vehicle listener use case, so confirm the SPaT/MAP permissions separately.
+To upgrade heights on the committed binaries without a full rebuild:
+`npm run fetch-heights && npm run apply-heights` (patches
+`public/data/buildings.bin` in place), then `npm run audit-buildings`.
 
 ## Architecture
 
 ```
+scripts/
+  fetch-osm.mjs      tiled Overpass fetch (roads, signals, buildings + parts, water, rail)
+  fetch-heights.mjs  3D BAG WFS fetch → measured roof heights per building
+  fetch-lod2.mjs     3D BAG CityJSON fetch → true LoD2.2 roof tiles (public/data/roofs/)
+  fetch-resilience.mjs Rotterdam GIS exports → citywide modelled risk rasters
+  fetch-live.mjs     live snapshot: NDW traffic + bridges, OVapi GTFS-RT vehicles
+                     and departure boards, RWS water, Buienradar weather,
+                     Luchtmeetnet air → public/data/live/live.json
+  fetch-gtfs-stops.mjs      stop names/coords via byte-range reads into the
+                            215 MB national GTFS → data/gtfs-stops.json
+  fetch-gtfs-timetable.mjs  RET metro/tram schedule, streaming 1 GB of
+                            stop_times → data/ret-timetable.bin (3.3 MB)
+  archive-live.mjs   folds each snapshot into the two-tier history archive
+  apply-heights.mjs  patch heights into buildings.bin without a rebuild
+  audit-buildings.mjs  height distribution + landmark verification report
+  lib-heights.mjs    shared projection/RD conversion, matching, landmark logic
+  build-data.mjs     projection, graph build, signal clustering, SCC, triangulation,
+                     quantized binary packing
 src/
-  sim/        # rendering-free simulation engine
-    network.ts    # grid graph builder
-    types.ts      # node / edge types
-    trafficLight.ts # fixed-time and actuated controllers
-    vehicle.ts    # IDM car-following
-    spawner.ts    # Poisson arrivals per entry
-    metrics.ts    # throughput / wait / queue and fairness metrics
-    world.ts      # ties it together, owns step()
-  render/     # Three.js — reads sim state, never writes
-    scene.ts        # camera, lights, ground
-    network.ts      # roads + intersection pads
-    lights.ts       # bulb spheres + poles
-    vehicles.ts     # InstancedMesh of cars
-  ui/
-    controls.ts     # lil-gui panel
-  v03/        # OSM adapter and browser network editor
-  main.ts     # grid entry point + render loop
+  data/loader.ts     binary parsers (shared by main thread + worker)
+  data/live.ts       live snapshot polling, freshness and staleness gating
+  data/archive.ts    historical archive reader for the history scrubber
+  sim/worker.ts      traffic engine: signals, IDM, A*, demand, incidents, metrics
+  sim/protocol.ts    typed worker messages
+  render/scene.ts    camera, MapControls, scale presets, fog
+  render/city.ts     road ribbons + line overlay, water shader, building extrusion
+  render/dynamic.ts  signal points, instanced vehicles, congestion lines
+  render/drone.ts    wireframe drone viewer (unit card)
+  render/resilience.ts  lazy GIS risk overlays, kept separate from live conditions
+  ui/chrome.ts       DOM chrome (header, rail, cards, dock, boot)
+  ui/app.ts          application controller: pages, units, telemetry, events
+  ui/search.ts       the place index and its matcher (pure, no DOM)
+  data/transit-health.ts  per-line rollup of the live fleet and boards (pure)
+  data/sw-register.ts  service-worker registration, data fingerprint, ?nosw=1
+  main.ts            boot sequence
+public/
+  sw.js              offline cache: the city binaries and the app shell
 ```
 
-The sim engine is decoupled from rendering. `src/v03/osm.ts` converts the included OSM
-extract into the same network model; `src/v03/editor.ts` and `overrides.ts` apply local edits.
+Tests sit beside what they cover (`*.test.ts`) and run without a DOM.
 
-## Model limits
+Deploys to GitHub Pages via `.github/workflows/deploy.yml` (pushes to `main`).
 
-This is a traffic simulation, not a calibrated model of Rotterdam. The OSM adapter uses
-simple signal phases and route selection, and does not model pedestrians or real-time
-traffic observations in its simulation logic. Live observations, when connected, are
-display only. Editor imports are limited to 1 MB and validated before applying.
+Authorized live traffic-light states can be connected through the optional
+bridge in `server/live-signals.mjs`; see [live iVRI access](docs/ivri-access.md).
+Provider credentials and public-display permission are not included.
+
+Map data © OpenStreetMap contributors, ODbL.

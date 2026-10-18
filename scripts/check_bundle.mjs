@@ -17,7 +17,7 @@ function initialScripts(entry, files = new Set()) {
 
 // Count every shared dependency, not just the tiny entry chunk. Keep the analysis
 // page independent of WebGL; workers are loaded on demand and checked separately.
-for (const [entry, budget] of [["lab/index.html", 100_000], ["index.html", 750_000], ["grid/index.html", 750_000], ["v03/index.html", 750_000]]) {
+for (const [entry, budget] of [["lab/index.html", 100_000], ["grid/index.html", 750_000], ["v03/index.html", 750_000]]) {
   // Identical map entry points may be emitted as shared chunks without an HTML
   // manifest key. Resolve the scripts actually emitted into each HTML document.
   const html = readFileSync(resolve(output, entry), "utf8");

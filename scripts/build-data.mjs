@@ -1,0 +1,1068 @@
+#!/usr/bin/env node
+// Convert raw Overpass JSON (data/raw/) into compact binaries in public/data/.
+//
+//   node scripts/build-data.mjs
+//
+// Outputs:
+//   meta.json      bounds, origin, districts, inventory counts
+//   roads.bin      display polylines (all road classes, incl. service/pedestrian)
+//   graph.bin      routable graph: nodes, edges w/ geometry, signals, clusters
+//   water.bin      triangulated water polygons
+//   rail.bin       rail/tram/metro polylines
+//   buildings.bin  tiled quantized extrusion footprints (pre-triangulated roofs)
+
+import { readFileSync, writeFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+import earcut from "earcut";
+import { ORIGIN, px, py, DISTRICTS } from "./lib/city.mjs";
+import { loadMeasuredGrid, loadLandmarks, applyLandmarks, heightForFootprint, PointGrid, clampH } from "./lib-heights.mjs";
+
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+const RAW = join(ROOT, "data", "raw");
+const OUT = join(ROOT, "public", "data");
+mkdirSync(OUT, { recursive: true });
+
+// ---------------- projection ----------------
+// projection and district seeds: city.config.json via scripts/lib/city.mjs
+
+// ---------------- road classes ----------------
+const CLASS = {
+  motorway: 0, motorway_link: 0,
+  trunk: 1, trunk_link: 1,
+  primary: 2, primary_link: 2,
+  secondary: 3, secondary_link: 3,
+  tertiary: 4, tertiary_link: 4,
+  residential: 5, unclassified: 5, living_street: 5, busway: 5,
+  service: 6,
+  pedestrian: 7,
+  cycleway: 8,
+  footway: 9, path: 9,
+};
+const DEFAULT_SPEED = [90, 80, 50, 50, 50, 30, 15, 8, 20, 5];
+
+// travel-mode mask bits: 1 car, 2 bike, 4 walk
+const MODE_CAR = 1, MODE_BIKE = 2, MODE_WALK = 4;
+function modeMaskOf(cls, tags) {
+  let m = 0;
+  if (cls <= 5) {
+    const access = tags?.access;
+    const noMotor = access === "no" || access === "private" || tags?.motor_vehicle === "no";
+    if (!noMotor) m |= MODE_CAR;
+  }
+  // bikes: everything from secondary down + dedicated cycleways; NL bans them
+  // from motorway/trunk/primary. Paths only when tagged for bicycles.
+  if (cls >= 3 && cls <= 8) {
+    if (tags?.bicycle !== "no" && !(cls === 7 && tags?.bicycle === undefined)) m |= MODE_BIKE;
+  } else if (cls === 9 && (tags?.bicycle === "yes" || tags?.bicycle === "designated")) {
+    m |= MODE_BIKE;
+  }
+  // walking: everything from secondary down — urban collectors carry sidewalks
+  // implicitly, and cycle paths double as footpaths where no sidewalk exists.
+  // Only motorway/trunk/primary are out.
+  if (cls >= 3 && tags?.foot !== "no") m |= MODE_WALK;
+  return m;
+}
+
+// district seeds come from city.config.json (see scripts/lib/city.mjs)
+
+function nearestDistrict(x, y) {
+  let best = 0, bd = Infinity;
+  for (let i = 0; i < DISTRICTS.length; i++) {
+    const dx = DISTRICTS[i].x - x, dy = DISTRICTS[i].y - y;
+    const d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = i; }
+  }
+  return best;
+}
+
+// ---------------- binary writer ----------------
+class Writer {
+  constructor() { this.chunks = []; this.len = 0; this.buf = Buffer.alloc(1 << 20); this.pos = 0; }
+  _need(n) {
+    if (this.pos + n > this.buf.length) {
+      this.chunks.push(this.buf.subarray(0, this.pos));
+      this.len += this.pos;
+      this.buf = Buffer.alloc(Math.max(1 << 20, n));
+      this.pos = 0;
+    }
+  }
+  u8(v) { this._need(1); this.buf.writeUInt8(v & 0xff, this.pos); this.pos += 1; }
+  u16(v) { this._need(2); this.buf.writeUInt16LE(v & 0xffff, this.pos); this.pos += 2; }
+  i16(v) { this._need(2); this.buf.writeInt16LE(Math.max(-32768, Math.min(32767, v | 0)), this.pos); this.pos += 2; }
+  u32(v) { this._need(4); this.buf.writeUInt32LE(v >>> 0, this.pos); this.pos += 4; }
+  f32(v) { this._need(4); this.buf.writeFloatLE(v, this.pos); this.pos += 4; }
+  done() { this.chunks.push(this.buf.subarray(0, this.pos)); this.len += this.pos; return Buffer.concat(this.chunks, this.len); }
+}
+
+const loadJSON = (name) => JSON.parse(readFileSync(join(RAW, name), "utf8"));
+
+// ---------------- helpers ----------------
+const keyOf = (lat, lon) => `${Math.round(lat * 1e7)},${Math.round(lon * 1e7)}`;
+
+/** Stitch relation member ways (with .geometry) into closed rings. */
+function assembleRings(members) {
+  const segs = members
+    .filter((m) => m.type === "way" && Array.isArray(m.geometry) && m.geometry.length >= 2)
+    .map((m) => m.geometry.map((g) => [g.lat, g.lon]));
+  const rings = [];
+  const used = new Array(segs.length).fill(false);
+  for (let i = 0; i < segs.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    let ring = segs[i].slice();
+    let guard = 0;
+    while (guard++ < segs.length + 2) {
+      const endK = keyOf(ring[ring.length - 1][0], ring[ring.length - 1][1]);
+      const startK = keyOf(ring[0][0], ring[0][1]);
+      if (endK === startK && ring.length > 3) break; // closed
+      let extended = false;
+      for (let j = 0; j < segs.length; j++) {
+        if (used[j]) continue;
+        const s = segs[j];
+        const sStart = keyOf(s[0][0], s[0][1]);
+        const sEnd = keyOf(s[s.length - 1][0], s[s.length - 1][1]);
+        if (sStart === endK) { ring = ring.concat(s.slice(1)); used[j] = true; extended = true; break; }
+        if (sEnd === endK) { ring = ring.concat(s.slice(0, -1).reverse()); used[j] = true; extended = true; break; }
+        if (sEnd === startK) { ring = s.slice(0, -1).concat(ring); used[j] = true; extended = true; break; }
+        if (sStart === startK) { ring = s.slice(1).reverse().concat(ring); used[j] = true; extended = true; break; }
+      }
+      if (!extended) break;
+    }
+    const closed = keyOf(ring[0][0], ring[0][1]) === keyOf(ring[ring.length - 1][0], ring[ring.length - 1][1]);
+    if (closed && ring.length > 3) rings.push(ring.slice(0, -1));
+  }
+  return rings;
+}
+
+function ringAreaXY(pts) {
+  let a = 0;
+  for (let i = 0, n = pts.length; i < n; i++) {
+    const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % n];
+    a += x1 * y2 - x2 * y1;
+  }
+  return a / 2;
+}
+
+function pointInRing(x, y, ring) {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i], [xj, yj] = ring[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
+/** Ramer–Douglas–Peucker in XY meters. */
+function simplify(pts, eps) {
+  if (pts.length <= 4) return pts;
+  const keep = new Array(pts.length).fill(false);
+  keep[0] = keep[pts.length - 1] = true;
+  const stack = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop();
+    if (b - a < 2) continue;
+    const [ax, ay] = pts[a], [bx, by] = pts[b];
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1e-12;
+    let maxD = -1, maxI = -1;
+    for (let i = a + 1; i < b; i++) {
+      const [x, y] = pts[i];
+      const t = Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / len2));
+      const ex = ax + t * dx - x, ey = ay + t * dy - y;
+      const d = ex * ex + ey * ey;
+      if (d > maxD) { maxD = d; maxI = i; }
+    }
+    if (maxD > eps * eps) { keep[maxI] = true; stack.push([a, maxI], [maxI, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+
+const dist = (x1, y1, x2, y2) => Math.hypot(x2 - x1, y2 - y1);
+
+// ============================================================
+// 1. ROADS + GRAPH + SIGNALS
+// ============================================================
+console.log("── roads & graph ──");
+
+const roadWays = new Map();
+for (const f of readdirSync(RAW).filter((f) => /^(roads|paths)-\d+-\d+\.json$/.test(f))) {
+  for (const el of loadJSON(f).elements) {
+    if (el.type === "way" && el.geometry?.length >= 2 && !roadWays.has(el.id)) roadWays.set(el.id, el);
+  }
+}
+console.log(`road + path ways: ${roadWays.size}`);
+
+// Signals: OSM node id -> tags
+const signalNodes = new Map();
+for (const el of loadJSON("signals.json").elements) {
+  if (el.type === "node") signalNodes.set(el.id, el);
+}
+console.log(`signal nodes (raw inventory): ${signalNodes.size}`);
+
+// --- display polylines (all classes) + total km ---
+const roadsW = new Writer();
+roadsW.u32(0x524d5452); // 'RTMR'
+let displayCount = 0;
+let totalKm = 0;
+let pathKm = 0;
+const roadsBody = new Writer();
+for (const way of roadWays.values()) {
+  const cls = CLASS[way.tags?.highway];
+  if (cls === undefined) continue;
+  if (way.tags?.area === "yes") continue;
+  let pts = way.geometry.map((g) => [px(g.lon), py(g.lat)]);
+  pts = simplify(pts, 0.4);
+  if (pts.length < 2) continue;
+  let flags = 0;
+  if (way.tags?.bridge && way.tags.bridge !== "no") flags |= 1;
+  if (way.tags?.tunnel && way.tags.tunnel !== "no" || way.tags?.covered === "yes") flags |= 2;
+  roadsBody.u8(cls);
+  roadsBody.u8(flags);
+  roadsBody.u16(Math.min(65535, pts.length));
+  for (const [x, y] of pts.slice(0, 65535)) { roadsBody.f32(x); roadsBody.f32(y); }
+  displayCount++;
+  for (let i = 1; i < pts.length; i++) {
+    const d = dist(...pts[i - 1], ...pts[i]) / 1000;
+    if (cls >= 8) pathKm += d;
+    else totalKm += d;
+  }
+}
+roadsW.u32(displayCount);
+const roadsBin = Buffer.concat([roadsW.done(), roadsBody.done()]);
+writeFileSync(join(OUT, "roads.bin"), roadsBin);
+console.log(`roads.bin: ${displayCount} polylines, ${totalKm.toFixed(0)} road km + ${pathKm.toFixed(0)} path km, ${(roadsBin.length / 1e6).toFixed(1)} MB`);
+
+// --- routable multimodal graph ---
+const simWays = [...roadWays.values()].filter((w) => {
+  const c = CLASS[w.tags?.highway];
+  if (c === undefined) return false;
+  if (w.tags?.area === "yes") return false;
+  return modeMaskOf(c, w.tags) !== 0;
+});
+
+// count node usage to find junctions
+const nodeUse = new Map();
+for (const w of simWays) {
+  const ids = w.nodes;
+  for (let i = 0; i < ids.length; i++) {
+    nodeUse.set(ids[i], (nodeUse.get(ids[i]) ?? 0) + (i === 0 || i === ids.length - 1 ? 2 : 1));
+  }
+}
+
+// graph nodes: junctions, endpoints, and any signal node on the network
+const nodeIdx = new Map(); // osm id -> graph index
+const nodesXY = [];
+function ensureNode(osmId, x, y) {
+  let idx = nodeIdx.get(osmId);
+  if (idx === undefined) {
+    idx = nodesXY.length / 2;
+    nodeIdx.set(osmId, idx);
+    nodesXY.push(x, y);
+  }
+  return idx;
+}
+
+function parseSpeed(tags, cls) {
+  const raw = tags?.maxspeed;
+  if (raw) {
+    const m = String(raw).match(/(\d+)/);
+    if (m) return Math.min(130, Math.max(10, parseInt(m[1], 10)));
+  }
+  return DEFAULT_SPEED[cls];
+}
+
+const edges = []; // {a,b,cls,modeMask,oneway,speed,len,pts:[[x,y]..],district,tunnel,bridge}
+for (const w of simWays) {
+  const ids = w.nodes;
+  const geo = w.geometry;
+  if (!ids || ids.length !== geo.length) continue;
+  const cls = CLASS[w.tags.highway];
+  const modeMask = modeMaskOf(cls, w.tags);
+  const rounded = w.tags.junction === "roundabout" || w.tags.junction === "circular";
+  let oneway = w.tags.oneway === "yes" || w.tags.oneway === "1" || w.tags.oneway === "true" || rounded;
+  const reversed = w.tags.oneway === "-1";
+  if (reversed) oneway = true;
+  const speed = parseSpeed(w.tags, cls);
+  const tunnel = (w.tags.tunnel && w.tags.tunnel !== "no") || w.tags.covered === "yes";
+  const bridge = w.tags.bridge && w.tags.bridge !== "no";
+
+  const wayName = w.tags.name ?? null;
+
+  // walk the way, splitting at junctions & signal nodes
+  let segIds = [ids[0]];
+  let segPts = [[px(geo[0].lon), py(geo[0].lat)]];
+  for (let i = 1; i < ids.length; i++) {
+    segIds.push(ids[i]);
+    segPts.push([px(geo[i].lon), py(geo[i].lat)]);
+    const isCut = i === ids.length - 1 || (nodeUse.get(ids[i]) ?? 0) > 1 || signalNodes.has(ids[i]);
+    if (isCut) {
+      let pts = simplify(segPts, 0.4);
+      let len = 0;
+      for (let k = 1; k < pts.length; k++) len += dist(...pts[k - 1], ...pts[k]);
+      if (len > 0.5) {
+        if (reversed) { pts = pts.slice().reverse(); }
+        const aId = reversed ? segIds[segIds.length - 1] : segIds[0];
+        const bId = reversed ? segIds[0] : segIds[segIds.length - 1];
+        const a = ensureNode(aId, pts[0][0], pts[0][1]);
+        const b = ensureNode(bId, pts[pts.length - 1][0], pts[pts.length - 1][1]);
+        if (a !== b) {
+          const mid = pts[Math.floor(pts.length / 2)];
+          edges.push({ a, b, cls, modeMask, oneway, speed, len, pts, district: nearestDistrict(mid[0], mid[1]), tunnel, bridge, name: wayName });
+        }
+      }
+      segIds = [ids[i]];
+      segPts = [[px(geo[i].lon), py(geo[i].lat)]];
+    }
+  }
+}
+console.log(`graph: ${nodesXY.length / 2} nodes, ${edges.length} edges`);
+console.log(
+  `edges by mode: car ${edges.filter((e) => e.modeMask & MODE_CAR).length}, bike ${edges.filter((e) => e.modeMask & MODE_BIKE).length}, walk ${edges.filter((e) => e.modeMask & MODE_WALK).length}`
+);
+
+// --- per-mode reachable cores ---
+// cars: largest strongly connected component (oneways matter);
+// bikes/pedestrians: largest weakly connected component of their subgraph.
+var inCore = new Uint8Array(nodesXY.length / 2); // bit0 car, bit1 bike, bit2 walk
+{
+  const N = nodesXY.length / 2;
+  {
+    const outAdj = Array.from({ length: N }, () => []);
+    const inAdj = Array.from({ length: N }, () => []);
+    edges.forEach((e) => {
+      if (!(e.modeMask & MODE_CAR)) return;
+      outAdj[e.a].push(e.b);
+      inAdj[e.b].push(e.a);
+      if (!e.oneway) { outAdj[e.b].push(e.a); inAdj[e.a].push(e.b); }
+    });
+    // Kosaraju (iterative)
+    const order = [];
+    const seen = new Uint8Array(N);
+    for (let s = 0; s < N; s++) {
+      if (seen[s]) continue;
+      const stack = [[s, 0]];
+      seen[s] = 1;
+      while (stack.length) {
+        const top = stack[stack.length - 1];
+        if (top[1] < outAdj[top[0]].length) {
+          const nx = outAdj[top[0]][top[1]++];
+          if (!seen[nx]) { seen[nx] = 1; stack.push([nx, 0]); }
+        } else { order.push(top[0]); stack.pop(); }
+      }
+    }
+    const comp = new Int32Array(N).fill(-1);
+    let nComp = 0;
+    for (let i = order.length - 1; i >= 0; i--) {
+      const s = order[i];
+      if (comp[s] !== -1) continue;
+      const stack = [s];
+      comp[s] = nComp;
+      while (stack.length) {
+        const v = stack.pop();
+        for (const nx of inAdj[v]) if (comp[nx] === -1) { comp[nx] = nComp; stack.push(nx); }
+      }
+      nComp++;
+    }
+    const sizes = new Uint32Array(nComp);
+    for (let i = 0; i < N; i++) sizes[comp[i]]++;
+    let bigComp = 0;
+    for (let c = 1; c < nComp; c++) if (sizes[c] > sizes[bigComp]) bigComp = c;
+    for (let i = 0; i < N; i++) if (comp[i] === bigComp) inCore[i] |= MODE_CAR;
+    console.log(`car SCC: ${sizes[bigComp]} / ${N} nodes`);
+  }
+  for (const [modeBit, label] of [[MODE_BIKE, "bike"], [MODE_WALK, "walk"]]) {
+    const parent = new Int32Array(N);
+    for (let i = 0; i < N; i++) parent[i] = i;
+    const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+    edges.forEach((e) => {
+      if (!(e.modeMask & modeBit)) return;
+      const ra = find(e.a), rb = find(e.b);
+      if (ra !== rb) parent[ra] = rb;
+    });
+    const sizes = new Map();
+    for (let i = 0; i < N; i++) {
+      const r = find(i);
+      sizes.set(r, (sizes.get(r) ?? 0) + 1);
+    }
+    let bigRoot = -1, bigSize = 0;
+    for (const [r, s] of sizes) if (s > bigSize) { bigSize = s; bigRoot = r; }
+    for (let i = 0; i < N; i++) if (find(i) === bigRoot) inCore[i] |= modeBit;
+    console.log(`${label} LCC: ${bigSize} / ${N} nodes`);
+  }
+}
+
+// --- signals on network + clustering ---
+const netSignals = []; // {nodeIdx, x, y, osmId, crossingOnly}
+for (const [osmId, el] of signalNodes) {
+  const gi = nodeIdx.get(osmId);
+  if (gi === undefined) continue;
+  const crossingOnly = el.tags?.highway !== "traffic_signals";
+  netSignals.push({ nodeIdx: gi, x: nodesXY[gi * 2], y: nodesXY[gi * 2 + 1], osmId, crossingOnly });
+}
+console.log(`signals bound to network: ${netSignals.length}`);
+
+// spatial clustering (union-find, 40 m radius)
+{
+  const R = 40;
+  const cell = new Map();
+  const ck = (x, y) => `${Math.floor(x / R)},${Math.floor(y / R)}`;
+  netSignals.forEach((s, i) => {
+    const k = ck(s.x, s.y);
+    if (!cell.has(k)) cell.set(k, []);
+    cell.get(k).push(i);
+  });
+  const parent = netSignals.map((_, i) => i);
+  const find = (i) => { while (parent[i] !== i) { parent[i] = parent[parent[i]]; i = parent[i]; } return i; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+  netSignals.forEach((s, i) => {
+    const cx = Math.floor(s.x / R), cy = Math.floor(s.y / R);
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++) {
+        const lst = cell.get(`${cx + dx},${cy + dy}`);
+        if (!lst) continue;
+        for (const j of lst) if (j > i && dist(s.x, s.y, netSignals[j].x, netSignals[j].y) < R) union(i, j);
+      }
+  });
+  const clusterIdOf = new Map();
+  var clusters = [];
+  netSignals.forEach((s, i) => {
+    const root = find(i);
+    let cid = clusterIdOf.get(root);
+    if (cid === undefined) { cid = clusters.length; clusterIdOf.set(root, cid); clusters.push({ x: 0, y: 0, n: 0, members: [], crossing: true }); }
+    const c = clusters[cid];
+    c.x += s.x; c.y += s.y; c.n++;
+    c.members.push(i);
+    if (!s.crossingOnly) { /* has a real junction signal */ }
+    s.cluster = cid;
+  });
+  clusters.forEach((c) => { c.x /= c.n; c.y /= c.n; });
+  // a cluster is a "junction" if a high-incidence graph node (a real fork)
+  // lies near its centroid — signal stop-lines themselves sit mid-edge.
+  const incidence = new Uint8Array(nodesXY.length / 2);
+  edges.forEach((e) => {
+    incidence[e.a] = Math.min(250, incidence[e.a] + 1);
+    incidence[e.b] = Math.min(250, incidence[e.b] + 1);
+  });
+  const JR = 55;
+  const forkCell = new Map();
+  const fk = (x, y) => `${Math.floor(x / JR)},${Math.floor(y / JR)}`;
+  for (let i = 0; i < incidence.length; i++) {
+    if (incidence[i] < 3) continue;
+    const k = fk(nodesXY[i * 2], nodesXY[i * 2 + 1]);
+    if (!forkCell.has(k)) forkCell.set(k, []);
+    forkCell.get(k).push(i);
+  }
+  clusters.forEach((c) => {
+    const cx = Math.floor(c.x / JR), cy = Math.floor(c.y / JR);
+    let junction = false;
+    for (let dx = -1; dx <= 1 && !junction; dx++)
+      for (let dy = -1; dy <= 1 && !junction; dy++) {
+        const lst = forkCell.get(`${cx + dx},${cy + dy}`);
+        if (!lst) continue;
+        for (const ni of lst)
+          if (dist(c.x, c.y, nodesXY[ni * 2], nodesXY[ni * 2 + 1]) < JR) { junction = true; break; }
+      }
+    c.crossing = !junction;
+  });
+  console.log(`signal clusters: ${clusters.length} (${clusters.filter((c) => !c.crossing).length} junctions, ${clusters.filter((c) => c.crossing).length} crossings)`);
+}
+
+// phase group per signal: bearing of the roadway through the node (mod 180°)
+const nodeBearing = new Map(); // graph node idx -> bearing deg [0,180)
+edges.forEach((e) => {
+  const setB = (ni, x1, y1, x2, y2) => {
+    if (nodeBearing.has(ni)) return;
+    let deg = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+    deg = ((deg % 180) + 180) % 180;
+    nodeBearing.set(ni, deg);
+  };
+  const p = e.pts;
+  setB(e.a, p[0][0], p[0][1], p[1][0], p[1][1]);
+  setB(e.b, p[p.length - 2][0], p[p.length - 2][1], p[p.length - 1][0], p[p.length - 1][1]);
+});
+netSignals.forEach((s) => {
+  const c = clusters[s.cluster];
+  const bearing = nodeBearing.get(s.nodeIdx) ?? 0;
+  if (c.axis === undefined) c.axis = bearing;
+  const diff = Math.abs(bearing - c.axis);
+  s.phase = diff < 45 || diff > 135 ? 0 : 1;
+});
+
+// deterministic per-cluster timing
+function hash32(n) {
+  n = (n ^ 61) ^ (n >>> 16);
+  n = (n + (n << 3)) | 0;
+  n = n ^ (n >>> 4);
+  n = Math.imul(n, 0x27d4eb2d);
+  n = n ^ (n >>> 15);
+  return n >>> 0;
+}
+clusters.forEach((c, i) => {
+  const h = hash32(i * 2654435761);
+  c.cycle = c.crossing ? 60 : 52 + (h % 5) * 7; // 52..80 s
+  c.offset = h % c.cycle;
+});
+
+// aux signals: pedestrian/cycle heads not on the drivable graph — rendered
+// with the phase of the nearest cluster so junctions light up densely.
+const auxSignals = [];
+{
+  const AR = 60;
+  const cell = new Map();
+  clusters.forEach((c, i) => {
+    const k = `${Math.floor(c.x / AR)},${Math.floor(c.y / AR)}`;
+    if (!cell.has(k)) cell.set(k, []);
+    cell.get(k).push(i);
+  });
+  for (const [osmId, el] of signalNodes) {
+    if (nodeIdx.has(osmId)) continue;
+    const x = px(el.lon), y = py(el.lat);
+    const cx = Math.floor(x / AR), cy = Math.floor(y / AR);
+    let best = -1, bd = AR * AR;
+    for (let dx = -1; dx <= 1; dx++)
+      for (let dy = -1; dy <= 1; dy++) {
+        const lst = cell.get(`${cx + dx},${cy + dy}`);
+        if (!lst) continue;
+        for (const ci of lst) {
+          const d = (clusters[ci].x - x) ** 2 + (clusters[ci].y - y) ** 2;
+          if (d < bd) { bd = d; best = ci; }
+        }
+      }
+    auxSignals.push({ x, y, cluster: best });
+  }
+  console.log(`aux signals (off-network heads): ${auxSignals.length}`);
+}
+
+// --- street-name table (dedup) ---
+const FALLBACK_NAMES = ["MOTORWAY SEGMENT", "TRUNK ROAD", "PRIMARY ROAD", "SECONDARY ROAD", "TERTIARY ROAD", "LOCAL STREET", "SERVICE ROAD", "PEDESTRIAN ZONE", "CYCLE TRACK", "FOOTPATH"];
+const nameIdxOf = new Map();
+const nameTable = [];
+for (const e of edges) {
+  const n = e.name ?? FALLBACK_NAMES[e.cls];
+  let idx = nameIdxOf.get(n);
+  if (idx === undefined) {
+    idx = nameTable.length;
+    if (idx < 65534) {
+      nameIdxOf.set(n, idx);
+      nameTable.push(n);
+    } else idx = 0;
+  }
+  e.nameIdx = idx;
+}
+console.log(`street-name table: ${nameTable.length} unique names`);
+
+// --- write graph.bin ---
+{
+  const w = new Writer();
+  w.u32(0x474d5452); // 'RTMG'
+  w.u32(4); // version 4: + per-edge street-name index & name table
+  const N = nodesXY.length / 2;
+  w.u32(N);
+  for (let i = 0; i < N; i++) { w.f32(nodesXY[i * 2]); w.f32(nodesXY[i * 2 + 1]); w.u8(inCore[i]); }
+  w.u32(netSignals.length);
+  netSignals.forEach((s) => {
+    w.u32(s.nodeIdx);
+    w.u16(s.cluster);
+    w.u8(s.phase);
+    w.u8(s.crossingOnly ? 1 : 0);
+  });
+  w.u32(auxSignals.length);
+  auxSignals.forEach((s) => {
+    w.f32(s.x); w.f32(s.y);
+    w.i16(s.cluster);
+    w.u8(hash32(Math.round(s.x * 7 + s.y * 13) >>> 0) % 2); // phase group guess
+    w.u8(0);
+  });
+  w.u32(clusters.length);
+  clusters.forEach((c) => {
+    w.f32(c.x); w.f32(c.y);
+    w.u8(c.crossing ? 1 : 0);
+    w.u8(c.cycle);
+    w.u16(c.offset);
+  });
+  w.u32(edges.length);
+  const geo = new Writer();
+  let geoCount = 0;
+  edges.forEach((e) => {
+    w.u32(e.a);
+    w.u32(e.b);
+    w.u8(e.cls);
+    w.u8((e.oneway ? 1 : 0) | (e.tunnel ? 2 : 0) | (e.bridge ? 4 : 0));
+    w.u16(Math.round(e.speed));
+    w.f32(e.len);
+    w.u32(geoCount);
+    w.u16(e.pts.length);
+    w.u8(e.district);
+    w.u8(e.modeMask);
+    w.u16(e.nameIdx);
+    e.pts.forEach(([x, y]) => { geo.f32(x); geo.f32(y); });
+    geoCount += e.pts.length;
+  });
+  // name table
+  w.u16(nameTable.length);
+  for (const n of nameTable) {
+    const bytes = Buffer.from(String(n).slice(0, 80), "utf8");
+    w.u8(bytes.length);
+    for (const b of bytes) w.u8(b);
+  }
+  w.u32(geoCount);
+  const bin = Buffer.concat([w.done(), geo.done()]);
+  writeFileSync(join(OUT, "graph.bin"), bin);
+  console.log(`graph.bin: ${(bin.length / 1e6).toFixed(1)} MB`);
+}
+
+// ============================================================
+// 2. WATER
+// ============================================================
+console.log("── water ──");
+{
+  const polys = []; // {outer:[[x,y]..], holes:[[[x,y]..]..]}
+  const usedWayIds = new Set();
+  const rels = loadJSON("water-rels.json").elements.filter((e) => e.type === "relation");
+  for (const rel of rels) {
+    for (const m of rel.members ?? []) if (m.type === "way" && m.ref) usedWayIds.add(m.ref);
+    const outers = assembleRings((rel.members ?? []).filter((m) => m.role === "outer" || m.role === ""));
+    const inners = assembleRings((rel.members ?? []).filter((m) => m.role === "inner"));
+    for (const o of outers) {
+      const outer = simplify(o.map(([lat, lon]) => [px(lon), py(lat)]), 1.2);
+      if (outer.length < 3 || Math.abs(ringAreaXY(outer)) < 400) continue;
+      const myHoles = [];
+      for (const h of inners) {
+        const hole = simplify(h.map(([lat, lon]) => [px(lon), py(lat)]), 1.2);
+        if (hole.length >= 3 && pointInRing(hole[0][0], hole[0][1], outer)) myHoles.push(hole);
+      }
+      polys.push({ outer, holes: myHoles });
+    }
+  }
+  const ways = loadJSON("water-ways.json").elements.filter((e) => e.type === "way");
+  for (const way of ways) {
+    if (usedWayIds.has(way.id) || !way.geometry || way.geometry.length < 4) continue;
+    const first = way.geometry[0], last = way.geometry[way.geometry.length - 1];
+    if (keyOf(first.lat, first.lon) !== keyOf(last.lat, last.lon)) continue;
+    const outer = simplify(way.geometry.slice(0, -1).map((g) => [px(g.lon), py(g.lat)]), 1.0);
+    if (outer.length < 3 || Math.abs(ringAreaXY(outer)) < 150) continue;
+    polys.push({ outer, holes: [] });
+  }
+
+  const w = new Writer();
+  w.u32(0x574d5452); // 'RTMW'
+  const verts = [];
+  const tris = [];
+  for (const p of polys) {
+    const flat = [];
+    const holeIdx = [];
+    for (const [x, y] of p.outer) flat.push(x, y);
+    for (const h of p.holes) { holeIdx.push(flat.length / 2); for (const [x, y] of h) flat.push(x, y); }
+    const idx = earcut(flat, holeIdx.length ? holeIdx : null, 2);
+    const base = verts.length / 2;
+    for (let i = 0; i < flat.length; i++) verts.push(flat[i]);
+    for (const t of idx) tris.push(base + t);
+  }
+  w.u32(verts.length / 2);
+  for (const v of verts) w.f32(v);
+  w.u32(tris.length / 3);
+  for (const t of tris) w.u32(t);
+  const bin = w.done();
+  writeFileSync(join(OUT, "water.bin"), bin);
+  console.log(`water.bin: ${polys.length} polys, ${(verts.length / 2 / 1000).toFixed(0)}k verts, ${(bin.length / 1e6).toFixed(1)} MB`);
+  var waterPolyCount = polys.length;
+}
+
+// ============================================================
+// 3. RAIL
+// ============================================================
+console.log("── rail ──");
+{
+  const RAILKIND = { rail: 0, tram: 1, subway: 2, light_rail: 2 };
+  const w = new Writer();
+  w.u32(0x4c4d5452); // 'RTML'
+  const body = new Writer();
+  let count = 0;
+  for (const el of loadJSON("rail.json").elements) {
+    if (el.type !== "way" || !el.geometry) continue;
+    const kind = RAILKIND[el.tags?.railway];
+    if (kind === undefined) continue;
+    if (el.tags?.tunnel && el.tags.tunnel !== "no") continue; // underground: invisible
+    if (el.tags?.service) continue; // yards/sidings clutter
+    const pts = simplify(el.geometry.map((g) => [px(g.lon), py(g.lat)]), 0.6);
+    if (pts.length < 2) continue;
+    body.u8(kind);
+    body.u8(0);
+    body.u16(Math.min(65535, pts.length));
+    for (const [x, y] of pts.slice(0, 65535)) { body.f32(x); body.f32(y); }
+    count++;
+  }
+  w.u32(count);
+  const bin = Buffer.concat([w.done(), body.done()]);
+  writeFileSync(join(OUT, "rail.bin"), bin);
+  console.log(`rail.bin: ${count} ways, ${(bin.length / 1e6).toFixed(1)} MB`);
+  var railCount = count;
+}
+
+// ============================================================
+// 4. BUILDINGS (tiled, quantized, pre-triangulated roofs)
+// ============================================================
+console.log("── buildings ──");
+let buildingCount = 0;
+let partCount = 0;
+{
+  const tileFiles = readdirSync(RAW).filter((f) => /^buildings-\d+-\d+\.json$/.test(f));
+  if (tileFiles.length < 36) {
+    console.warn(`only ${tileFiles.length}/36 building tiles present — rerun once fetch completes`);
+  }
+  const seen = new Set();
+  const items = []; // outlines: {pts, cx, cy, area, h|null, id, measured}
+  const parts = []; // building:part prisms: {pts, cx, cy, area, h}
+
+  const parseNum = (v) => { const m = String(v).match(/([\d.]+)/); return m ? parseFloat(m[1]) : NaN; };
+  /** Explicit OSM height (m) or levels-derived estimate; null when untagged. */
+  function tagHeight(tags) {
+    if (tags?.height) { const h = parseNum(tags.height); if (!Number.isNaN(h)) return h; }
+    if (tags?.["building:levels"]) {
+      const lv = parseNum(tags["building:levels"]);
+      if (!Number.isNaN(lv)) return lv * 3.1 + 1.5;
+    }
+    return null;
+  }
+
+  function toPts(ringLatLon) {
+    let pts = ringLatLon.map(([lat, lon]) => [px(lon), py(lat)]);
+    pts = simplify(pts, 0.55);
+    if (pts.length < 3) return null;
+    if (ringAreaXY(pts) < 0) pts.reverse(); // CCW
+    if (pts.length > 200) pts = simplify(pts, 2.0).slice(0, 200);
+    return pts;
+  }
+  const withCentroid = (pts) => {
+    let cx = 0, cy = 0;
+    for (const [x, y] of pts) { cx += x; cy += y; }
+    return { cx: cx / pts.length, cy: cy / pts.length, area: Math.abs(ringAreaXY(pts)) };
+  };
+
+  /** Bridge structures (pylons, piers, arches, lift towers) carry building
+   *  tags in OSM but are infrastructure, not buildings — extruding their
+   *  outlines drops black slabs on the bridge decks and the river. */
+  const isBridgeStructure = (tags) =>
+    !!tags &&
+    (tags.building === "bridge" ||
+    tags.man_made === "bridge" ||
+    (tags.bridge && tags.bridge !== "no") ||
+    tags["bridge:support"] ||
+    tags["seamark:type"] === "bridge");
+
+  function addFootprint(ringLatLon, tags, id) {
+    if (isBridgeStructure(tags)) return;
+    const pts = toPts(ringLatLon);
+    if (!pts) return;
+    const { cx, cy, area } = withCentroid(pts);
+    if (area < 22) return;
+    items.push({ pts, cx, cy, area, h: tagHeight(tags), id, measured: false });
+  }
+
+  // multipolygon relations first (outer rings only), remember member ways
+  if (existsSync(join(RAW, "buildings-rels.json"))) {
+    for (const rel of loadJSON("buildings-rels.json").elements) {
+      if (rel.type !== "relation") continue;
+      for (const m of rel.members ?? []) if (m.type === "way" && m.ref) seen.add(m.ref);
+      const outers = assembleRings((rel.members ?? []).filter((m) => m.role === "outer" || m.role === ""));
+      for (const o of outers) addFootprint(o, rel.tags, rel.id);
+    }
+  }
+  for (const f of tileFiles) {
+    for (const el of loadJSON(f).elements) {
+      if (el.type !== "way" || seen.has(el.id) || !el.geometry || el.geometry.length < 4) continue;
+      seen.add(el.id);
+      const first = el.geometry[0], last = el.geometry[el.geometry.length - 1];
+      if (keyOf(first.lat, first.lon) !== keyOf(last.lat, last.lon)) continue;
+      addFootprint(el.geometry.slice(0, -1).map((g) => [g.lat, g.lon]), el.tags, el.id);
+    }
+  }
+  buildingCount = items.length;
+
+  // --- building:part prisms: tower shafts, podium setbacks — the real 3D
+  // massing OSM keeps on parts while the outline only describes the block.
+  // Rendered as extra prisms rising through their outline.
+  const partFiles = readdirSync(RAW).filter((f) => /^buildings-parts-\d+-\d+\.json$/.test(f));
+  {
+    const seenParts = new Set();
+    for (const f of partFiles) {
+      for (const el of loadJSON(f).elements) {
+        if (el.type !== "way" || seenParts.has(el.id) || !el.geometry || el.geometry.length < 4) continue;
+        seenParts.add(el.id);
+        const first = el.geometry[0], last = el.geometry[el.geometry.length - 1];
+        if (keyOf(first.lat, first.lon) !== keyOf(last.lat, last.lon)) continue;
+        const h = tagHeight(el.tags);
+        if (h == null || h < 6) continue; // untagged/low parts add nothing at city scale
+        const pts = toPts(el.geometry.slice(0, -1).map((g) => [g.lat, g.lon]));
+        if (!pts) continue;
+        const { cx, cy, area } = withCentroid(pts);
+        if (area < 15) continue;
+        parts.push({ pts, cx, cy, area, h });
+      }
+    }
+    partCount = parts.length;
+    if (partFiles.length) console.log(`building parts (≥6 m, with height): ${partCount}`);
+    else console.warn("no buildings-parts-*.json — tower shafts will be missing; rerun: node scripts/fetch-osm.mjs buildings");
+  }
+  const partGrid = new PointGrid(60);
+  parts.forEach((p, i) => partGrid.add(p.cx, p.cy, i));
+  /** Height of the tallest building:part whose centroid falls inside the outline. */
+  function maxPartIn(it) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const [x, y] of it.pts) {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+    let best = 0;
+    for (const gi of partGrid.query(minX, minY, maxX, maxY)) {
+      const p = parts[partGrid.pts[gi][2]];
+      if (p.h > best && pointInRing(p.cx, p.cy, it.pts)) best = p.h;
+    }
+    return best;
+  }
+
+  // --- measured heights (3D BAG × AHN) are authoritative when fetched ---
+  const measured = loadMeasuredGrid(join(ROOT, "data", "heights-3dbag.json"));
+  let nMeasured = 0;
+  if (measured) {
+    for (const it of items) {
+      const h = heightForFootprint(measured.grid, it.pts, it.cx, it.cy);
+      if (h != null) { it.h = h; it.measured = true; nMeasured++; }
+    }
+    console.log(`measured 3D BAG heights: ${nMeasured}/${items.length} outlines matched (source: ${measured.meta.source})`);
+  } else {
+    console.log("data/heights-3dbag.json not present — run: node scripts/fetch-heights.mjs for measured heights");
+  }
+
+  // --- remaining untagged outlines: deterministic low-rise fallback ---
+  let nFallback = 0;
+  for (const it of items) {
+    if (it.measured || it.h != null) continue;
+    it.h = 5 + (hash32(it.id >>> 0) % 60) / 10; // 5..11 m deterministic
+    nFallback++;
+  }
+  console.log(`outline heights: ${nMeasured} measured, ${items.length - nMeasured - nFallback} tagged, ${nFallback} estimated`);
+
+  // --- published landmark heights: fix famous towers that carry no tag.
+  // Outlines whose massing already comes from a tall part are locked so the
+  // landmark pass never turns a podium block into a slab.
+  for (const it of items) {
+    if (!it.measured && it.area > 400 && maxPartIn(it) >= 40) it.measured = true;
+  }
+  {
+    const cGrid = new PointGrid(120);
+    items.forEach((it, i) => cGrid.add(it.cx, it.cy, i));
+    const lookupGrid = { query: (a, b, c, d) => cGrid.query(a, b, c, d).map((i) => cGrid.pts[i][2]) };
+    const report = applyLandmarks(items, loadLandmarks(join(ROOT, "scripts", "landmark-heights.json")), lookupGrid);
+    for (const r of report) if (!r.matched) console.warn(`  landmark unmatched: ${r.name}`);
+    console.log(`landmarks: ${report.filter((r) => r.changed).length} applied, ${report.filter((r) => r.matched && !r.changed).length} already accurate`);
+  }
+
+  // tile grid (1 km) for culling + i16 quantization (0.1 m)
+  const TILE = 1000;
+  const tiles = new Map();
+  for (const it of items.concat(parts)) {
+    it.h = clampH(it.h);
+    const tx = Math.floor(it.cx / TILE), ty = Math.floor(it.cy / TILE);
+    const k = `${tx},${ty}`;
+    if (!tiles.has(k)) tiles.set(k, { tx, ty, items: [] });
+    tiles.get(k).items.push(it);
+  }
+
+  const w = new Writer();
+  w.u32(0x424d5452); // 'RTMB'
+  w.u32(tiles.size);
+  for (const { tx, ty, items: list } of tiles.values()) {
+    const ox = tx * TILE, oy = ty * TILE;
+    w.f32(ox); w.f32(oy);
+    w.u32(list.length);
+    for (const it of list) {
+      const flat = [];
+      for (const [x, y] of it.pts) flat.push(x - ox, y - oy);
+      const idx = earcut(flat, null, 2);
+      w.u16(Math.round(it.h * 10));
+      w.u8(it.pts.length);
+      w.u8(idx.length / 3);
+      for (let i = 0; i < flat.length; i++) w.i16(Math.round(flat[i] * 10));
+      for (const t of idx) w.u8(t);
+    }
+  }
+  const bin = w.done();
+  writeFileSync(join(OUT, "buildings.bin"), bin);
+  console.log(`buildings.bin: ${buildingCount} buildings + ${partCount} parts, ${tiles.size} tiles, ${(bin.length / 1e6).toFixed(1)} MB`);
+}
+
+// ============================================================
+// 4b. TRANSIT ROUTES (RET tram + metro service patterns)
+// ============================================================
+console.log("── transit ──");
+let transitRoutes = 0;
+{
+  const w = new Writer();
+  w.u32(0x544d5452); // 'RTMT'
+  const body = new Writer();
+  const near = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 45;
+
+  if (existsSync(join(RAW, "transit.json"))) {
+    for (const rel of loadJSON("transit.json").elements) {
+      if (rel.type !== "relation") continue;
+      const kind = rel.tags?.route === "tram" ? 0 : 1; // subway/light_rail → metro
+      const ref = String(rel.tags?.ref ?? "?").slice(0, 12);
+
+      // stitch member ways (PTv2 relations are ordered) into one chain
+      let chain = []; // [x, y, tunnel]
+      let best = [];
+      const flush = () => {
+        if (chain.length > best.length) best = chain;
+        chain = [];
+      };
+      for (const m of rel.members ?? []) {
+        if (m.type !== "way" || !m.geometry || m.geometry.length < 2) continue;
+        if (/platform/.test(m.role ?? "")) continue;
+        const tags = m.tags ?? {};
+        const tun = (tags.tunnel && tags.tunnel !== "no") || tags.covered === "yes" ? 1 : 0;
+        let pts = simplify(m.geometry.map((g) => [px(g.lon), py(g.lat)]), 0.8);
+        if (pts.length < 2) continue;
+        if (chain.length === 0) {
+          chain = pts.map(([x, y]) => [x, y, tun]);
+          continue;
+        }
+        const end = chain[chain.length - 1];
+        if (near(end, pts[0])) {
+          for (let i = 1; i < pts.length; i++) chain.push([pts[i][0], pts[i][1], tun]);
+        } else if (near(end, pts[pts.length - 1])) {
+          for (let i = pts.length - 2; i >= 0; i--) chain.push([pts[i][0], pts[i][1], tun]);
+        } else {
+          flush();
+          chain = pts.map(([x, y]) => [x, y, tun]);
+        }
+      }
+      flush();
+      // route length
+      let len = 0;
+      for (let i = 1; i < best.length; i++) len += dist(best[i - 1][0], best[i - 1][1], best[i][0], best[i][1]);
+      if (len < 2500 || best.length < 8) continue;
+
+      // cumulative arc length for stop projection
+      const cum = new Float64Array(best.length);
+      for (let i = 1; i < best.length; i++)
+        cum[i] = cum[i - 1] + dist(best[i - 1][0], best[i - 1][1], best[i][0], best[i][1]);
+
+      const stops = [];
+      for (const m of rel.members ?? []) {
+        if (m.type !== "node" || !/stop/.test(m.role ?? "") || m.lat === undefined) continue;
+        const sx = px(m.lon), sy = py(m.lat);
+        let bi = 0, bd = Infinity;
+        for (let i = 0; i < best.length; i++) {
+          const d = (best[i][0] - sx) ** 2 + (best[i][1] - sy) ** 2;
+          if (d < bd) { bd = d; bi = i; }
+        }
+        if (bd < 120 * 120) stops.push(cum[bi]);
+      }
+      stops.sort((a, b) => a - b);
+      const dedup = [];
+      for (const s of stops) if (!dedup.length || s - dedup[dedup.length - 1] > 60) dedup.push(s);
+
+      body.u8(kind);
+      const refBytes = Buffer.from(ref, "utf8");
+      body.u8(refBytes.length);
+      for (const b of refBytes) body.u8(b);
+      body.u16(Math.min(65535, best.length));
+      body.u16(dedup.length);
+      for (const [x, y] of best.slice(0, 65535)) { body.f32(x); body.f32(y); }
+      for (const p of best.slice(0, 65535)) body.u8(p[2]);
+      for (const s of dedup) body.f32(s);
+      transitRoutes++;
+    }
+  } else {
+    console.warn("transit.json missing — run: node scripts/fetch-osm.mjs transit");
+  }
+  w.u32(transitRoutes);
+  const bin = Buffer.concat([w.done(), body.done()]);
+  writeFileSync(join(OUT, "transit.bin"), bin);
+  console.log(`transit.bin: ${transitRoutes} routes, ${(bin.length / 1e6).toFixed(2)} MB`);
+}
+
+// ============================================================
+// 4c. DISTRICT BOUNDARIES (admin_level 10)
+// ============================================================
+console.log("── district boundaries ──");
+let districtBounds = 0;
+{
+  const w = new Writer();
+  w.u32(0x444d5452); // 'RTMD'
+  const body = new Writer();
+  if (existsSync(join(RAW, "districts.json"))) {
+    for (const rel of loadJSON("districts.json").elements) {
+      if (rel.type !== "relation" || !rel.tags?.name) continue;
+      const rings = assembleRings((rel.members ?? []).filter((m) => m.role === "outer" || m.role === ""));
+      const xyRings = rings
+        .map((r) => simplify(r.map(([lat, lon]) => [px(lon), py(lat)]), 18))
+        .filter((r) => r.length >= 4 && Math.abs(ringAreaXY(r)) > 300000); // ≥ 0.3 km²
+      if (!xyRings.length) continue;
+      // label at the centroid of the largest ring; skip if far outside coverage
+      let big = xyRings[0];
+      for (const r of xyRings) if (Math.abs(ringAreaXY(r)) > Math.abs(ringAreaXY(big))) big = r;
+      let cx = 0, cy = 0;
+      for (const [x, y] of big) { cx += x; cy += y; }
+      cx /= big.length; cy /= big.length;
+      if (Math.abs(cx) > 13000 || Math.abs(cy) > 12000) continue;
+      const nameBytes = Buffer.from(String(rel.tags.name).slice(0, 40), "utf8");
+      body.u8(nameBytes.length);
+      for (const b of nameBytes) body.u8(b);
+      body.f32(cx);
+      body.f32(cy);
+      body.u16(xyRings.length);
+      for (const r of xyRings) {
+        body.u16(Math.min(65535, r.length));
+        for (const [x, y] of r.slice(0, 65535)) { body.f32(x); body.f32(y); }
+      }
+      districtBounds++;
+    }
+  } else {
+    console.warn("districts.json missing — run: node scripts/fetch-osm.mjs districts");
+  }
+  w.u16(districtBounds);
+  const bin = Buffer.concat([w.done(), body.done()]);
+  writeFileSync(join(OUT, "districts.bin"), bin);
+  console.log(`districts.bin: ${districtBounds} boundaries, ${(bin.length / 1e6).toFixed(2)} MB`);
+}
+
+// ============================================================
+// 5. META
+// ============================================================
+{
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (let i = 0; i < nodesXY.length; i += 2) {
+    minX = Math.min(minX, nodesXY[i]); maxX = Math.max(maxX, nodesXY[i]);
+    minY = Math.min(minY, nodesXY[i + 1]); maxY = Math.max(maxY, nodesXY[i + 1]);
+  }
+  const meta = {
+    version: 2,
+    graphSha256: createHash("sha256").update(readFileSync(join(OUT, "graph.bin"))).digest("hex"),
+    origin: ORIGIN,
+    extent: { minX, minY, maxX, maxY },
+    counts: {
+      roadWays: displayCount,
+      roadKm: Math.round(totalKm),
+      pathKm: Math.round(pathKm),
+      graphNodes: nodesXY.length / 2,
+      graphEdges: edges.length,
+      signalsInventory: signalNodes.size,
+      signalsOnNetwork: netSignals.length,
+      signalClusters: clusters.length,
+      junctions: clusters.filter((c) => !c.crossing).length,
+      crossings: clusters.filter((c) => c.crossing).length,
+      waterPolys: waterPolyCount,
+      railWays: railCount,
+      buildings: buildingCount,
+      buildingParts: partCount,
+      transitRoutes,
+    },
+    districts: DISTRICTS.map((d) => ({ key: d.key, name: d.name, x: +d.x.toFixed(1), y: +d.y.toFixed(1) })),
+  };
+  writeFileSync(join(OUT, "meta.json"), JSON.stringify(meta, null, 1));
+  console.log("meta.json written:", JSON.stringify(meta.counts));
+}

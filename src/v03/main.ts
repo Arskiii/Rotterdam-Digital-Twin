@@ -4,7 +4,7 @@
 // (see src/v03/overrides.ts) and are applied immediately after the OSM parse.
 
 import { Fog } from "three";
-import { createScene } from "../render/scene";
+import { createScene } from "../render/scenarioScene";
 import { buildNetworkMesh, updateIntersectionQueueColors } from "../render/network";
 import { buildTrafficLightMeshes, updateLiveTrafficLightColors, updateTrafficLightColors } from "../render/lights";
 import { VehicleRenderer } from "../render/vehicles";

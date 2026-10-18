@@ -250,7 +250,7 @@ function renderSelectionContext() {
   el<HTMLElement>("selection-detail").textContent = restoredReport
     ? "Saved report network and observations. The map opens with its current road edits."
     : transferredNetwork ? "Exact network transferred from the map, including your road edits." : "Bundled road network with edits saved in this browser.";
-  const url = siteUrl(""); if (edgeId) url.searchParams.set("corridor", edgeId);
+  const url = siteUrl("v03/"); if (edgeId) url.searchParams.set("corridor", edgeId);
   el<HTMLAnchorElement>("selection-map").href = url.href;
   el<HTMLButtonElement>("clear-corridor").hidden = !lockedEdgeId;
   redrawCorridorMap();
@@ -780,7 +780,7 @@ async function boot() {
     retry.textContent = "Try again";
     retry.addEventListener("click", () => window.location.reload());
     status.append(" ", retry);
-    const map = document.createElement("a"); map.href = siteUrl("").href; map.textContent = "Return to map"; status.append(" ", map);
+    const map = document.createElement("a"); map.href = siteUrl("v03/").href; map.textContent = "Return to map"; status.append(" ", map);
     updateAvailability();
   }
 }

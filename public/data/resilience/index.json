@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "source": "https://diensten.rotterdam.nl/arcgis/rest/services/SO_IBURO/DGO_data/MapServer",
+  "retrievedAt": "2026-09-25T20:22:01.777Z",
+  "modelledNotLive": true,
+  "image": {
+    "width": 2048,
+    "height": 2048,
+    "bboxRd": [
+      80000,
+      425000,
+      104000,
+      449000
+    ],
+    "cornersLocal": [
+      [
+        -12381.14,
+        -12319.58
+      ],
+      [
+        11510.24,
+        -12020.01
+      ],
+      [
+        11265.96,
+        11831.16
+      ],
+      [
+        -12740.34,
+        11529.72
+      ]
+    ]
+  },
+  "layers": {
+    "cooling": {
+      "name": "Distance to cool resting places at 38°C",
+      "legend": "75 · 150 · 300 · 700 m",
+      "sourceLayer": 3,
+      "image": "cooling.png"
+    },
+    "flood": {
+      "name": "Modelled water depth over 25 cm",
+      "legend": ">25 cm",
+      "sourceLayer": 13,
+      "image": "flood.png"
+    },
+    "noise": {
+      "name": "Cumulative day and night noise exposure",
+      "legend": "54–56 · 56–60 · 60–65 · 65–70 · >70 dB",
+      "sourceLayer": 20,
+      "image": "noise.png"
+    }
+  }
+}

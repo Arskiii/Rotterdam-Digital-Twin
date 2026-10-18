@@ -3,7 +3,7 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer as createViteServer } from "vite";
-import { createLiveSignalHandler, createLiveSignalServer, validateSnapshot } from "../server/live-signals.mjs";
+import { createLiveSignalHandler, createLiveSignalServer, validateSnapshot } from "../server/corridor-signals.mjs";
 
 const httpServer = createHttpServer();
 const vite = await createViteServer({
