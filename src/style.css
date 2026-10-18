@@ -238,6 +238,7 @@ svg {
   display: flex;
   gap: 26px;
   margin-left: auto;
+  flex-shrink: 0;
 }
 #topnav .nav-btn {
   position: relative;
@@ -248,6 +249,7 @@ svg {
   color: var(--text-dim);
   padding: 6px 2px;
   transition: color 120ms;
+  white-space: nowrap;
 }
 #topnav .nav-btn:hover {
   color: var(--text);
@@ -275,7 +277,10 @@ svg {
   letter-spacing: 0.1em;
   text-transform: uppercase;
   white-space: nowrap;
+  min-width: 0;
 }
+#topmeta #live-chip { min-width: 0; overflow: hidden; }
+#topmeta #live-text { overflow: hidden; text-overflow: ellipsis; }
 #topmeta .meta-item {
   display: flex;
   align-items: center;
@@ -2298,7 +2303,7 @@ label {
 
    Ordered before the phone block on purpose, so the phone rules win where the
    two overlap. */
-@media (max-width: 1080px) {
+@media (max-width: 1440px) {
   #topbar {
     padding: 0 12px;
     gap: 14px;
@@ -2366,23 +2371,30 @@ label {
      that the tab title does not. What is left — mode, page, live status — each
      answers a question the operator actually asks. */
   #topbar {
-    height: 44px;
-    padding: 0 8px;
-    gap: 8px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    height: auto;
+    padding: 9px 10px 0;
+    gap: 6px 8px;
   }
   #brand {
     display: none;
   }
   #topnav {
-    gap: 2px;
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: space-between;
+    gap: 4px;
     margin-left: 0;
-    flex: none;
+    min-width: 0;
+    overflow-x: auto;
+    border-top: 1px solid var(--line);
   }
   #topnav .nav-btn {
-    font-size: 10.5px;
+    font-size: 10px;
     letter-spacing: 0.06em;
-    padding: 0 6px;
-    min-height: 42px;
+    padding: 0 2px;
+    min-height: 36px;
     display: flex;
     align-items: center;
   }
@@ -2394,6 +2406,9 @@ label {
      min-width:0 a nowrap flex item refuses to shrink at all, which is how the
      status ran 66px off the right edge of the screen. */
   #topmeta {
+    grid-column: 2;
+    grid-row: 1;
+    max-width: 120px;
     margin-left: auto;
     min-width: 0;
     gap: 0;

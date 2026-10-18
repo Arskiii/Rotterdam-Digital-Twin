@@ -7,8 +7,10 @@ describe("shared platform navigation", () => {
     const links = Array.from(markup.matchAll(/href="(\.\.\/[^"]+)"/g), (match) =>
       new URL(match[1].replaceAll("&amp;", "&"), "https://example.test/platform/intelligence/")
     );
-    expect(links.map((link) => link.pathname)).toEqual(Array(6).fill("/platform/"));
-    expect(links.map((link) => readMapNavigation(link.search))).toEqual([
+    const mapLinks = links.filter((link) => link.pathname === "/platform/");
+    expect(mapLinks).toHaveLength(6);
+    expect(links.some((link) => link.pathname === "/platform/lab/")).toBe(true);
+    expect(mapLinks.map((link) => readMapNavigation(link.search))).toEqual([
       { mode: "live", page: "map" },
       { mode: "sim", page: "map" },
       { mode: "history", page: "map" },
@@ -17,6 +19,7 @@ describe("shared platform navigation", () => {
       { mode: "sim", page: "setup" },
     ]);
     expect(markup).toContain('href="./" aria-current="page">Intelligence</a>');
+    expect(buildHeader({ page: "map" })).toContain('href="./lab/">Scenario lab</a>');
   });
 
   it("ignores unsupported query values instead of passing them to the app", () => {

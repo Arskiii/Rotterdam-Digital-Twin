@@ -4,6 +4,22 @@ A browser-based city intelligence platform for **the whole of Rotterdam**: the r
 network, every mapped traffic light, a quarter-million buildings and a live agent-based
 traffic simulation — wrapped in a dark tactical operations UI.
 
+## Scenario workspace
+
+The city map and Intelligence pages are joined by a [Scenario lab](lab/) for
+repeatable signal-plan comparisons, a [corridor traffic editor](v03/) and a
+[fictional grid playground](grid/). The lab provides timing presets, observation
+replay, paired worker runs, retained results while editing, and portable reports.
+Its study graph is separate from the city-wide simulation; **View on map** opens
+the corridor editor that supplied the report's road network.
+
+See the [scenario workspace guide](docs/scenario-workspace.md) and
+[corridor workflow](docs/corridor-workflow.md) for provenance and model limits.
+`npm test` runs the city/Intelligence tests and the scenario regressions. Production
+builds check TypeScript, both suites, publication guards and scenario bundle budgets.
+Run the Python pipeline checks with
+`python3 -m unittest discover -s tests -p 'test_*.py'`.
+
 ## What's inside
 
 **Real city data** (OpenStreetMap, ODbL):

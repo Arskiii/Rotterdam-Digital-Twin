@@ -31,15 +31,18 @@ export function buildHeader({ page, mapHref = "../" }: {
     : `<button data-mode="live" class="on" aria-pressed="true">Live</button>
         <button data-mode="sim" aria-pressed="false">Simulation</button>
         <button data-mode="history" aria-pressed="false">History</button>`;
+  const labHref = escapeHtml(`${intelligence ? mapHref : "./"}lab/`);
   const navigation = intelligence
     ? `<a class="nav-btn" data-page="brief" href="${mapLink("live", "brief")}">Brief</a>
         <a class="nav-btn" data-page="map" href="${mapLink("live", "map")}">Unit&nbsp;Map</a>
         <a class="nav-btn" data-page="setup" href="${mapLink("sim", "setup")}">Setup</a>
-        <a class="nav-btn on" href="./" aria-current="page">Intelligence</a>`
+        <a class="nav-btn on" href="./" aria-current="page">Intelligence</a>
+        <a class="nav-btn" href="${labHref}">Scenario lab</a>`
     : `<button class="nav-btn" data-page="brief">Brief</button>
         <button class="nav-btn on" data-page="map" aria-current="page">Unit&nbsp;Map</button>
         <button class="nav-btn" data-page="setup">Setup</button>
-        <a class="nav-btn" href="./intelligence/">Intelligence</a>`;
+        <a class="nav-btn" href="./intelligence/">Intelligence</a>
+        <a class="nav-btn" href="${labHref}">Scenario lab</a>`;
 
   return `<header id="topbar" class="brk"><i class="tick tl"></i><i class="tick tr"></i><i class="tick bl"></i><i class="tick br"></i>
       <div id="brand">${icons.logo()} <span>${BRAND}</span></div>
