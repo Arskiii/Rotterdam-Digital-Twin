@@ -1,39 +1,97 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-root="./">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Rotterdam Digital Twin — Traffic Sim v0.1</title>
-    <style>
-      :root { color-scheme: dark; }
-      html, body { margin: 0; height: 100%; background: #0b0d12; color: #e6e9ef; font-family: ui-sans-serif, system-ui, sans-serif; overflow: hidden; }
-      #app { position: fixed; inset: 0; }
-      #hud {
-        position: fixed; top: 12px; left: 12px; padding: 10px 14px;
-        background: rgba(15, 18, 25, 0.78); border: 1px solid #232838; border-radius: 8px;
-        font-size: 13px; line-height: 1.5; min-width: 220px; backdrop-filter: blur(6px);
-        pointer-events: none;
-      }
-      #hud h1 { font-size: 13px; margin: 0 0 6px 0; font-weight: 600; letter-spacing: 0.02em; color: #9aa3b8; text-transform: uppercase; }
-      #hud .row { display: flex; justify-content: space-between; gap: 16px; }
-      #hud .row span:first-child { color: #9aa3b8; }
-      #hud .row span:last-child { font-variant-numeric: tabular-nums; color: #e6e9ef; }
-      #hint { position: fixed; bottom: 12px; left: 12px; font-size: 12px; color: #6b7388; }
-    </style>
+    <meta name="description" content="Explore Rotterdam in 3D, inspect source-labelled city data, and compare traffic signal scenarios." />
+    <meta name="referrer" content="strict-origin-when-cross-origin" />
+    <title>Rotterdam Digital Twin · City explorer</title>
   </head>
-  <body>
-    <div id="app"></div>
-    <div id="hud">
-      <h1>Live metrics</h1>
-      <div class="row"><span>Sim time</span><span id="m-time">0.0 s</span></div>
-      <div class="row"><span>Cars active</span><span id="m-active">0</span></div>
-      <div class="row"><span>Cars completed</span><span id="m-done">0</span></div>
-      <div class="row"><span>Throughput</span><span id="m-thru">0 /min</span></div>
-      <div class="row"><span>Avg wait</span><span id="m-wait">0.0 s</span></div>
-      <div class="row"><span>Avg queue</span><span id="m-queue">0.0</span></div>
-      <div class="row"><span>FPS</span><span id="m-fps">0</span></div>
+  <body class="map-page">
+    <main id="app" aria-label="Interactive 3D Rotterdam map"></main>
+    <div id="loading" role="status">Preparing Rotterdam…</div>
+    <aside class="workspace-sidebar" aria-label="City explorer panels">
+      <span class="eyebrow">Explore · Understand · Test</span>
+      <h1>A closer look at the city.</h1>
+      <p class="workspace-description">Rotterdam streets, public observations, and a traffic model. Explore the layers, then test an idea in the scenario lab.</p>
+      <section id="hud" aria-label="Simulation metrics">
+        <div class="eyebrow" style="margin-bottom:10px">Simulated traffic</div>
+        <div class="key-metrics">
+          <div class="key-metric"><span>Completed trips</span><strong id="m-thru">0 /min</strong></div>
+          <div class="key-metric"><span>Mean wait / trip</span><strong id="m-wait">0.0 s</strong></div>
+        </div>
+        <p class="note">Model output · not measured traffic</p>
+        <details class="metric-details"><summary>Performance &amp; trends</summary>
+<div class="row"><span>Sim time</span><span id="m-time">0.0 s</span></div>
+<div class="row"><span>Cars active</span><span id="m-active">0</span></div>
+<div class="row"><span>Cars completed</span><span id="m-done">0</span></div>
+<div class="row"><span>Worst-5% wait</span><span id="m-wait-tail">0.0 s</span></div>
+<div class="row"><span>Max wait (active)</span><span id="m-wait-max">0.0 s</span></div>
+<div class="row"><span>Avg stops / car</span><span id="m-stops">0.00</span></div>
+<div class="row"><span>Delay ratio</span><span id="m-delay">1.00×</span></div>
+<div class="row"><span>Phase utilization</span><span id="m-phase">0%</span></div>
+<div class="row"><span>Demand admitted</span><span id="m-demand">—</span></div>
+<div class="row"><span>Avg queue</span><span id="m-queue">0.0</span></div>
+<div class="row"><span>Frame rate</span><span id="m-fps">0</span></div>
+          <div class="row"><span>Throughput</span><canvas id="s-thru" width="120" height="22" aria-label="Simulated throughput trend"></canvas></div>
+          <div class="row"><span>Mean wait</span><canvas id="s-wait" width="120" height="22" aria-label="Simulated mean wait trend"></canvas></div>
+          <div class="row"><span>Worst-5% wait</span><canvas id="s-worst" width="120" height="22" aria-label="Simulated worst wait trend"></canvas></div>
+        </details>
+        <details class="metric-details"><summary>Map coverage &amp; signal feed</summary>
+<div class="row"><span>Area</span><span id="m-area">—</span></div>
+<div class="row"><span>Junctions / signals</span><span id="m-junctions">—</span></div>
+<div class="row"><span>OSM signals matched</span><span id="m-signals-match">—</span></div>
+<div class="row"><span>Directed roads</span><span id="m-edges">—</span></div>
+<div class="row"><span>Observed signal feed</span><span id="m-live-status">Not configured</span></div>
+<div class="row"><span>Source</span><span id="m-live-source">—</span></div>
+<div class="row"><span>Visible / mapped</span><span id="m-live-count">0</span></div>
+<div class="row"><span>Last update</span><span id="m-live-updated">—</span></div>
+          <p class="note">Small upper bulb = fresh observation. Lower bulb = simulated signal.</p>
+        </details>
+      </section>
+      <details id="city-panel" aria-label="Rotterdam data layers" open>
+        <summary>City layers &amp; sources</summary>
+        <div id="city-layer-toggles"></div>
+        <details class="metric-details"><summary>Source details &amp; freshness</summary><div id="city-data-cards">Loading public data…</div></details>
+      </details>
+      <details id="settings-panel"><summary>Simulation settings</summary><div id="simulation-settings"></div></details>
+    <details id="editor-panel">
+      <summary>Edit road network</summary>
+      <div class="row">
+        <button id="ed-mode-off">View</button>
+        <button id="ed-mode-signal">Toggle signal</button>
+        <button id="ed-mode-junction">Toggle pad</button>
+        <button id="ed-mode-phase">Cycle phase</button>
+        <button id="ed-mode-road">Edit road</button>
+        <button id="ed-mode-group">Group nodes</button>
+        <button id="ed-mode-connect">Connect</button>
+        <button id="ed-mode-disconnect">Remove road</button>
+      </div>
+      <div class="row">
+        <button id="ed-export">Export JSON</button>
+        <button id="ed-import">Import JSON</button>
+        <button id="ed-clear" class="danger">Clear all</button>
+      </div>
+      <div id="editor-status">Edits paused.</div>
+      <input id="ed-import-file" type="file" accept="application/json" hidden />
+    </details>
+
+      <div id="threedbag-attribution" hidden><a href="https://docs.3dbag.nl/nl/copyright/" target="_blank" rel="noopener noreferrer">© 3DBAG door tudelft3d en 3DGI</a></div>
+      <div style="margin-top:8px;font-size:10px"><a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">© OpenStreetMap contributors</a></div>
+    </aside>
+    <div id="road-edit-popup" class="hidden">
+      <h2>Edit road</h2>
+      <label>Lanes a→b <input id="rep-fwd" type="number" min="0" max="8" /></label>
+      <label>Lanes b→a <input id="rep-bwd" type="number" min="0" max="8" /></label>
+      <div class="hint">0 = no traffic this direction (one-way road)</div>
+      <div class="row">
+        <button id="rep-flip">Flip direction</button>
+        <button id="rep-cancel">Cancel</button>
+        <button id="rep-apply" class="primary">Apply</button>
+      </div>
     </div>
-    <div id="hint">drag to orbit · scroll to zoom · right-drag to pan</div>
-    <script type="module" src="/src/main.ts"></script>
+
+    <div id="hint">Drag to orbit · scroll to zoom · right-drag to pan</div>
+    <script type="module" src="/src/v03/main.ts"></script>
   </body>
 </html>

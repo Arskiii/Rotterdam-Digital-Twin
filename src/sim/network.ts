@@ -1,4 +1,5 @@
-import * as THREE from "three";
+import { Vector2 } from "three/src/math/Vector2.js";
+import { computeLaneOffsets, defaultLaneTurns } from "./lanes";
 import type { Network, NetworkEdge, NetworkNode, NodeId } from "./types";
 
 // Builds a 2-row by 3-column grid of intersections (6 total) with one-way pairs of lanes between
@@ -33,9 +34,10 @@ export function buildGridNetwork(opts?: {
     for (let c = 0; c < cols; c++) {
       nodes.set(intersectionId(c, r), {
         id: intersectionId(c, r),
-        position: new THREE.Vector2(xOf(c), zOf(r)),
+        position: new Vector2(xOf(c), zOf(r)),
         kind: "intersection",
         phaseOf: new Map(),
+        isJunction: true,
       });
     }
   }
@@ -48,9 +50,11 @@ export function buildGridNetwork(opts?: {
     const delta = end.clone().sub(start);
     const length = delta.length();
     const dir = delta.clone().normalize();
-    // Right-hand traffic: lane sits on the right of the centerline (perpendicular, rotated -90°).
-    const laneOffset = new THREE.Vector2(dir.y, -dir.x).multiplyScalar(2.0);
     const id = `${fromId}->${toId}`;
+    // The grid network is uniformly two-way single-lane — every edge has its lane group
+    // starting at the corridor centreline and extending outward to the right.
+    const laneCount = 1;
+    const laneOffsets = computeLaneOffsets(dir, laneCount, 0);
     const edge: NetworkEdge = {
       id,
       from: fromId,
@@ -59,8 +63,10 @@ export function buildGridNetwork(opts?: {
       start,
       end,
       dir,
-      laneOffset,
       speedLimit,
+      laneCount,
+      laneTurns: defaultLaneTurns(laneCount),
+      laneOffsets,
       outgoing: [],
     };
     edges.set(id, edge);
@@ -97,7 +103,7 @@ export function buildGridNetwork(opts?: {
     phase: 0 | 1,
   ) {
     const inter = nodes.get(interId)!;
-    const off = new THREE.Vector2();
+    const off = new Vector2();
     if (side === "N") off.set(0, -stubLength);
     if (side === "S") off.set(0, stubLength);
     if (side === "E") off.set(stubLength, 0);
