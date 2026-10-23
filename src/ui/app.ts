@@ -19,6 +19,7 @@ import { ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/ar
 import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
 import { buildSearchIndex, stopEntries, searchIndex, type SearchEntry, type SearchHit } from "./search";
 import { transitHealth, KIND_LABEL, type LineHealth } from "../data/transit-health";
+import { liveTimeFresh } from "../data/live";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -132,7 +133,8 @@ export class App {
   private historyIdx = 0;
   private historyLoading = false;
   private live: import("../data/live").LiveSnapshot | null = null;
-  private liveFresh = true;
+  private get liveFresh() { return liveTimeFresh(this.live?.t); }
+  private activityKind = 0;
   // signal-program trial (A/B/C experiment)
   private trial: {
     stage: number;
@@ -422,6 +424,7 @@ export class App {
     // zoom / layers
     ui.zoomIn.addEventListener("click", () => this.scene.zoomBy(0.55));
     ui.zoomOut.addEventListener("click", () => this.scene.zoomBy(1.8));
+    document.getElementById("find-activity")?.addEventListener("click", () => this.findActivity());
     const setLayersOpen = (open: boolean) => {
       ui.layersPop.classList.toggle("open", open);
       ui.layersBtn.classList.toggle("on", open);
@@ -644,11 +647,13 @@ export class App {
    */
   private withdrawPhoneControls() {
     if (!App.PHONE) return;
-    for (const layer of ["vehicles", "bikes", "pedestrians", "congestion"]) {
+    for (const layer of ["congestion"]) {
       const box = this.ui.layerBoxes.find((b) => b.dataset.layer === layer);
       const label = box?.closest("label") as HTMLElement | null;
       if (label) label.style.display = "none";
     }
+    const note = document.getElementById("lp-synthetic");
+    if (note) note.textContent = "Cars, bikes and people are a small local animation on mapped streets. This phone preview does not simulate signals or represent measured traffic volumes. Transit RT fixes use the public live feed.";
     const replay = this.ui.hud.querySelector<HTMLElement>("#replay-btn");
     if (replay) {
       // the gap that spaced it from the zoom buttons goes with it
@@ -919,10 +924,12 @@ export class App {
   }
 
   /** Hand the app the newest live snapshot; refreshes an open board in place. */
-  setLive(snap: import("../data/live").LiveSnapshot, fresh: boolean) {
+  setLive(snap: import("../data/live").LiveSnapshot) {
     this.live = snap;
-    this.liveFresh = fresh;
-    if (this.boardKey) this.renderBoard();
+    if (this.boardKey) {
+      if (snap.departures) this.renderBoard();
+      else this.closeBoard();
+    }
     if (this.page === "brief" && this.mode === "live") this.renderBrief();
     this.renderTransit();
   }
@@ -1772,15 +1779,57 @@ export class App {
   }
 
   // ---------- worker feed ----------
+  setRoadFrame(data: Float32Array, ids: Int32Array, speeds: Float32Array, count: number) {
+    this.lastFrame = { data, ids, speeds, count };
+    this.layers.vehicles.update(data, count, this.scene.distance / 950, ids);
+  }
+
+  private findActivity() {
+    const target = this.scene.controls.target;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const kind = this.activityKind++ % 4;
+      const candidates: { x: number; z: number; label: string }[] = [];
+      if (kind === 0 && this.layers.fixesLayer?.group.visible) {
+        for (const v of this.layers.fixesLayer.vehicles) candidates.push({ x: v.x, z: v.z, label: `${v.label} · LIVE FIX / TIMETABLE PATH` });
+      } else if (kind > 0 && this.lastFrame) {
+        const mode = [0, 0, 2, 1][kind];
+        const f = this.lastFrame;
+        for (let i = 0; i < f.count; i++) {
+          if (Math.floor(f.data[i * 4 + 3] / 4) !== mode) continue;
+          candidates.push({ x: f.data[i * 4], z: -f.data[i * 4 + 1], label: `${["CARS", "BIKES", "PEOPLE"][mode]} · MODELLED${this.simAvailable ? "" : " LOCAL PREVIEW"}` });
+        }
+        this.setBox(["vehicles", "bikes", "pedestrians"][mode], true);
+      }
+      if (!candidates.length) continue;
+      candidates.sort((a, b) => ((a.x - target.x) ** 2 + (a.z - target.z) ** 2) - ((b.x - target.x) ** 2 + (b.z - target.z) ** 2));
+      const found = candidates[0];
+      this.releaseTrack("ACTIVITY VIEW");
+      this.dismissUnitCard();
+      this.scene.flyTo(new THREE.Vector3(found.x, 0, found.z), 600);
+      this.toast("info", escapeHtml(found.label));
+      return;
+    }
+    this.toast("warn", "ACTIVITY IS LOADING — TRY AGAIN IN A MOMENT");
+  }
+
+  private renderActivity() {
+    const el = document.getElementById("activity-summary");
+    if (!el) return;
+    const v = this.layers.vehicles;
+    const cars = v.cars.mesh.count + v.trucks.mesh.count;
+    const people = v.peds.mesh.count;
+    const transit = this.layers.fixesLayer?.vehicles.length ?? 0;
+    el.textContent = `${fmtInt(cars)} CARS · ${fmtInt(people)} PEOPLE · MODELLED${this.simAvailable ? "" : " PREVIEW"} | ${transit ? `${transit} TRANSIT · LIVE` : "TRANSIT UNAVAILABLE"}`;
+  }
+
   private onWorker(msg: WorkerToMain) {
     switch (msg.type) {
       case "frame": {
         const data = new Float32Array(msg.vehicles);
         const ids = new Int32Array(msg.ids);
         const speeds = new Float32Array(msg.speeds);
-        this.lastFrame = { data, ids, speeds, count: msg.count };
         this.clockMin = msg.clockMin;
-        this.layers.vehicles.update(data, msg.count, this.scene.distance / 950, ids);
+        this.setRoadFrame(data, ids, speeds, msg.count);
         this.layers.signals.update(new Uint8Array(msg.signals));
         break;
       }
@@ -2046,6 +2095,8 @@ export class App {
     this.renderStats();
     this.renderDistrictTable();
     this.renderTransit();
+    this.renderActivity();
+    if (this.boardKey && !this.liveFresh) this.closeBoard();
     if (this.page === "brief") this.renderBrief();
     this.updateDockClock();
   }
@@ -2413,7 +2464,7 @@ export class App {
       return;
     }
     if (!h.lines.length) {
-      wrap.innerHTML = `<div class="tr-empty">NOTHING IN SERVICE AND NOTHING ON THE BOARDS</div>`;
+      wrap.innerHTML = `<div class="tr-empty">${!this.live.vehicles && !this.live.departures ? "TRANSIT FEED UNAVAILABLE — WAITING FOR FRESH OBSERVATIONS" : "NO TRANSIT REPORTED IN THIS SNAPSHOT"}</div>`;
       return;
     }
 

@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/live.js": {
+      "maxDuration": 15,
+      "regions": ["fra1"],
+      "includeFiles": "{data/gtfs-routes.json,data/gtfs-stops.json,data/ret-timetable.bin,data/luchtmeetnet-stations.json,public/data/ndw.json,public/data/graph.bin,public/data/meta.json}"
+    }
+  }
+}

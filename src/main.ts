@@ -10,10 +10,11 @@ import { ResilienceLayers } from "./render/resilience";
 import { ObservedSignalsLayer } from "./render/observed-signals";
 import { pollObservedSignals } from "./data/live-signals";
 import { loadCity } from "./data/loader";
-import { LiveFeed, type LiveSnapshot } from "./data/live";
+import { LiveFeed, currentLiveSnapshot, type LiveSnapshot } from "./data/live";
 import { watchForNewBuild } from "./data/buildwatch";
 import { registerServiceWorker } from "./data/sw-register";
 import { App } from "./ui/app";
+import { LocalActivity } from "./sim/local-activity";
 
 const root = document.getElementById("app")!;
 const ui = buildChrome(root);
@@ -209,6 +210,7 @@ async function boot() {
 
   const app = new App(ui, scene, data, meshes, { signals, observedSignals, vehicles, congestion, transit, districtLines, ndwLayer, airLayer, fixesLayer, stopsLayer, resilience }, sim);
   if (simError) app.disableSim(simError);
+  const localActivity = App.PHONE || simError ? new LocalActivity(data.graph) : null;
 
   const signalStatus = document.getElementById("ivri-feed-status");
   pollObservedSignals(import.meta.env.VITE_LIVE_SIGNALS_URL?.trim() ?? "",
@@ -228,7 +230,12 @@ async function boot() {
 
   // ---- live city feeds: NDW traffic + bridges, OVapi transit, water, weather, air ----
   let liveWater: LiveSnapshot["water"] | null = null;
-  const applyLive = (snap: LiveSnapshot) => {
+  let liveValidity = "";
+  const validity = (snap: LiveSnapshot) => [snap.traffic?.t, snap.vehicles?.t, snap.departures?.t,
+    snap.bridges?.length, snap.incidents?.length].join("|");
+  const applyLive = (raw: LiveSnapshot) => {
+    const snap = currentLiveSnapshot(raw);
+    liveValidity = validity(snap);
     if (snap.traffic?.s.length && data.ndw?.stations.length) {
       // refresh station flows in place; unmeasured stations keep their snapshot value
       const flows = data.ndw.stations.map((s) => s.flow);
@@ -261,11 +268,10 @@ async function boot() {
       }
       ndwLayer.setLive(ratios);
     }
-    if (snap.vehicles) {
-      const at = Date.parse(snap.vehicles.t);
-      fixesLayer.set(snap.vehicles.v, snap.vehicles.plan, Number.isFinite(at) ? at : undefined);
-    }
-    if (snap.departures) stopsLayer.set(snap.departures.stops, snap.departures.dep);
+    const at = Date.parse(snap.vehicles?.t ?? "");
+    fixesLayer.set(snap.vehicles?.v ?? [], snap.vehicles?.plan, Number.isFinite(at) ? at : undefined);
+    stopsLayer.set(snap.departures?.stops ?? {}, snap.departures?.dep ?? {});
+    if (!snap.traffic) ndwLayer.setLive(data.ndw?.stations.map(() => null) ?? []);
     if (snap.air) airLayer.set(snap.air.s);
     if (snap.weather) {
       // wet roads slow motorized traffic
@@ -273,7 +279,7 @@ async function boot() {
       sim.postMessage({ type: "params", speedFactor: rain > 2 ? 0.85 : rain > 0.2 ? 0.93 : 1 });
     }
     if (snap.water) liveWater = snap.water;
-    app.setLive(snap, live.fresh);
+    app.setLive(snap);
   };
   const live = new LiveFeed(dataBase, applyLive);
 
@@ -303,6 +309,9 @@ async function boot() {
     requestAnimationFrame(loop);
     const realDt = Math.min(0.1, (now - lastNow) / 1000);
     lastNow = now;
+    if (localActivity && app.mode === "live" && localActivity.update(now, scene.controls.target.x, -scene.controls.target.z)) {
+      app.setRoadFrame(localActivity.data, localActivity.ids, localActivity.speeds, localActivity.count);
+    }
     transit.update(app.paused ? 0 : realDt * app.simSpeed);
     // live vehicles run on real time, never on the sim clock: a snapshot is a
     // measurement of now, so it must not be scrubbed, paused or compressed
@@ -344,6 +353,7 @@ async function boot() {
     if (now - lastLiveChip > 1000) {
       lastLiveChip = now;
       observedSignals.refresh();
+      if (live.snapshot && validity(currentLiveSnapshot(live.snapshot)) !== liveValidity) applyLive(live.snapshot);
       const age = live.ageMin();
       if (live.snapshot) {
         ui.liveChip.style.display = "";

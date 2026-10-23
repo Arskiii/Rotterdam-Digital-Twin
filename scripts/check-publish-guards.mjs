@@ -19,7 +19,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", ".github", "workflows");
-const GUARDED = ["live", "archive"];
+const GUARDED = ["live", "archive", "transit-data"];
 
 /** Every `run:` block in a workflow file, as raw text with its step name. */
 function runBlocks(text) {

@@ -194,6 +194,32 @@ jobs:
       - name: Say what we have
         run: npm run check-timetable
 
+      - name: Publish validated transit references for the live endpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT=$(mktemp -d)
+          node scripts/pack-transit.mjs "$OUT/transit.json.gz"
+          printf '{"git":{"deploymentEnabled":{"transit-data":false}}}' > "$OUT/vercel.json"
+          git -C "$OUT" init -q -b transit-data
+          git -C "$OUT" config user.name 'github-actions[bot]'
+          git -C "$OUT" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Compare the content first; a cache hit must not publish again.
+          if git -C "$OUT" fetch -q --depth=1 "$REPO_URL" transit-data 2>/dev/null; then
+            OLD=$(git -C "$OUT" rev-parse FETCH_HEAD:transit.json.gz)
+            NEW=$(git -C "$OUT" hash-object transit.json.gz)
+            if [ "$OLD" = "$NEW" ]; then
+              echo 'Transit references unchanged'
+              exit 0
+            fi
+          fi
+          git -C "$OUT" add transit.json.gz vercel.json
+          git -C "$OUT" commit -q -m 'Validated weekly transit references'
+          # One current bundle, without accumulating binary history.
+          git -C "$OUT" push -q --force "$REPO_URL" transit-data
+
   # Publish the live city snapshot to the `live` branch and fold it into the
   # historical archive on the `archive` branch.
   #

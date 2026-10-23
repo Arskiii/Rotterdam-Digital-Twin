@@ -150,10 +150,16 @@ all three honestly:
   chart drawn from two days of readings is flat and empty for most of its
   width — which reads as a quiet city rather than an absent record.
 
-**Live city feeds** (refreshed every 2 minutes by `.github/workflows/deploy.yml`
-onto the `live` branch; the app polls it and falls back to the committed
-snapshot — the header chip shows the snapshot's real age, and once it goes
-stale the app says so instead of presenting old traffic as current):
+**Live city feeds** — the primary site is
+[rotterdam-digital-twin.vercel.app](https://rotterdam-digital-twin.vercel.app/).
+Both Vercel and GitHub Pages poll the public `/api/live` endpoint once a minute.
+It collects independent providers concurrently with a 6.5-second shared request
+deadline, coalesces requests in each warm instance, and caches successful results
+for 30 seconds (with up to 60 seconds of CDN revalidation). Provider failures omit
+their sections; a package with no current traffic or transit receives HTTP 503.
+The GitHub `live` branch and bundled snapshot remain fallback sources. The header
+shows package age; traffic, positions and boards expire separately after 20
+minutes, including while an open tab receives no newer package.
 
 - **NDW live traffic** (opendata.ndw.nu, minutely): real flows for the 610
   matched stations re-feed the calibration loop continuously instead of a
@@ -196,42 +202,35 @@ was doing last Tuesday at 08:20:
 - `e/YYYY-MM.json` — incidents and bridge openings, deduped
 - Appends are idempotent, so a re-run over the same snapshot changes nothing
 
-**Why the refresh job looks the way it does.** For most of this repo's life
-the `schedule:` trigger never fired at all — zero `schedule` events in the run
-history, and observed refresh gaps of up to five hours, so "every 5 minutes"
-really meant "whenever someone pressed the button". It now fires reliably from
-`deploy.yml`, and only from there: a second workflow added later with the same
-cron never armed once. Two lessons are baked in as a result.
+**Delivery and timetable maintenance.** GitHub schedule events can be delayed
+by hours. The existing `deploy.yml` loop remains the sole publisher of `live`
+and `archive`, but the interactive feed no longer depends on the next scheduled
+run. The Vercel endpoint fetches public providers on demand and needs no ingest
+secret, database or additional cron. `VITE_OBSERVATION_API_URL` still overrides
+the default service for an existing receiver.
 
-The job stays in `deploy.yml` because that is the file whose cron demonstrably
-works in this repo. Moving it out stopped the refresh dead.
+The timetable job validates its weekly Actions cache and publishes the matching
+routes, stops and timetable together in one compressed bundle on `transit-data`.
+The endpoint reloads that bundle at least every six hours while active. This is
+necessary even when the service calendar has not expired: changed GTFS route/trip
+IDs otherwise silently drop vehicles and remove their movement paths. Each data
+branch writes its own Vercel deployment guard; `npm run check-workflows` enforces
+that rule. The reference branch retains only the current bundle, avoiding binary
+history growth. Archived observations retain their existing delivery cadence.
 
-There is exactly one publisher of `live` and `archive`, and it writes a
-`vercel.json` onto each. Both branches hold data, not an app, so Vercel's git
-integration otherwise builds them on every push and fails — one failed
-deployment every five minutes. When two workflows published `live` and only
-one wrote the guard, each force-push replaced the other's tree and the
-failures came back intermittently. Any future publisher of these branches must
-write that file.
+Cars, bicycles and pedestrians are modelled, and live transit motion between
+position fixes follows timetable paths. The map shows activity counts and a
+**Find activity** button that cycles through transit, cars, people and bicycles
+at street level. Small screen-space marks preserve visibility at city scale.
+On phones (or after a worker failure), a bounded preview animates at most 240
+agents on nearby mapped streets, updating at most 12.5 times/second without a
+second city graph or full simulation. It is labelled **MODELLED PREVIEW** and
+does not claim signal simulation or measured traffic volumes.
 
-Within a run the job loops rather than fetching once and exiting, so the
-snapshot stays current between sparse firings instead of ageing out.
-
-The cadence is two minutes rather than one because
-`raw.githubusercontent.com` serves the live branch with `cache-control:
-max-age=300`, and a cache-busting query string does not get past it (verified
-— `x-cache: HIT` either way, identical body). Five minutes is a hard floor on
-how fresh this data can reach a browser through this path, so publishing faster buys nothing
-downstream and only doubles the load on NDW and OVapi, who serve these feeds
-for free. The freshness chip is calibrated to that floor: a healthy feed reads
-as a few minutes old, and genuine outages show amber or red. The Intelligence
-page exposes each feed's own observation time; a recent package can contain
-an older river or weather reading. Buienradar's timezone-free Rotterdam station
-clock is converted from Europe/Amsterdam to UTC at collection; the air-quality
-timestamp is the oldest included measurement, not the package time. A separately
-hosted observation service can
-remove the GitHub raw cache delay when a destination and ingest secret are
-configured; see `public/docs/intelligence-api.html`.
+Each provider keeps its own observation timestamp. Buienradar's timezone-free
+Rotterdam clock is converted from Europe/Amsterdam to UTC; air quality uses the
+oldest included measurement rather than collection time. The separate observation
+receiver is documented in `public/docs/intelligence-api.html`.
 
 **Calibration & validation against official data:**
 

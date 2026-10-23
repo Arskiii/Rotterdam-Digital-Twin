@@ -1,8 +1,8 @@
 // Live city state produced by scripts/fetch-live.mjs: NDW traffic flows, open
 // bascule bridges, real transit positions and departure boards, Maas water
 // level, weather and air quality. The snapshot is refreshed on a 60-second
-// cadence by .github/workflows/deploy.yml onto the repo's `live` branch; a
-// local copy ships as a fallback so the app works offline and in dev.
+// cadence by the cached Vercel endpoint. The scheduled GitHub publisher and a
+// bundled snapshot remain fallbacks when the endpoint is unavailable.
 
 /** [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec] */
 export type LiveVehicle = [number, number, number, string, string, number, number, string, number];
@@ -40,7 +40,9 @@ export interface LiveSnapshot {
 }
 
 const LIVE_BRANCH_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/live/live.json";
-const OBSERVATION_URL = import.meta.env.VITE_OBSERVATION_API_URL?.trim() || "";
+const OBSERVATION_URL = import.meta.env.VITE_OBSERVATION_API_URL?.trim() ||
+  (typeof location !== "undefined" && location.hostname.endsWith(".vercel.app")
+    ? "/api/live" : "https://rotterdam-digital-twin.vercel.app/api/live");
 // The GitHub raw fallback has cache-control max-age=300 and its cache-busting
 // query string does not help. A configured observation service can deliver
 // faster, so poll that path once a minute; the GitHub-only path needs less.
@@ -84,6 +86,27 @@ export async function readSnapshotJson(response: Response): Promise<unknown> {
  */
 export const LIVE_STALE_MIN = 20;
 export const LIVE_LAGGING_MIN = 9;
+
+export function liveTimeFresh(t: string | undefined, now = Date.now()): boolean {
+  const age = now - Date.parse(t ?? "");
+  return Number.isFinite(age) && age >= -60_000 && age <= LIVE_STALE_MIN * 60_000;
+}
+
+/** Missing/expired observations clear their layer instead of retaining an old fix. */
+export function currentLiveSnapshot(snap: LiveSnapshot, now = Date.now()): LiveSnapshot {
+  const current = { ...snap };
+  for (const key of ["traffic", "vehicles", "departures"] as const) {
+    if (!liveTimeFresh(snap[key]?.t, now)) delete current[key];
+  }
+  if (!liveTimeFresh(snap.t, now)) {
+    delete current.bridges;
+    delete current.incidents;
+  } else {
+    current.bridges = snap.bridges?.filter((b) => Date.parse(b.until) > now);
+    current.incidents = snap.incidents?.filter((i) => Date.parse(i.until) > now);
+  }
+  return current;
+}
 
 export type LiveHealth = "live" | "lagging" | "stale" | "offline";
 
@@ -226,7 +249,7 @@ export class LiveFeed {
       for (const [source, url] of sources) {
         let snap: LiveSnapshot;
         try {
-          const res = await fetch(url, { cache: "no-cache", credentials: "omit", signal: AbortSignal.timeout(8_000) });
+          const res = await fetch(url, { cache: source === "service" ? "default" : "no-cache", credentials: "omit", signal: AbortSignal.timeout(8_000) });
           if (!res.ok) continue;
           snap = (await readSnapshotJson(res)) as LiveSnapshot;
         } catch {
@@ -249,7 +272,7 @@ export class LiveFeed {
         }
         // A service can be reachable yet lag its publisher. When it is already
         // several minutes old, check the mirror before declaring this poll done.
-        if (source === "service" && this.ageMin() > 3) continue;
+        if (this.ageMin() > (source === "service" ? 3 : LIVE_STALE_MIN)) continue;
         return;
       }
     } finally { this.polling = false; }
