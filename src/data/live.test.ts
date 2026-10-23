@@ -9,6 +9,26 @@ const NEWER = "2026-08-21T10:00:00.000Z";
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("live delivery and expiry", () => {
+  it("shares a loaded snapshot and later refreshes without starting a second poller", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
+    const fetcher = vi.fn(async () => Response.json({ v: 3, t: new Date().toISOString(), bridges: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const feed = new LiveFeed("/data/");
+    await vi.waitFor(() => expect(feed.snapshot?.t).toBe(NEWER));
+    const map = vi.fn(), intelligence = vi.fn();
+    const unsubscribe = feed.subscribe(map);
+    feed.subscribe(intelligence);
+    expect(map).toHaveBeenCalledTimes(1); expect(intelligence).toHaveBeenCalledTimes(1);
+    expect(map.mock.calls[0][0]).toBe(intelligence.mock.calls[0][0]);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    unsubscribe();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(map).toHaveBeenCalledTimes(1); expect(intelligence).toHaveBeenCalledTimes(2);
+    expect(intelligence.mock.calls[1][0].t).not.toBe(NEWER);
+    vi.clearAllTimers();
+  });
+
   it("checks the bundled copy when a reachable branch has stopped publishing", async () => {
     vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
     const fetcher = vi.fn(async (url: string) => url.includes("/api/live")

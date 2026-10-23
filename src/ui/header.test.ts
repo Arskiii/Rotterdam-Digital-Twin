@@ -1,46 +1,50 @@
 import { describe, expect, it } from "vitest";
 import { buildHeader, readMapNavigation } from "./header";
+import { platformRouteUrl, readPlatformRoute } from "./navigation";
 
-describe("shared platform navigation", () => {
-  it("opens each Intelligence destination in its requested map context", () => {
-    const markup = buildHeader({ page: "intelligence" });
-    const links = Array.from(markup.matchAll(/href="(\.\.\/[^"]+)"/g), (match) =>
-      new URL(match[1].replaceAll("&amp;", "&"), "https://example.test/platform/intelligence/")
-    );
-    const mapLinks = links.filter((link) => link.pathname === "/platform/");
-    expect(mapLinks).toHaveLength(6);
-    expect(links.some((link) => link.pathname === "/platform/lab/")).toBe(true);
-    expect(mapLinks.map((link) => readMapNavigation(link.search))).toEqual([
-      { mode: "live", page: "map" },
-      { mode: "sim", page: "map" },
-      { mode: "history", page: "map" },
-      { mode: "live", page: "brief" },
-      { mode: "live", page: "map" },
-      { mode: "sim", page: "setup" },
-    ]);
-    expect(markup).toContain('href="./" aria-current="page">Intelligence</a>');
-    expect(buildHeader({ page: "map" })).toContain('href="./lab/">Scenario lab</a>');
+const root = new URL("https://example.test/Rotterdam-Digital-Twin/");
+
+describe("persistent platform navigation", () => {
+  it("offers all five destinations as local view switches with one active page", () => {
+    for (const page of ["map", "brief", "setup", "intelligence", "lab"] as const) {
+      const markup = buildHeader({ page });
+      const navigation = markup.match(/<nav id="topnav"[\s\S]*?<\/nav>/)![0];
+      expect([...navigation.matchAll(/data-page="([^"]+)"/g)].map(m => m[1])).toEqual(["brief", "map", "setup", "intelligence", "lab"]);
+      expect([...navigation.matchAll(/<button[^>]*aria-current="page"/g)]).toHaveLength(1);
+      expect(navigation).toContain(`data-page="${page}" aria-current="page"`);
+      expect(navigation).not.toContain("href=");
+    }
   });
 
-  it("ignores unsupported query values instead of passing them to the app", () => {
-    expect(readMapNavigation("?mode=unknown&page=intelligence")).toEqual({});
-    expect(readMapNavigation("?mode=live&page=%3Cscript%3E")).toEqual({ mode: "live" });
+  it("accepts workspace deep links and ignores unsupported query values", () => {
+    expect(readMapNavigation("?mode=sim&page=lab")).toEqual({ mode: "sim", page: "lab" });
+    expect(readMapNavigation("?mode=live&page=intelligence")).toEqual({ mode: "live", page: "intelligence" });
+    expect(readMapNavigation("?mode=unknown&page=%3Cscript%3E")).toEqual({});
     expect(readMapNavigation("?nosw=1")).toEqual({});
   });
 
-  it("keeps lab and Intelligence navigation in the same platform with one active page", () => {
-    for (const page of ["lab", "intelligence"] as const) {
-      const markup = buildHeader({ page, mapHref: "/platform/" });
-      const navigation = markup.match(/<nav id="topnav"[\s\S]*?<\/nav>/)![0];
-      const active = [...navigation.matchAll(/<a[^>]*aria-current="page"[^>]*>([^<]+)<\/a>/g)];
-      expect(active.map((match) => match[1])).toEqual([page === "lab" ? "Scenario lab" : "Intelligence"]);
-      const links = [...navigation.matchAll(/href="([^"]+)"/g)].map((match) =>
-        new URL(match[1].replaceAll("&amp;", "&"), `https://example.test/platform/${page}/`));
-      expect(links.map((link) => link.pathname)).toEqual([
-        "/platform/", "/platform/", "/platform/", "/platform/intelligence/", "/platform/lab/",
-      ]);
-      expect(markup).toContain('aria-label="Map modes"');
-      expect(markup).not.toContain('<button data-mode=');
+  it("resolves old paths and root links at both domain and repository roots", () => {
+    for (const base of [root, new URL("https://example.test/")]) {
+      for (const [path, page] of [["", "map"], ["lab/", "lab"], ["intelligence/", "intelligence"]]) {
+        expect(readPlatformRoute(new URL(path, base), base)?.page).toBe(page);
+      }
+      expect(readPlatformRoute(new URL("?page=setup&mode=sim", base), base)).toEqual({ page: "setup", mode: "sim" });
+      expect(readPlatformRoute(new URL("v03/", base), base)).toBeNull();
+      expect(readPlatformRoute(new URL("https://other.test/lab/"), base)).toBeNull();
     }
+  });
+
+  it("retains handoffs and section bookmarks while canonicalizing the document URL", () => {
+    const current = new URL("lab/?corridor=road-12&handoff=saved&nosw=1#observations", root);
+    const next = platformRouteUrl(current, root, { page: "lab", mode: "live" }, "#results-panel");
+    expect(next.pathname).toBe(root.pathname);
+    expect(next.searchParams.get("corridor")).toBe("road-12");
+    expect(next.searchParams.get("handoff")).toBe("saved");
+    expect(next.searchParams.get("nosw")).toBe("1");
+    expect(next.hash).toBe("#results-panel");
+    expect(readPlatformRoute(next, root)).toEqual({ page: "lab", mode: "live" });
+    const map = platformRouteUrl(next, root, { page: "map", mode: "sim" });
+    expect(map.hash).toBe("");
+    expect(readPlatformRoute(map, root)).toEqual({ page: "map", mode: "sim" });
   });
 });
