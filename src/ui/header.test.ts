@@ -27,4 +27,20 @@ describe("shared platform navigation", () => {
     expect(readMapNavigation("?mode=live&page=%3Cscript%3E")).toEqual({ mode: "live" });
     expect(readMapNavigation("?nosw=1")).toEqual({});
   });
+
+  it("keeps lab and Intelligence navigation in the same platform with one active page", () => {
+    for (const page of ["lab", "intelligence"] as const) {
+      const markup = buildHeader({ page, mapHref: "/platform/" });
+      const navigation = markup.match(/<nav id="topnav"[\s\S]*?<\/nav>/)![0];
+      const active = [...navigation.matchAll(/<a[^>]*aria-current="page"[^>]*>([^<]+)<\/a>/g)];
+      expect(active.map((match) => match[1])).toEqual([page === "lab" ? "Scenario lab" : "Intelligence"]);
+      const links = [...navigation.matchAll(/href="([^"]+)"/g)].map((match) =>
+        new URL(match[1].replaceAll("&amp;", "&"), `https://example.test/platform/${page}/`));
+      expect(links.map((link) => link.pathname)).toEqual([
+        "/platform/", "/platform/", "/platform/", "/platform/intelligence/", "/platform/lab/",
+      ]);
+      expect(markup).toContain('aria-label="Map modes"');
+      expect(markup).not.toContain('<button data-mode=');
+    }
+  });
 });

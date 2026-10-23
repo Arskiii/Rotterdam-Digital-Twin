@@ -1,5 +1,8 @@
 import { safeReading, parseImported } from "./imports";
-import { installNavigation, siteUrl } from "../ui/platform";
+import "../style.css";
+import "../ui/workspace.css";
+import { mountWorkspaceChrome } from "../ui/workspace";
+import { siteUrl } from "../ui/siteUrl";
 import "./lab.css";
 import { buildOsmNetwork } from "../v03/osm";
 import { applyOverrides, loadOverrides } from "../v03/overrides";
@@ -20,7 +23,12 @@ import { mean, metricChange, nearestObservation } from "./presentation";
 import { DEFAULT_SETUP, SetupValidationError, defaultScenarioConfig as config, matchingPreset, sameScenarioPair,
   scenarioPair, setupFromPair, timingPresets, type LabSetup } from "./setup";
 
-installNavigation("lab");
+mountWorkspaceChrome({ page: "lab", sections: [
+  { id: "observations", label: "Traffic observations", icon: "shield" },
+  { id: "scenario-setup", label: "Signal comparison", icon: "sliders" },
+  { id: "results-panel", label: "Comparison results", icon: "target" },
+  { id: "reports-panel", label: "Scenario reports", icon: "layers", breakBefore: true },
+] });
 
 const el = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const status = el<HTMLDivElement>("load-status");
@@ -141,29 +149,31 @@ function drawChart(selected: number) {
   chart.height = height * ratio;
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   ctx.clearRect(0, 0, width, height);
-  ctx.font = "9px system-ui";
-  ctx.fillStyle = "#8da7bb";
+  const style = getComputedStyle(chart);
+  const color = (name: string) => style.getPropertyValue(name).trim();
+  ctx.font = `9px ${style.fontFamily}`;
+  ctx.fillStyle = color("--text-dim");
   if (!samples.length) { ctx.fillText("No observations for this selection. Import history or choose another detector.", 16, 40, width - 32); return; }
   const firstTime = Date.parse(samples[0].observedAt);
   const span = Date.parse(samples.at(-1)!.observedAt) - firstTime;
   const xAt = (index: number) => 18 + (width - 36) * (span ? (Date.parse(samples[index].observedAt) - firstTime) / span : 0.5);
-  ctx.strokeStyle = "#91dfc550"; ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
+  ctx.strokeStyle = color("--line-bright"); ctx.lineWidth = 1; ctx.setLineDash([3, 4]);
   ctx.beginPath(); ctx.moveTo(xAt(selected), 30); ctx.lineTo(xAt(selected), 188); ctx.stroke(); ctx.setLineDash([]);
   const series: Array<{ key: "speedKmh" | "vehiclesPerHour"; label: string; color: string; unit: string }> = [
-    { key: "speedKmh", label: "Speed", color: "#91dfc5", unit: "km/h" },
-    { key: "vehiclesPerHour", label: "Flow", color: "#92b7e1", unit: "veh/h" },
+    { key: "speedKmh", label: "Speed", color: color("--text"), unit: "km/h" },
+    { key: "vehiclesPerHour", label: "Flow", color: color("--text-dim"), unit: "veh/h" },
   ];
   for (let panel = 0; panel < 2; panel++) {
     const { key, label, color, unit } = series[panel];
     const top = 7 + panel * 96;
     const values = samples.map((s) => s[key]);
     const max = Math.max(1, ...values.filter((v): v is number => v !== null)) * 1.1;
-    ctx.fillStyle = "#809bb0";
+    ctx.fillStyle = style.getPropertyValue("--text-dim").trim();
     ctx.fillText(`${label} · ${unit}`, 18, top + 12);
     ctx.textAlign = "right";
     ctx.fillText(`${Math.round(max)}`, width - 18, top + 12);
     ctx.textAlign = "left";
-    ctx.strokeStyle = "#233747";
+    ctx.strokeStyle = style.getPropertyValue("--line-faint").trim();
     ctx.lineWidth = .7;
     for (const offset of [40, 82]) {
       ctx.beginPath(); ctx.moveTo(18, top + offset); ctx.lineTo(width - 18, top + offset); ctx.stroke();
@@ -193,7 +203,7 @@ function drawChart(selected: number) {
       ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2); ctx.fill();
     }
   }
-  ctx.fillStyle = "#8da7bb";
+  ctx.fillStyle = color("--text-dim");
   const label = (time: string) => new Date(time).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
   ctx.fillText(label(samples[0].observedAt), 18, 210);
   if (samples.length > 1) {

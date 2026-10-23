@@ -24,19 +24,20 @@ export function drawCorridorMap(canvas: HTMLCanvasElement, network: Network | un
   const scale = Math.min(width, height) / (extent * 1.6);
   const x = (value: number) => width / 2 + (value - cx) * scale;
   const y = (value: number) => height / 2 + (value - cy) * scale;
-  ctx.strokeStyle = "#1c3040";
+  const style = getComputedStyle(canvas);
+  ctx.strokeStyle = style.getPropertyValue("--line-faint").trim();
   ctx.lineWidth = .6;
   for (let i = 0; i < width; i += 24) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, height); ctx.stroke(); }
   for (let i = 0; i < height; i += 24) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(width, i); ctx.stroke(); }
   ctx.lineCap = "round";
   for (const edge of [...edges.filter((row) => !edgeIds.includes(row.id)), ...selected]) {
     const highlighted = edgeIds.includes(edge.id);
-    ctx.strokeStyle = highlighted ? "#98e4cb" : "#405b6b";
+    ctx.strokeStyle = style.getPropertyValue(highlighted ? "--text" : "--line-bright").trim();
     ctx.lineWidth = highlighted ? 3 : 1.3;
     ctx.beginPath(); ctx.moveTo(x(edge.start.x), y(edge.start.y)); ctx.lineTo(x(edge.end.x), y(edge.end.y)); ctx.stroke();
   }
   if (selected.length) {
-    ctx.fillStyle = "#aaf3d9";
+    ctx.fillStyle = style.getPropertyValue("--text").trim();
     for (const point of [selected[0].start, selected[0].end]) {
       ctx.beginPath(); ctx.arc(x(point.x), y(point.y), 3, 0, Math.PI * 2); ctx.fill();
     }
