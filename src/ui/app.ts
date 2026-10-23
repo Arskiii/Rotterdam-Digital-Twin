@@ -1135,8 +1135,8 @@ export class App {
       note.textContent =
         `The simulation core could not start on this device (${reason}). ` +
         `Everything measured still works — real trams and metros, departure boards, ` +
-        `sensor congestion, incidents, weather and the archive. What is missing is ` +
-        `modelled: the cars, bikes and pedestrians on the live map, and Simulation mode itself.`;
+        `sensor congestion, incidents, weather and the archive. The live map uses ` +
+        `a small labelled local animation for cars, bikes and people; Simulation mode is unavailable.`;
     }
     // there is no simulation to switch to
     const go = document.getElementById("smn-go");
@@ -1790,12 +1790,12 @@ export class App {
       const kind = this.activityKind++ % 4;
       const candidates: { x: number; z: number; label: string }[] = [];
       if (kind === 0 && this.layers.fixesLayer?.group.visible) {
-        for (const v of this.layers.fixesLayer.vehicles) candidates.push({ x: v.x, z: v.z, label: `${v.label} · LIVE FIX / TIMETABLE PATH` });
+        for (const v of this.layers.fixesLayer.vehicles) candidates.push({ x: v.x, z: v.z, label: `${v.label} · ${v.plan ? "LIVE FIX + TIMETABLE PROJECTION" : "LIVE POSITION FIX"}` });
       } else if (kind > 0 && this.lastFrame) {
         const mode = [0, 0, 2, 1][kind];
         const f = this.lastFrame;
         for (let i = 0; i < f.count; i++) {
-          if (Math.floor(f.data[i * 4 + 3] / 4) !== mode) continue;
+          if (Math.floor(f.data[i * 4 + 3] / 4) !== mode || f.speeds[i] < (mode === 2 ? 0.2 : 1)) continue;
           candidates.push({ x: f.data[i * 4], z: -f.data[i * 4 + 1], label: `${["CARS", "BIKES", "PEOPLE"][mode]} · MODELLED${this.simAvailable ? "" : " LOCAL PREVIEW"}` });
         }
         this.setBox(["vehicles", "bikes", "pedestrians"][mode], true);

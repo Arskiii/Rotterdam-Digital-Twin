@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Publish the already validated weekly Actions cache as one atomic reference
+// Publish the already validated daily Actions cache as one atomic reference
 // bundle. No national GTFS download or timetable rebuild happens in a Function.
 import { readFileSync, writeFileSync } from "node:fs";
 import { gzipSync } from "node:zlib";

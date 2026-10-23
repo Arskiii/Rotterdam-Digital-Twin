@@ -209,9 +209,9 @@ run. The Vercel endpoint fetches public providers on demand and needs no ingest
 secret, database or additional cron. `VITE_OBSERVATION_API_URL` still overrides
 the default service for an existing receiver.
 
-The timetable job validates its weekly Actions cache and publishes the matching
+The timetable job validates its daily Actions cache and publishes the matching
 routes, stops and timetable together in one compressed bundle on `transit-data`.
-The endpoint reloads that bundle at least every six hours while active. This is
+The endpoint reloads that bundle at least every 15 minutes while active. This is
 necessary even when the service calendar has not expired: changed GTFS route/trip
 IDs otherwise silently drop vehicles and remove their movement paths. Each data
 branch writes its own Vercel deployment guard; `npm run check-workflows` enforces

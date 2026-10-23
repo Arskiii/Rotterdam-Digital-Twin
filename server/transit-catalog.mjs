@@ -6,7 +6,7 @@ const URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/tr
 export function createTransitCatalog({ fetcher = fetch, now = Date.now } = {}) {
   let cached = null, loadedAt = 0, inflight = null;
   return async (signal) => {
-    if (cached && now() - loadedAt < 6 * 3_600_000) return cached;
+    if (cached && now() - loadedAt < 15 * 60_000) return cached;
     if (inflight) return inflight;
     inflight = (async () => {
       try {
