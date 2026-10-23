@@ -4,7 +4,7 @@
 import * as THREE from "three";
 import type { Chrome } from "./chrome";
 import { setMeter, barGlyphHTML } from "./chrome";
-import { readMapNavigation } from "./header";
+import { PHONE_MQ, readMapNavigation, type MapPage, type MapMode } from "./header";
 import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
 import type { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "../render/dynamic";
@@ -14,7 +14,7 @@ import { DroneViewer } from "../render/drone";
 import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
 import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
-import { fmtClockAmPm, fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml, fmtAge } from "./format";
+import { fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml, fmtAge } from "./format";
 import { ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/archive";
 import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
 import { buildSearchIndex, stopEntries, searchIndex, type SearchEntry, type SearchHit } from "./search";
@@ -40,7 +40,8 @@ interface UnitRuntime {
 const SIGNAL_COLOR: Record<string, string> = { STRONG: "green", MODERATE: "amber", WEAK: "red", "NO LINK": "" };
 
 export class App {
-  page: "map" | "brief" | "setup" = "map";
+  page: MapPage = "map";
+  onNavigate?: (page: MapPage, mode: MapMode) => void;
   selected: UnitRuntime | null = null;
   // pan-away dismissal: arms once the camera target has been near the
   // selected unit, so a selection made from far away doesn't self-close
@@ -75,7 +76,7 @@ export class App {
    * layout it has no room for. The short side is what stays small when a
    * device is rotated, so that is what decides.
    */
-  static readonly PHONE_MQ = "(max-width: 780px), (max-height: 520px) and (pointer: coarse)";
+  static readonly PHONE_MQ = PHONE_MQ;
   static readonly PHONE = typeof matchMedia === "function" && matchMedia(App.PHONE_MQ).matches;
   /**
    * Whether the pointer is a fingertip rather than a cursor.
@@ -206,12 +207,6 @@ export class App {
     });
 
     this.buildHistoryBar();
-    ui.modeBtns.forEach((b) =>
-      b.addEventListener("click", () => {
-        this.setMode(b.dataset.mode as "live" | "sim" | "history");
-        this.saveSetting("mode", this.mode);
-      })
-    );
 
     // replay scrubber
     this.replayBar = document.createElement("div");
@@ -376,18 +371,8 @@ export class App {
   private wire() {
     const ui = this.ui;
 
-    // clock
-    const tickClock = () => (ui.clock.textContent = fmtClockAmPm(new Date(), TIMEZONE));
-    tickClock();
-    setInterval(tickClock, 5000);
-
-    // top nav
-    ui.navBtns.forEach((b) =>
-      b.addEventListener("click", () => this.setPage(b.dataset.page as typeof this.page))
-    );
-
     // rail
-    ui.rail.querySelectorAll<HTMLButtonElement>(".rail-btn").forEach((b) => {
+    ui.rail.querySelectorAll<HTMLButtonElement>("button[data-rail]").forEach((b) => {
       b.addEventListener("click", () => {
         const k = b.dataset.rail;
         if (k === "units") this.setPage("map");
@@ -402,7 +387,7 @@ export class App {
         else if (k === "secure") this.toast("info", "SECURE FEEDS: <b>3 CHANNELS ENCRYPTED</b>");
         else if (k === "crowd") this.toast("info", "CROWD FLOW MODULE — <b>STANDBY</b>");
         else if (k === "comms") this.toast("info", "COMMS RELAY NOMINAL — LATENCY 41MS");
-        ui.rail.querySelectorAll(".rail-btn").forEach((x) => x.classList.toggle("on", x === b));
+        ui.rail.querySelectorAll("button[data-rail]").forEach((x) => x.classList.toggle("on", x === b));
       });
     });
 
@@ -583,6 +568,7 @@ export class App {
    * except by Escape, which means "get me out of this" everywhere.
    */
   private onKey(e: KeyboardEvent) {
+    if (this.page === "intelligence" || this.page === "lab") return;
     const t = e.target as HTMLElement | null;
     const typing =
       !!t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
@@ -1177,7 +1163,7 @@ export class App {
     );
   }
 
-  setMode(m: "live" | "sim" | "history") {
+  setMode(m: MapMode, persist = false) {
     // a mode that cannot run is not a mode
     if (m === "sim" && (!this.simAvailable || App.PHONE)) m = "live";
     const prevMode = this.mode;
@@ -1263,6 +1249,8 @@ export class App {
           ? "SIMULATION MODE — MODELLED CITY: VARIABLES UNLOCKED"
           : "HISTORY MODE — REPLAYING THE ARCHIVE"
     );
+    if (persist) this.saveSetting("mode", this.mode);
+    this.onNavigate?.(this.page, this.mode);
   }
 
   /**
@@ -1709,6 +1697,9 @@ export class App {
     (document.getElementById("scale-switch") as HTMLElement).style.display = mapUi ? "" : "none";
     (document.getElementById("map-tools") as HTMLElement).style.display = mapUi ? "" : "none";
     if (p === "brief") this.renderBrief();
+    const workspace = p === "intelligence" || p === "lab";
+    this.worker.postMessage({ type: "params", running: !workspace && (this.mode === "live" || this.mode === "sim" && !this.paused) });
+    this.onNavigate?.(p, this.mode);
   }
 
   setDock(name: string) {

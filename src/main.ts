@@ -1,6 +1,5 @@
-import "./style.css";
 import * as THREE from "three";
-import { buildChrome, setMeter } from "./ui/chrome";
+import { type buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
 import { buildCity, buildDistrictBounds, syncFog, setAmbient, releaseToGPU, RoofStreamer } from "./render/city";
 import type { RoofIndex } from "./data/loader";
@@ -10,24 +9,12 @@ import { ResilienceLayers } from "./render/resilience";
 import { ObservedSignalsLayer } from "./render/observed-signals";
 import { pollObservedSignals } from "./data/live-signals";
 import { loadCity } from "./data/loader";
-import { LiveFeed, currentLiveSnapshot, type LiveSnapshot } from "./data/live";
+import { type LiveFeed, currentLiveSnapshot, type LiveSnapshot } from "./data/live";
 import { watchForNewBuild } from "./data/buildwatch";
 import { registerServiceWorker } from "./data/sw-register";
 import { App } from "./ui/app";
 import { LocalActivity } from "./sim/local-activity";
-
-const root = document.getElementById("app")!;
-const ui = buildChrome(root);
-
-const stageFracs: Record<string, number> = { grid: 0, signals: 0, structures: 0, sim: 0 };
-function paintBoot(stage: string, frac: number) {
-  stageFracs[stage] = Math.max(stageFracs[stage], frac);
-  const s = ui.bootStages[stage];
-  if (s) {
-    setMeter(s.bars, stageFracs[stage]);
-    s.pct.textContent = `${Math.round(stageFracs[stage] * 100)}%`;
-  }
-}
+import { siteUrl } from "./ui/siteUrl";
 
 // Data binaries live in-repo (public/data). Deployments that ship only source
 // (e.g. Vercel file deploys) fall back to the pinned GitHub mirror via jsDelivr.
@@ -35,7 +22,7 @@ const DATA_FALLBACK =
   "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@2ac52386897c1be74a128ca095acd73fc05a8f26/public/data/";
 
 async function resolveDataBase(): Promise<string> {
-  const local = `${import.meta.env.BASE_URL}data/`;
+  const local = siteUrl("data/").href;
   try {
     // A GET, not a HEAD. `Cache.match` is keyed by method, so a HEAD never
     // matches the GET the service worker stored — which made this probe fail
@@ -72,7 +59,17 @@ function inertWorker(): Worker {
   } as unknown as Worker;
 }
 
-async function boot() {
+export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFeed) {
+  const stageFracs: Record<string, number> = { grid: 0, signals: 0, structures: 0, sim: 0 };
+  function paintBoot(stage: string, frac: number) {
+    stageFracs[stage] = Math.max(stageFracs[stage], frac);
+    const s = ui.bootStages[stage];
+    if (s) {
+      setMeter(s.bars, stageFracs[stage]);
+      s.pct.textContent = `${Math.round(stageFracs[stage] * 100)}%`;
+    }
+  }
+
   const scene = new SceneCtx(ui.sceneCanvas);
 
   const dataBase = await resolveDataBase();
@@ -281,7 +278,7 @@ async function boot() {
     if (snap.water) liveWater = snap.water;
     app.setLive(snap);
   };
-  const live = new LiveFeed(dataBase, applyLive);
+  live.subscribe(applyLive);
 
   // A tab left open keeps refreshing its data but never its code
   watchForNewBuild(() => app.offerReload());
@@ -304,11 +301,12 @@ async function boot() {
   const fpsBox = { frames: 0, t0: performance.now() };
   const lineMat = meshes.roadLines.material as THREE.LineBasicMaterial;
   let lastNow = performance.now();
-  let lastLiveChip = 0;
+  let lastLiveRefresh = 0;
   function loop(now: number) {
     requestAnimationFrame(loop);
     const realDt = Math.min(0.1, (now - lastNow) / 1000);
     lastNow = now;
+    if (ui.viewport.hidden) return; // retain the scene without rendering an invisible map
     if (localActivity && app.mode === "live" && localActivity.update(now, scene.controls.target.x, -scene.controls.target.z)) {
       app.setRoadFrame(localActivity.data, localActivity.ids, localActivity.speeds, localActivity.count);
     }
@@ -350,36 +348,10 @@ async function boot() {
         meshes.water.updateMatrix();
       }
     }
-    if (now - lastLiveChip > 1000) {
-      lastLiveChip = now;
+    if (now - lastLiveRefresh > 1000) {
+      lastLiveRefresh = now;
       observedSignals.refresh();
       if (live.snapshot && validity(currentLiveSnapshot(live.snapshot)) !== liveValidity) applyLive(live.snapshot);
-      const age = live.ageMin();
-      if (live.snapshot) {
-        ui.liveChip.style.display = "";
-        // the chip states the real age of the data rather than a green light:
-        // a snapshot the pipeline stopped feeding should look wrong, not fine
-        const health = live.health();
-        ui.liveDot.style.background =
-          health === "live" ? "#3ddc84" : health === "lagging" ? "#e3b23c" : "#d0453c";
-        const w = live.snapshot.weather;
-        const ageTxt = age < 1 ? "<1M" : `${Math.round(age)}M`;
-        if (health === "stale") {
-          ui.liveText.textContent = `FEED STALE — ${ageTxt} OLD`;
-        } else {
-          const parts = [`LIVE ${ageTxt}`];
-          if (w?.temp != null) parts.push(`${Math.round(w.temp)}°C`);
-          if (liveWater) parts.push(`MAAS ${liveWater.cm >= 0 ? "+" : ""}${liveWater.cm}CM`);
-          const all = live.snapshot.incidents ?? [];
-          const nWrk = all.filter((i) => i.kind === 4).length;
-          const nInc = all.length - nWrk;
-          const nBridge = live.snapshot.bridges?.length ?? 0;
-          if (nInc) parts.push(`${nInc} INC`);
-          if (nWrk) parts.push(`${nWrk} WRK`);
-          if (nBridge) parts.push(`${nBridge} BRUG`);
-          ui.liveText.textContent = parts.join(" · ");
-        }
-      }
     }
     app.frame(now);
     scene.renderer.render(scene.scene, scene.camera);
@@ -409,10 +381,5 @@ async function boot() {
     const info = scene.renderer.info.render;
     return JSON.stringify({ msPerFrame: +ms.toFixed(2), calls: info.calls, tris: info.triangles });
   };
+  return app;
 }
-
-boot().catch((err) => {
-  console.error(err);
-  ui.bootError.style.display = "block";
-  ui.bootError.textContent = `BOOT FAILURE — ${err?.message ?? err}`;
-});

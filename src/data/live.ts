@@ -203,14 +203,22 @@ export class LiveFeed {
   source: "service" | "branch" | "local" | null = null;
   private localUrl: string;
   private onUpdate: (snap: LiveSnapshot) => void;
+  private listeners = new Set<(snap: LiveSnapshot) => void>();
   private lastT = "";
   private polling = false;
 
-  constructor(dataBase: string, onUpdate: (snap: LiveSnapshot) => void) {
+  constructor(dataBase: string, onUpdate: (snap: LiveSnapshot) => void = () => {}) {
     this.localUrl = `${dataBase}live/live.json`;
     this.onUpdate = onUpdate;
     void this.poll();
     setInterval(() => void this.poll(), POLL_MS);
+  }
+
+  /** Map and Intelligence share one poller, including its already loaded snapshot. */
+  subscribe(listener: (snap: LiveSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    if (this.snapshot) listener(this.snapshot);
+    return () => { this.listeners.delete(listener); };
   }
 
   /** Minutes since the snapshot was produced; Infinity before the first load. */
@@ -269,6 +277,7 @@ export class LiveFeed {
           // feed: the snapshot was dropped, the next source was tried, and the
           // app sat there with no data and nothing in the console.
           this.onUpdate(snap);
+          for (const listener of this.listeners) listener(snap);
         }
         // A service can be reachable yet lag its publisher. When it is already
         // several minutes old, check the mirror before declaring this poll done.

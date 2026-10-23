@@ -17,7 +17,7 @@ function initialScripts(entry, files = new Set()) {
 
 // Count every shared dependency, not just the tiny entry chunk. Keep the analysis
 // page independent of WebGL; workers are loaded on demand and checked separately.
-for (const [entry, budget] of [["lab/index.html", 100_000], ["grid/index.html", 750_000], ["v03/index.html", 750_000]]) {
+for (const [entry, budget] of [["index.html", 100_000], ["intelligence/index.html", 100_000], ["lab/index.html", 100_000], ["grid/index.html", 750_000], ["v03/index.html", 750_000]]) {
   // Identical map entry points may be emitted as shared chunks without an HTML
   // manifest key. Resolve the scripts actually emitted into each HTML document.
   const html = readFileSync(resolve(output, entry), "utf8");
@@ -36,7 +36,18 @@ for (const [entry, budget] of [["lab/index.html", 100_000], ["grid/index.html", 
   if (bytes > budget) throw new Error(`${entry} exceeds its initial JavaScript budget by ${bytes - budget} bytes.`);
 }
 
-for (const asset of manifest["lab/index.html"].assets ?? []) {
+// Keep total renderer JavaScript bounded too: splitting the shell must not hide
+// a heavier renderer when the map is first opened.
+const mapFiles = initialScripts("src/main.ts");
+const mapBytes = [...mapFiles].reduce((sum, file) => sum + readFileSync(resolve(output, file)).length, 0);
+console.log(`Lazy map: ${(mapBytes / 1000).toFixed(1)} kB JavaScript; budget 800 kB`);
+if (mapBytes > 800_000) throw new Error("Map exceeds its 800 kB JavaScript budget.");
+
+const lab = manifest["src/lab/main.ts"];
+if (!lab?.assets?.some((asset) => asset.includes("scenario.worker") && asset.endsWith(".js"))) {
+  throw new Error("Missing Scenario Lab worker in the build manifest.");
+}
+for (const asset of lab.assets) {
   if (asset.endsWith(".js") && readFileSync(resolve(output, asset)).length > 100_000) {
     throw new Error(`Scenario worker exceeds its 100 kB JavaScript budget: ${asset}`);
   }

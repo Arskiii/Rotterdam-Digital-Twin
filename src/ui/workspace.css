@@ -1,16 +1,14 @@
 /* SurveilTrack's shared frame, palette, typography and header come from ../style.css.
    Evidence workspaces share this scrollable layout and these content primitives. */
 .workspace-page { color-scheme: dark; }
-.workspace-page #app { height: 100dvh; }
-.workspace-page #stage { min-height: 0; }
+.workspace-view { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.workspace-view[hidden], #viewport[hidden], .rail-view[hidden] { display: none !important; }
+.rail-view { display: contents; }
+#rail a { text-decoration: none; }
+body[data-page="intelligence"] #boot, body[data-page="lab"] #boot { display: none; }
 .workspace-page a { color: var(--text); text-underline-offset: 3px; }
 .workspace-page a:hover { color: #fff; }
-.workspace-page .skip { position: fixed; top: 16px; left: 90px; z-index: 100; transform: translateY(-200%); padding: 10px 14px; background: var(--text); color: var(--bg-panel); font-size: 12px; }
-.workspace-page .skip:focus { transform: none; }
-.workspace-page #rail a { text-decoration: none; }
-.workspace-page #mode-switch .mode-link { padding: 4px 11px; font-size: 10.5px; letter-spacing: .08em; color: var(--text-dim); text-transform: uppercase; text-decoration: none; white-space: nowrap; }
-.workspace-page #mode-switch .mode-link:hover { color: var(--text); background: var(--bg-hover); }
-.workspace-page #content { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; background: var(--bg-inset); border: 1px solid var(--line-faint); scrollbar-width: thin; scrollbar-color: var(--line-bright) var(--bg-inset); }
+.workspace-page .workspace-content { flex: 1; min-height: 0; min-width: 0; overflow-y: auto; overflow-x: hidden; background: var(--bg-inset); border: 1px solid var(--line-faint); scrollbar-width: thin; scrollbar-color: var(--line-bright) var(--bg-inset); }
 .workspace-page .workspace-heading { display: flex; justify-content: space-between; align-items: center; gap: 24px; padding: 24px 26px 22px; }
 .workspace-page .eyebrow { color: var(--text-dim); font-size: 9px; letter-spacing: .16em; line-height: 1.7; text-transform: uppercase; }
 .workspace-page h1 { margin: 7px 0 5px; font-size: 18px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
@@ -85,7 +83,6 @@
   .workspace-page .conditions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 1080px) {
-  .workspace-page #mode-switch .mode-link { padding: 4px 8px; letter-spacing: .04em; }
   .workspace-page .snapshot-status { max-width: 280px; }
   .workspace-page .jump { padding: 0 18px; }
   .workspace-page .jump a { padding: 13px 12px; }
@@ -93,16 +90,6 @@
   .workspace-page .workspace-sections { padding: 18px 18px 0; }
 }
 @media (max-width: 780px), (max-height: 520px) and (pointer: coarse) {
-  .workspace-page #topbar { display: grid; grid-template-columns: minmax(0, 1fr) auto; height: auto; gap: 6px 8px; padding: 9px 10px 0; }
-  .workspace-page #brand { display: flex; gap: 6px; font-size: 12px; }
-  .workspace-page #brand span { display: inline; }
-  .workspace-page #brand svg { width: 18px; height: 18px; }
-  .workspace-page #mode-switch { margin-left: 0; }
-  .workspace-page #mode-switch [data-mode="sim"], .workspace-page #topnav [data-page="setup"] { display: none; }
-  .workspace-page #mode-switch .mode-link { padding: 6px; font-size: 9px; letter-spacing: 0; }
-  .workspace-page #topnav { grid-column: 1 / -1; justify-content: space-between; gap: 4px; border-top: 1px solid var(--line); }
-  .workspace-page #topnav .nav-btn { min-height: 36px; font-size: 10px; }
-  .workspace-page #topmeta { display: none; }
   .workspace-page .workspace-heading { padding: 20px 14px; gap: 14px; align-items: start; }
   .workspace-page h1 { font-size: 15px; }
   .workspace-page .workspace-heading .map-link { display: none; }
@@ -116,7 +103,6 @@
   .workspace-page .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .workspace-page .controls { padding: 14px; }
   .workspace-page .workspace-footer { padding: 0 12px 18px; flex-direction: column; gap: 6px; }
-  .workspace-page .skip { left: 12px; }
 }
 @media (max-width: 540px) {
   .workspace-page .cards, .workspace-page .conditions, .workspace-page .api-list { grid-template-columns: 1fr; }
