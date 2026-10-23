@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createServer as createHttpServer } from "node:http";
+import { readFileSync } from "node:fs";
 import { after, test } from "node:test";
 import { Color, Matrix4, Raycaster, Vector3 } from "three";
 import { createServer } from "vite";
@@ -15,6 +16,21 @@ const { buildNetworkMesh, roadEdgesForHit } = await vite.ssrLoadModule("/src/ren
 const { buildTrafficLightMeshes } = await vite.ssrLoadModule("/src/render/lights.ts");
 const { simulateScenario } = await vite.ssrLoadModule("/src/v03/scenario.ts");
 const { ScenarioRunner } = await vite.ssrLoadModule("/src/lab/scenarioRunner.ts");
+const { LocalActivity } = await vite.ssrLoadModule("/src/sim/local-activity.ts");
+const { parseGraph } = await vite.ssrLoadModule("/src/data/loader.ts");
+
+test("phone animation stays bounded on the published city graph", () => {
+  const bytes = readFileSync(new URL("../public/data/graph.bin", import.meta.url));
+  const graph = parseGraph(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  const preview = new LocalActivity(graph);
+  preview.update(1000, 0, 0);
+  assert.equal(preview.count, 240);
+  const before = preview.data.slice();
+  for (let at = 1100; at < 30000; at += 100) preview.update(at, 0, 0);
+  assert.notDeepEqual(preview.data, before);
+  assert.ok(preview.data.every(Number.isFinite));
+  assert.equal(preview.data.length, 960);
+});
 
 function mockGlobal(t, name, value) {
   const original = Object.getOwnPropertyDescriptor(globalThis, name);

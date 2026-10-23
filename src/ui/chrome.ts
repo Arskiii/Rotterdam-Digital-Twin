@@ -44,6 +44,11 @@ export function buildChrome(root: HTMLElement) {
           <button data-scale="street" aria-pressed="false">Street</button>
         </div>
 
+        <div id="map-activity" class="brk">${TICKS}
+          <span id="activity-summary">Loading activity…</span>
+          <button id="find-activity" title="Cycle through transit, cars, people and bikes at street level">Find activity ↗</button>
+        </div>
+
         <div id="track-chip" class="brk" role="status">${TICKS}
           <span class="dot red"></span>
           <span id="track-label">TRACKING</span>

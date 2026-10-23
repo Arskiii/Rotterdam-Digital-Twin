@@ -562,6 +562,7 @@ export class LiveTransitLayer {
     this.lastFrame = now;
     const k = dt >= EASE_S ? 1 : dt / EASE_S;
     const tNow = (Date.now() - this.t0) / 1000;
+    if (tNow > MAX_PROJECT_S && this.vehicles.length) this.set([]);
     let ti = 0;
     let mi = 0;
     this.roadCount = 0;
@@ -586,7 +587,8 @@ export class LiveTransitLayer {
         mesh.setColorAt(idx, this.color);
         if (v.kind === 0) this.tramIdx[ti++] = i;
         else this.metroIdx[mi++] = i;
-      } else if (this.roadCount < this.cap) {
+      }
+      if (this.roadCount < this.cap) {
         const p = this.roadCount++;
         this.pos[p * 3] = v.x;
         this.pos[p * 3 + 1] = 8;

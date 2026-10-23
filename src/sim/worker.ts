@@ -1295,7 +1295,7 @@ function tick() {
   advance(real);
 
   // frame out
-  const total = activeByMode[0] + activeByMode[1] + activeByMode[2];
+  const total = activeByMode[0] + activeByMode[1] + activeByMode[2] + activeByMode[3];
   const vbuf = new Float32Array(total * 4);
   const ibuf = new Int32Array(total);
   const spbuf = new Float32Array(total);

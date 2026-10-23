@@ -88,6 +88,8 @@ class AgentMesh {
   capacity: number;
   cursor = 0;
   ids: Int32Array; // instance index → agent id (for picking)
+  positions: Float32Array;
+  markers: THREE.Points;
 
   constructor(capacity: number, w: number, h: number, dpt: number) {
     this.ids = new Int32Array(capacity).fill(-1);
@@ -102,6 +104,20 @@ class AgentMesh {
     this.mesh.count = 0;
     this.mesh.frustumCulled = false; // instances span the whole city
     this.mesh.renderOrder = 7;
+    this.positions = new Float32Array(capacity * 3);
+    const markerGeo = new THREE.BufferGeometry();
+    markerGeo.setAttribute("position", new THREE.BufferAttribute(this.positions, 3).setUsage(THREE.DynamicDrawUsage));
+    markerGeo.setAttribute("color", new THREE.BufferAttribute(this.mesh.instanceColor.array, 3).setUsage(THREE.DynamicDrawUsage));
+    markerGeo.setDrawRange(0, 0);
+    // A minimum screen-space mark keeps small agents readable at city scale.
+    // It shares the mesh's visibility toggle and never adds another population.
+    this.markers = new THREE.Points(markerGeo, new THREE.PointsMaterial({
+      size: w < 1 ? 2 : 2.8, sizeAttenuation: false, vertexColors: true,
+      transparent: true, opacity: 0.8, depthWrite: false, fog: true,
+    }));
+    this.markers.frustumCulled = false;
+    this.markers.renderOrder = 8;
+    this.mesh.add(this.markers);
   }
 }
 
@@ -155,6 +171,9 @@ export class VehiclesLayer {
       const idx = target.cursor++;
       target.ids[idx] = agentIds ? agentIds[i] : -1;
       target.mesh.setMatrixAt(idx, this.dummy.matrix);
+      target.positions[idx * 3] = x;
+      target.positions[idx * 3 + 1] = 3;
+      target.positions[idx * 3 + 2] = z;
       const slow = 1 - k;
       let r: number, g: number, b: number;
       if (mode === 0) {
@@ -184,8 +203,14 @@ export class VehiclesLayer {
     }
     for (const t of [this.cars, this.bikes, this.peds, this.trucks]) {
       t.mesh.count = t.cursor;
-      t.mesh.instanceMatrix.needsUpdate = true;
-      t.mesh.instanceColor!.needsUpdate = true;
+      t.markers.geometry.setDrawRange(0, t.cursor);
+      // Upload just the occupied prefix, rather than every allocated slot.
+      for (const [attribute, width] of [[t.mesh.instanceMatrix, 16], [t.mesh.instanceColor!, 3],
+        [t.markers.geometry.getAttribute("position") as THREE.BufferAttribute, 3],
+        [t.markers.geometry.getAttribute("color") as THREE.BufferAttribute, 3]] as const) {
+        attribute.clearUpdateRanges();
+        if (t.cursor) { attribute.addUpdateRange(0, t.cursor * width); attribute.needsUpdate = true; }
+      }
     }
   }
 }

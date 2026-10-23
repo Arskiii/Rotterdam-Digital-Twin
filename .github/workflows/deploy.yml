@@ -144,10 +144,10 @@ jobs:
   # from going stale.
   #
   # It is an 8 MB binary built from two streams of a 1 GB file, so it cannot be
-  # rebuilt per refresh; and committing it weekly would put 400 MB of binary
+  # rebuilt per refresh; and committing it daily would put several GB of binary
   # into git history a year. So it lives in the Actions cache under a key that
-  # turns over with the ISO week: every tick restores it in seconds, and the
-  # first tick of a new week pays the four minutes to rebuild.
+  # turns over each day: every tick restores it in seconds, and the
+  # first tick of a new day pays the four minutes to rebuild.
   #
   # Decay here is silent, which is why it is worth a job at all. A route_id
   # missing from the route table is a vehicle dropped from the snapshot
@@ -156,7 +156,7 @@ jobs:
   #
   # A rebuild that produces something worse than what we already have must not
   # be kept: check-timetable gates it, so a bad feed leaves the committed files
-  # in place rather than caching a broken artifact for the rest of the week.
+  # in place rather than caching a broken artifact for the rest of the day.
   timetable:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -167,11 +167,11 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Which week is it
+      - name: Which day is it
         id: wk
-        run: echo "key=gtfs-v1-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        run: echo "key=gtfs-v2-$(date -u +%F)" >> "$GITHUB_OUTPUT"
 
-      - name: Restore this week's timetable
+      - name: Restore today's timetable
         id: cache
         uses: actions/cache@v5
         with:
@@ -181,7 +181,7 @@ jobs:
             data/gtfs-routes.json
           key: ${{ steps.wk.outputs.key }}
 
-      - name: Rebuild, because the week has turned
+      - name: Rebuild current route and trip identities
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
@@ -193,6 +193,32 @@ jobs:
 
       - name: Say what we have
         run: npm run check-timetable
+
+      - name: Publish validated transit references for the live endpoint
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT=$(mktemp -d)
+          node scripts/pack-transit.mjs "$OUT/transit.json.gz"
+          printf '{"git":{"deploymentEnabled":{"transit-data":false}}}' > "$OUT/vercel.json"
+          git -C "$OUT" init -q -b transit-data
+          git -C "$OUT" config user.name 'github-actions[bot]'
+          git -C "$OUT" config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Compare the content first; a cache hit must not publish again.
+          if git -C "$OUT" fetch -q --depth=1 "$REPO_URL" transit-data 2>/dev/null; then
+            OLD=$(git -C "$OUT" rev-parse FETCH_HEAD:transit.json.gz)
+            NEW=$(git -C "$OUT" hash-object transit.json.gz)
+            if [ "$OLD" = "$NEW" ]; then
+              echo 'Transit references unchanged'
+              exit 0
+            fi
+          fi
+          git -C "$OUT" add transit.json.gz vercel.json
+          git -C "$OUT" commit -q -m 'Validated daily transit references'
+          # One current bundle, without accumulating binary history.
+          git -C "$OUT" push -q --force "$REPO_URL" transit-data
 
   # Publish the live city snapshot to the `live` branch and fold it into the
   # historical archive on the `archive` branch.
@@ -230,9 +256,9 @@ jobs:
       # Whatever the timetable job last built. Restore-only: this job never
       # writes the cache, so a run cancelled mid-loop cannot save a half-built
       # one. A miss simply leaves the committed files, which is the floor.
-      - name: Which week is it
+      - name: Which day is it
         id: wk
-        run: echo "key=gtfs-v1-$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        run: echo "key=gtfs-v2-$(date -u +%F)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v5
         with:
           path: |

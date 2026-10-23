@@ -30,13 +30,13 @@ const py = (lat) => +(((lat - ORIGIN.lat) * M_PER_LAT).toFixed(1));
 const inBbox = (lat, lon) => lat > BBOX.s && lat < BBOX.n && lon > BBOX.w && lon < BBOX.e;
 
 const UA = { "User-Agent": "rotterdam-intelligence-platform/1.0 (research; contact via github)" };
-const getBuf = async (url) => {
-  const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(120_000) });
+const getBuf = async (url, signal) => {
+  const res = await fetch(url, { headers: UA, signal: signal ?? AbortSignal.timeout(120_000) });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 };
-const getJson = async (url) => {
-  const res = await fetch(url, { headers: UA, signal: AbortSignal.timeout(60_000) });
+const getJson = async (url, signal) => {
+  const res = await fetch(url, { headers: UA, signal: signal ?? AbortSignal.timeout(60_000) });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
   return res.json();
 };
@@ -65,7 +65,7 @@ function todMinNL(date) {
 }
 
 // ---------------- 1. live traffic flows (NDW trafficspeed) ----------------
-async function fetchTraffic() {
+async function fetchTraffic(signal) {
   const ndw = JSON.parse(readFileSync(join(ROOT, "public", "data", "ndw.json"), "utf8"));
   const siteToStation = new Map();
   ndw.stations.forEach((st, i) => {
@@ -73,7 +73,7 @@ async function fetchTraffic() {
   });
   if (!siteToStation.size) throw new Error("ndw.json has no station ids — rerun: npm run fetch-ndw");
 
-  const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/trafficspeed.xml.gz")).toString("utf8");
+  const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/trafficspeed.xml.gz", signal)).toString("utf8");
   const pubTime = rx(xml, /<publicationTime>([^<]+)</);
   const flow = new Float64Array(ndw.stations.length);
   const speedSum = new Float64Array(ndw.stations.length);
@@ -180,8 +180,8 @@ function recordKind(rec) {
   return -1;
 }
 
-async function fetchSituations() {
-  const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/actueel_beeld.xml.gz")).toString("utf8");
+async function fetchSituations(signal) {
+  const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/actueel_beeld.xml.gz", signal)).toString("utf8");
   const now = Date.now();
   const openBridges = [];
   const rawIncidents = [];
@@ -290,8 +290,8 @@ function stopTimeEvent(buf, off, len) {
  * a fabricated measurement. Direction of travel comes from the stop sequence
  * instead, which is real.
  */
-async function fetchVehicles(routes) {
-  const buf = await getBuf("https://gtfs.ovapi.nl/nl/vehiclePositions.pb");
+async function fetchVehicles(routes, signal) {
+  const buf = await getBuf("https://gtfs.ovapi.nl/nl/vehiclePositions.pb", signal);
   const nowSec = Date.now() / 1000;
   const v = [];
   for (const ent of pbFields(buf)) {
@@ -342,7 +342,11 @@ let timetableCache = null;
 /** Parse the packed timetable once per process. */
 function loadTimetable() {
   if (timetableCache) return timetableCache;
-  const buf = readFileSync(join(ROOT, "data", "ret-timetable.bin"));
+  timetableCache = parseTimetable(readFileSync(join(ROOT, "data", "ret-timetable.bin")));
+  return timetableCache;
+}
+
+export function parseTimetable(buf) {
   let pos = 0;
   const u8 = () => buf.readUInt8(pos++);
   const u16 = () => { const v = buf.readUInt16LE(pos); pos += 2; return v; };
@@ -378,8 +382,7 @@ function loadTimetable() {
     for (let k = 0; k < n; k++) { callStop[k] = u16(); callSec[k] = u16(); }
     trips[i] = { id, line, kind, head, dates, callStop, callSec };
   }
-  timetableCache = { lines, stops, headsigns, dateSets, trips };
-  return timetableCache;
+  return { lines, stops, headsigns, dateSets, trips };
 }
 
 /** Offset of a timezone from UTC, in ms, at a given instant. */
@@ -426,8 +429,8 @@ function serviceDateNum(date) {
  * what gets carried forward onto its remaining scheduled calls — the same
  * arithmetic a platform display does.
  */
-async function fetchTripDelays() {
-  const buf = await getBuf("https://gtfs.ovapi.nl/nl/tripUpdates.pb");
+async function fetchTripDelays(signal) {
+  const buf = await getBuf("https://gtfs.ovapi.nl/nl/tripUpdates.pb", signal);
   const delays = new Map(); // tripId → { delay, cancelled }
   for (const ent of pbFields(buf)) {
     if (ent.field !== 2 || ent.wt !== 2) continue;
@@ -470,10 +473,10 @@ async function fetchTripDelays() {
  * Buses are left out on purpose: they would multiply the snapshot several
  * times over for a fleet the platform does not model.
  */
-async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips = null) {
-  const tt = loadTimetable();
-  const stopTable = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
-  const delays = await fetchTripDelays();
+async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips = null, signal, transit) {
+  const tt = transit?.timetable ?? loadTimetable();
+  const stopTable = transit?.stops ?? JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
+  const delays = await fetchTripDelays(signal);
   const nowSec = atSec;
   const HORIZON = 45 * 60;
   const PER_STOP = 6;
@@ -625,7 +628,7 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips 
 }
 
 // ---------------- 4. Maas water level (Rijkswaterstaat, Boompjes gauge) ----------------
-async function fetchWater() {
+async function fetchWater(signal) {
   const end = new Date();
   const begin = new Date(end.getTime() - 90 * 60_000);
   const iso = (d) => d.toISOString().replace(/\.\d+Z$/, ".000+00:00");
@@ -637,7 +640,7 @@ async function fetchWater() {
       Locatie: { Code: "rotterdam.nieuwemaas.boompjes" },
       Periode: { Begindatumtijd: iso(begin), Einddatumtijd: iso(end) },
     }),
-    signal: AbortSignal.timeout(60_000),
+    signal: signal ?? AbortSignal.timeout(60_000),
   });
   if (res.status === 204) throw new Error("RWS: no data in window");
   if (!res.ok) throw new Error(`RWS: HTTP ${res.status}`);
@@ -659,8 +662,8 @@ async function fetchWater() {
 }
 
 // ---------------- 5. weather (Buienradar, Meetstation Rotterdam) ----------------
-async function fetchWeather() {
-  const j = await getJson("https://data.buienradar.nl/2.0/feed/json");
+async function fetchWeather(signal) {
+  const j = await getJson("https://data.buienradar.nl/2.0/feed/json", signal);
   const st =
     j.actual?.stationmeasurements?.find((s) => s.stationid === 6344) ??
     j.actual?.stationmeasurements?.find((s) => /rotterdam/i.test(s.stationname ?? ""));
@@ -677,19 +680,20 @@ async function fetchWeather() {
 }
 
 // ---------------- 6. air quality (Luchtmeetnet) ----------------
-async function airStations() {
+async function airStations(signal) {
   const cacheFile = join(ROOT, "data", "luchtmeetnet-stations.json");
   if (existsSync(cacheFile)) return JSON.parse(readFileSync(cacheFile, "utf8"));
+  if (signal) throw new Error("Luchtmeetnet: station cache missing");
   const list = [];
   for (let page = 1; page <= 8; page++) {
-    const j = await getJson(`https://api.luchtmeetnet.nl/open_api/stations?page=${page}&order_by=number`);
+    const j = await getJson(`https://api.luchtmeetnet.nl/open_api/stations?page=${page}&order_by=number`, signal);
     for (const s of j.data ?? []) list.push(s.number);
     if (page >= (j.pagination?.last_page ?? 1)) break;
   }
   const out = [];
   for (const number of list) {
     try {
-      const d = (await getJson(`https://api.luchtmeetnet.nl/open_api/stations/${number}`)).data;
+      const d = (await getJson(`https://api.luchtmeetnet.nl/open_api/stations/${number}`, signal)).data;
       const [lon, lat] = d?.geometry?.coordinates ?? [];
       if (inBbox(lat, lon)) out.push({ number, name: String(d.location ?? number).slice(0, 40), x: px(lon), y: py(lat) });
     } catch {
@@ -701,14 +705,14 @@ async function airStations() {
   return out;
 }
 
-async function fetchAir() {
-  const stations = await airStations();
+async function fetchAir(signal) {
+  const stations = await airStations(signal);
   const s = [];
   let oldestMeasuredAt = Infinity;
   const now = Date.now();
-  for (const st of stations) {
+  await Promise.all(stations.map(async (st) => {
     try {
-      const j = await getJson(`https://api.luchtmeetnet.nl/open_api/measurements?station_number=${st.number}&order_by=timestamp_measured&order_direction=desc&page=1`);
+      const j = await getJson(`https://api.luchtmeetnet.nl/open_api/measurements?station_number=${st.number}&order_by=timestamp_measured&order_direction=desc&page=1`, signal);
       const latest = {};
       for (const m of j.data ?? []) {
         const measuredAt = Date.parse(m.timestamp_measured);
@@ -724,71 +728,64 @@ async function fetchAir() {
     } catch {
       /* station offline */
     }
-    await new Promise((r) => setTimeout(r, 100));
-  }
+  }));
   if (!s.length) throw new Error("Luchtmeetnet: no measurements");
   return { t: new Date(oldestMeasuredAt).toISOString(), s };
 }
 
-// ---------------- main ----------------
-async function main() {
+// Independent feeds run together. The optional shared deadline keeps the public
+// endpoint bounded; a slow water/air provider cannot hold transit indefinitely.
+// Tests inject sources so failures never require a live upstream to reproduce.
+export async function collectLiveSnapshot({ signal, sources, transit, log = console } = {}) {
+  if (!sources) {
+    const references = transit ?? Promise.resolve({
+      routes: JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8")),
+    });
+    sources = {
+      traffic: () => fetchTraffic(signal), situations: () => fetchSituations(signal),
+      vehicles: async () => fetchVehicles((await references).routes, signal),
+      departures: async (running) => fetchDepartures(undefined, running, signal, await references),
+      water: () => fetchWater(signal), weather: () => fetchWeather(signal), air: () => fetchAir(signal),
+    };
+  }
   const out = { v: 3, t: new Date().toISOString() };
-  const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
-  const feeds = [
-    ["traffic", fetchTraffic],
-    [
-      "situations",
-      async () => {
-        const { bridges, incidents } = await fetchSituations();
-        out.bridges = bridges;
-        out.incidents = incidents;
-        return `${bridges.length} bridges, ${incidents.length} incidents`;
-      },
-    ],
-    ["vehicles", () => fetchVehicles(routes)],
-    [
-      "departures",
-      async () => {
-        // the trips a vehicle is actually reported on — everything else needs
-        // a board row but never a path
-        const running = new Set((out.vehicles?.v ?? []).map((v) => v[4]).filter(Boolean));
-        const d = await fetchDepartures(undefined, running);
-        const { plans, planT, ...rest } = d;
+  let ok = 0;
+  const read = async (key, fn) => {
+    try {
+      const value = await fn();
+      if (key === "situations") Object.assign(out, value);
+      else if (key === "departures") {
+        const { plans, planT, ...rest } = value;
         out.departures = rest;
-        // The plans belong with the vehicles they steer, and vehicles is
-        // fetched first, so attach rather than nest — but rebase the offsets
-        // onto the vehicle snapshot's clock first. The client then has one
-        // timebase for both the fix age and the schedule, instead of two that
-        // drift apart by however long the timetable walk took.
         if (out.vehicles) {
           const shift = planT - Math.round(Date.parse(out.vehicles.t) / 1000);
-          if (shift) for (const id in plans) for (const w of plans[id]) w[2] += shift;
+          if (shift) for (const points of Object.values(plans)) for (const point of points) point[2] += shift;
           out.vehicles.plan = plans;
         }
-        const planned = out.vehicles ? Object.keys(out.vehicles.v).filter((i) => plans[out.vehicles.v[i][4]]).length : 0;
-        return `${Object.keys(d.stops).length} stations, ${d.liveTrips} live delays, ${planned} vehicles with a path`;
-      },
-    ],
-    ["water", fetchWater],
-    ["weather", fetchWeather],
-    ["air", fetchAir],
-  ];
-  let ok = 0;
-  for (const [key, fn] of feeds) {
-    try {
-      const res = await fn();
-      if (key !== "situations" && key !== "departures") out[key] = res;
+      } else out[key] = value;
       ok++;
-      const n = typeof res === "string" ? res : Array.isArray(res) ? res.length : (res.s?.length ?? res.v?.length ?? "");
-      console.log(`  + ${key}${n !== "" ? `: ${n}` : ""}`);
+      log.log(`  + ${key}`);
     } catch (err) {
-      console.warn(`  ! ${key}: ${err.message ?? err}`);
+      log.warn(`  ! ${key}: ${err.message ?? err}`);
     }
-  }
-  if (!ok) throw new Error("every live feed failed — not writing snapshot");
+  };
+  const vehicles = read("vehicles", sources.vehicles);
+  await Promise.all([
+    vehicles,
+    vehicles.then(() => read("departures", () => sources.departures(
+      new Set((out.vehicles?.v ?? []).map((v) => v[4]).filter(Boolean))
+    ))),
+    ...["traffic", "situations", "water", "weather", "air"].map((key) => read(key, sources[key])),
+  ]);
+  if (!ok) throw new Error("every live feed failed — not publishing snapshot");
+  return out;
+}
+
+async function main() {
+  const out = await collectLiveSnapshot();
   mkdirSync(dirname(OUT), { recursive: true });
   writeFileSync(OUT, JSON.stringify(out));
-  console.log(`live snapshot → ${OUT} (${ok}/${feeds.length} feeds)`);
+  console.log(`live snapshot → ${OUT}`);
 }
 
 // Run when invoked directly; stay importable so the departure/plan builder can

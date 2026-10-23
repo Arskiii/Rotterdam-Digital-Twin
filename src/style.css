@@ -358,6 +358,30 @@ svg {
   color: var(--text);
 }
 
+#map-activity {
+  position: absolute;
+  bottom: 164px;
+  left: 14px;
+  max-width: calc(100% - 80px);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  font-size: 9px;
+  color: var(--text-dim);
+  letter-spacing: .04em;
+}
+#map-activity button { flex-shrink: 0; font-size: 10px; color: var(--text); padding: 4px 6px; }
+#map-activity button:hover { background: var(--bg-active); }
+body:not([data-page="map"]) #map-activity,
+body[data-mode="history"] #map-activity { display: none; }
+@media (max-width: 780px) {
+  #map-activity { left: 6px; bottom: 154px; padding: 6px 8px; gap: 8px; font-size: 8px; }
+  #activity-summary { max-width: 190px; }
+  #map-activity button { min-height: 34px; font-size: 9px; }
+}
+
 /* ---------- track chip ------------------------------------- */
 
 #track-chip {
@@ -481,6 +505,9 @@ svg {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+body[data-page="map"]:not([data-mode="history"]) #street-chip {
+  bottom: 218px;
 }
 
 /* ---------- NDW station card ------------------------------- */

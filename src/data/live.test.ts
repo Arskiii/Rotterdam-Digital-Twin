@@ -1,10 +1,42 @@
-import { describe, it, expect } from "vitest";
-import { admitSnapshot, readSnapshotJson, upgradeV1, type LiveSnapshot } from "./live";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { LiveFeed, currentLiveSnapshot, liveTimeFresh, admitSnapshot, readSnapshotJson, upgradeV1, type LiveSnapshot } from "./live";
 import packagedSnapshot from "../../public/data/live/live.json";
 
 const T = "2026-08-21T09:19:44.558Z";
 const OLDER = "2026-08-21T08:00:00.000Z";
 const NEWER = "2026-08-21T10:00:00.000Z";
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe("live delivery and expiry", () => {
+  it("checks the bundled copy when a reachable branch has stopped publishing", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
+    const fetcher = vi.fn(async (url: string) => url.includes("/api/live")
+      ? new Response("unavailable", { status: 503 })
+      : Response.json({ v: 3, t: url.includes("raw.githubusercontent") ? OLDER : NEWER, bridges: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const update = vi.fn();
+    const feed = new LiveFeed("/data/", update);
+    await vi.waitFor(() => expect(feed.snapshot?.t).toBe(NEWER));
+    expect(feed.source).toBe("local");
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(feed.fresh).toBe(true);
+    vi.setSystemTime(Date.parse(NEWER) + 21 * 60_000);
+    expect(feed.health()).toBe("stale");
+    vi.clearAllTimers();
+  });
+
+  it("expires individual traffic sections even inside a new envelope", () => {
+    const snap = base({ t: NEWER, vehicles: { t: OLDER, v: [] },
+      departures: { t: T, stops: {}, dep: {} }, traffic: { t: NEWER, todMin: 600, s: [] } });
+    const current = currentLiveSnapshot(snap, Date.parse(NEWER));
+    expect(current.vehicles).toBeUndefined(); expect(current.departures).toBeUndefined();
+    expect(current.traffic).toBe(snap.traffic);
+    expect(snap.vehicles).toBeDefined();
+    expect(liveTimeFresh(undefined)).toBe(false);
+    expect(liveTimeFresh(NEWER, Date.parse(T))).toBe(false);
+  });
+});
 
 const base = (over: Partial<LiveSnapshot> = {}): LiveSnapshot =>
   ({ v: 3, t: T, bridges: [], ...over }) as LiveSnapshot;
