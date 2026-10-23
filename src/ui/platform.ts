@@ -1,9 +1,7 @@
 import "./platform.css";
 
-/** Resolve assets from the site root, including GitHub Pages repository prefixes. */
-export function siteUrl(path: string): URL {
-  return new URL(path, new URL(document.documentElement.dataset.root ?? "../", document.baseURI));
-}
+import { siteUrl } from "./siteUrl";
+export { siteUrl } from "./siteUrl";
 
 export function installNavigation(current: "map" | "lab" | "grid") {
   const header = document.createElement("header");

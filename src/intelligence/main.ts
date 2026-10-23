@@ -1,5 +1,5 @@
 import "../style.css";
-import "./style.css";
+import "../ui/workspace.css";
 import { mountIntelligenceChrome, updateIntelligenceHeader } from "./chrome";
 
 import { LiveFeed, type LiveSnapshot } from "../data/live";

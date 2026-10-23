@@ -18,26 +18,28 @@ export function readMapNavigation(search: string): { mode?: MapMode; page?: MapP
 
 /** Shared platform chrome. Map controls stay local; other pages link to them. */
 export function buildHeader({ page, mapHref = "../" }: {
-  page: "map" | "intelligence";
+  page: "map" | "intelligence" | "lab";
   mapHref?: string;
 }): string {
   const intelligence = page === "intelligence";
+  const workspace = page !== "map";
   const mapLink = (mode: MapMode, destination: MapPage) =>
     escapeHtml(`${mapHref}?mode=${mode}&page=${destination}`);
-  const modes = intelligence
+  const modes = workspace
     ? `<a class="mode-link" data-mode="live" href="${mapLink("live", "map")}" title="Open the live map">Live</a>
         <a class="mode-link" data-mode="sim" href="${mapLink("sim", "map")}" title="Open the simulation map">Simulation</a>
         <a class="mode-link" data-mode="history" href="${mapLink("history", "map")}" title="Open the history map">History</a>`
     : `<button data-mode="live" class="on" aria-pressed="true">Live</button>
         <button data-mode="sim" aria-pressed="false">Simulation</button>
         <button data-mode="history" aria-pressed="false">History</button>`;
-  const labHref = escapeHtml(`${intelligence ? mapHref : "./"}lab/`);
-  const navigation = intelligence
+  const labHref = escapeHtml(`${workspace ? mapHref : "./"}lab/`);
+  const intelligenceHref = intelligence ? "./" : escapeHtml(`${mapHref}intelligence/`);
+  const navigation = workspace
     ? `<a class="nav-btn" data-page="brief" href="${mapLink("live", "brief")}">Brief</a>
         <a class="nav-btn" data-page="map" href="${mapLink("live", "map")}">Unit&nbsp;Map</a>
         <a class="nav-btn" data-page="setup" href="${mapLink("sim", "setup")}">Setup</a>
-        <a class="nav-btn on" href="./" aria-current="page">Intelligence</a>
-        <a class="nav-btn" href="${labHref}">Scenario lab</a>`
+        <a class="nav-btn${intelligence ? " on" : ""}" href="${intelligenceHref}"${intelligence ? ' aria-current="page"' : ""}>Intelligence</a>
+        <a class="nav-btn${page === "lab" ? " on" : ""}" href="${labHref}"${page === "lab" ? ' aria-current="page"' : ""}>Scenario lab</a>`
     : `<button class="nav-btn" data-page="brief">Brief</button>
         <button class="nav-btn on" data-page="map" aria-current="page">Unit&nbsp;Map</button>
         <button class="nav-btn" data-page="setup">Setup</button>
@@ -46,7 +48,7 @@ export function buildHeader({ page, mapHref = "../" }: {
 
   return `<header id="topbar" class="brk"><i class="tick tl"></i><i class="tick tr"></i><i class="tick bl"></i><i class="tick br"></i>
       <div id="brand">${icons.logo()} <span>${BRAND}</span></div>
-      <div id="mode-switch" role="group" aria-label="${intelligence ? "Map modes" : "What the map is showing"}">
+      <div id="mode-switch" role="group" aria-label="${workspace ? "Map modes" : "What the map is showing"}">
         ${modes}
       </div>
       <nav id="topnav" aria-label="Pages">
