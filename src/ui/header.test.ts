@@ -25,7 +25,8 @@ describe("persistent platform navigation", () => {
 
   it("resolves old paths and root links at both domain and repository roots", () => {
     for (const base of [root, new URL("https://example.test/")]) {
-      for (const [path, page] of [["", "map"], ["lab/", "lab"], ["intelligence/", "intelligence"]]) {
+      for (const [path, page] of [["", "map"], ["index.html", "map"], ["lab/", "lab"],
+        ["lab/index.html", "lab"], ["intelligence/", "intelligence"], ["intelligence/index.html", "intelligence"]]) {
         expect(readPlatformRoute(new URL(path, base), base)?.page).toBe(page);
       }
       expect(readPlatformRoute(new URL("?page=setup&mode=sim", base), base)).toEqual({ page: "setup", mode: "sim" });

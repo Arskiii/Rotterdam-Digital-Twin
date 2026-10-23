@@ -12,7 +12,9 @@ export function readPlatformRoute(url: URL, root: URL): Partial<PlatformRoute> &
   const paths = new Map<string, MapPage>([
     [root.pathname, "map"], [new URL("index.html", root).pathname, "map"],
     [new URL("intelligence/", root).pathname, "intelligence"],
+    [new URL("intelligence/index.html", root).pathname, "intelligence"],
     [new URL("lab/", root).pathname, "lab"],
+    [new URL("lab/index.html", root).pathname, "lab"],
   ]);
   const fallback = paths.get(url.pathname);
   if (!fallback) return null;
