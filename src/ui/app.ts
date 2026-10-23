@@ -635,12 +635,9 @@ export class App {
   /**
    * Withdraw the controls a phone cannot honour.
    *
-   * `main.ts` never starts the simulation worker on a phone, so no frame and
-   * no congestion message ever arrives: the modelled fleet has nothing to
-   * draw and the flux replay has nothing to replay. The same reasoning already
-   * removes SIMULATION and SETUP there — "offering a mode that cannot run is
-   * worse than not offering it" — and it applies just as well to four switches
-   * and a button that can only ever report NO HISTORY YET.
+   * Phones use a bounded local road animation instead of the simulation
+   * worker. It supplies road frames, but no congestion history or replay.
+   * SIMULATION and SETUP are also unavailable without the full worker.
    *
    * Hidden rather than removed, so `layerBoxes`, the saved layer states and
    * `setBox` all keep working on the same elements they always did.
@@ -1790,7 +1787,9 @@ export class App {
       const kind = this.activityKind++ % 4;
       const candidates: { x: number; z: number; label: string }[] = [];
       if (kind === 0 && this.layers.fixesLayer?.group.visible) {
-        for (const v of this.layers.fixesLayer.vehicles) candidates.push({ x: v.x, z: v.z, label: `${v.label} · ${v.plan ? "LIVE FIX + TIMETABLE PROJECTION" : "LIVE POSITION FIX"}` });
+        const vehicles = this.layers.fixesLayer.vehicles;
+        const projected = vehicles.filter(v => v.plan);
+        for (const v of projected.length ? projected : vehicles) candidates.push({ x: v.x, z: v.z, label: `${v.label} · ${v.plan ? "LIVE FIX + TIMETABLE PROJECTION" : "LIVE POSITION FIX"}` });
       } else if (kind > 0 && this.lastFrame) {
         const mode = [0, 0, 2, 1][kind];
         const f = this.lastFrame;

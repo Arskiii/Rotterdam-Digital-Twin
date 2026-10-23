@@ -506,6 +506,9 @@ body[data-mode="history"] #map-activity { display: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
+body[data-page="map"]:not([data-mode="history"]) #street-chip {
+  bottom: 218px;
+}
 
 /* ---------- NDW station card ------------------------------- */
 

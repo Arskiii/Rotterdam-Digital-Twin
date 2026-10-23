@@ -86,7 +86,8 @@ test('published transit bundle is atomic, parsed once, and refreshes independent
   const [a, b] = await Promise.all([load(), load()]);
   assert.equal(a, b); assert.equal(calls, 1); assert.equal(a.timetable.trips[0].id, 'trip');
   assert.equal(a.routes.route[1], '4');
-  clock += 6 * 3_600_000 + 1; await load(); assert.equal(calls, 2);
+  clock += 15 * 60_000 - 1; await load(); assert.equal(calls, 1);
+  clock += 2; await load(); assert.equal(calls, 2);
 });
 
 test('a malformed transit catalog fails closed and may be retried', async () => {
