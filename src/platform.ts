@@ -5,7 +5,7 @@ import intelligenceMarkup from "./intelligence/view.html?raw";
 import labMarkup from "./lab/view.html?raw";
 import { buildChrome } from "./ui/chrome";
 import { PHONE_MQ, type MapMode, type MapPage } from "./ui/header";
-import { isWorkspace, platformRouteUrl, readPlatformRoute, type PlatformRoute } from "./ui/navigation";
+import { isWorkspace, normalizePlatformRoute, platformRouteUrl, readPlatformRoute, type PlatformRoute } from "./ui/navigation";
 import { siteUrl } from "./ui/siteUrl";
 import { LiveFeed } from "./data/live";
 import { TIMEZONE } from "./config";
@@ -77,6 +77,8 @@ function renderRoute() {
     const active = button.dataset.mode === route.mode;
     button.classList.toggle("on", active);
     button.setAttribute("aria-pressed", String(active));
+    button.disabled = route.page === "setup" && button.dataset.mode !== "sim"
+      || button.dataset.mode === "sim" && (phone || map?.simAvailable === false);
   }
   document.title = `SurveilTrack — ${{ map: "Rotterdam", brief: "Brief", setup: "Setup", intelligence: "Intelligence", lab: "Scenario Lab" }[route.page]}`;
 }
@@ -85,6 +87,8 @@ function syncMap() {
   if (!map) return;
   syncingMap = true;
   try {
+    // Leaving Setup releases its mode lock before applying another mode.
+    if (map.page === "setup" && route.page !== "setup") map.setPage(route.page);
     if (map.mode !== route.mode) map.setMode(route.mode, true);
     map.setPage(route.page);
     route = { page: map.page, mode: map.mode };
@@ -92,7 +96,7 @@ function syncMap() {
 }
 
 function navigate(page: MapPage, mode = route.mode, historyMode: "push" | "replace" | "none" = "push", hash = "") {
-  route = { page: phone && page === "setup" ? "map" : page, mode: phone && mode === "sim" ? "live" : mode };
+  route = normalizePlatformRoute({ page, mode }, !phone && map?.simAvailable !== false);
   syncMap();
   const next = platformRouteUrl(new URL(location.href), siteRoot, route, hash);
   if (historyMode !== "none" && next.href !== location.href) {
@@ -133,8 +137,9 @@ function ensureWorkspace(page: "intelligence" | "lab"): Promise<void> {
 }
 
 ui.navBtns.forEach((button) => button.addEventListener("click", () => navigate(button.dataset.page as MapPage)));
-ui.modeBtns.forEach((button) => button.addEventListener("click", () =>
-  navigate(isWorkspace(route.page) ? "map" : route.page, button.dataset.mode as MapMode)));
+ui.modeBtns.forEach((button) => button.addEventListener("click", () => {
+  if (!button.disabled) navigate(isWorkspace(route.page) ? "map" : route.page, button.dataset.mode as MapMode);
+}));
 // Section anchors, return links and legacy workspace links also stay in this document.
 document.addEventListener("click", (event) => {
   if (event.button || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.defaultPrevented) return;

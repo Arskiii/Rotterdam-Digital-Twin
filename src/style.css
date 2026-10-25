@@ -2225,6 +2225,8 @@ label {
   transition: color 100ms, background 100ms;
 }
 #mode-switch button:hover { color: var(--text); }
+#mode-switch button:disabled { opacity: 0.35; cursor: not-allowed; }
+#mode-switch button:disabled:hover { color: var(--text-dim); }
 #mode-switch button.on { background: var(--bg-active); color: var(--text); }
 #mode-switch button[data-mode="live"].on { color: #6fe39a; }
 /* a mode the device cannot run reads as withdrawn, not merely unselected */
@@ -2274,7 +2276,7 @@ label {
 .hb-worst b { color: var(--amber); }
 .hb-empty { color: var(--text-faint); letter-spacing: 0.1em; }
 
-/* SETUP is a simulation control; outside SIMULATION it reads as inert */
+/* Reserved for an unavailable simulation core; normal Setup opens directly. */
 #setup-mode-note:has(#smn-text:empty) { display: none; }
 #setup-mode-note {
   border: 1px solid var(--line);
@@ -2289,16 +2291,6 @@ label {
   flex-wrap: wrap;
   gap: 8px 16px;
 }
-/* The note used to say "switch to SIMULATION" and leave you to go find the
-   switch. It is one click; it may as well be this one.
-
-   Sitting right after the sentence rather than pushed to the far edge: the
-   toast stack occupies the top-right of the viewport, and a button flush right
-   on a full-width bar lands underneath it — the one control on this page that
-   still works outside SIMULATION, hidden behind a notification. */
-#setup-mode-note #smn-go {
-  flex: none;
-}
 /* Everything on SETUP moves a simulation variable, so everything on SETUP is
    locked outside SIMULATION — not just #setup-grid.
    The Calibration and Scenario Library panels are siblings of that grid rather
@@ -2312,8 +2304,7 @@ label {
    this selector cannot quietly reopen the same hole. */
 .page.mode-locked #setup-grid,
 .page.mode-locked > .panel { opacity: 0.42; pointer-events: none; }
-/* the note is the one thing that must stay readable and reachable — it carries
-   the way out */
+/* Keep a runtime failure explanation readable. */
 .page.mode-locked #setup-mode-note { opacity: 1; pointer-events: auto; }
 
 /* ---------- the band between a phone and a desktop -----------

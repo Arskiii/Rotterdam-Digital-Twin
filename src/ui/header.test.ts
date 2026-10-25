@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildHeader, readMapNavigation } from "./header";
-import { platformRouteUrl, readPlatformRoute } from "./navigation";
+import { normalizePlatformRoute, platformRouteUrl, readPlatformRoute } from "./navigation";
 
 const root = new URL("https://example.test/Rotterdam-Digital-Twin/");
 
@@ -21,6 +21,25 @@ describe("persistent platform navigation", () => {
     expect(readMapNavigation("?mode=live&page=intelligence")).toEqual({ mode: "live", page: "intelligence" });
     expect(readMapNavigation("?mode=unknown&page=%3Cscript%3E")).toEqual({});
     expect(readMapNavigation("?nosw=1")).toEqual({});
+  });
+
+  it("opens Setup in Simulation from any mode, including direct links and restored history", () => {
+    for (const mode of ["live", "history", "sim"] as const) {
+      const target = readPlatformRoute(new URL(`?page=setup&mode=${mode}`, root), root)!;
+      const route = normalizePlatformRoute({ page: target.page, mode: target.mode! });
+      expect(route).toEqual({ page: "setup", mode: "sim" });
+      expect(readPlatformRoute(platformRouteUrl(root, root, route), root)).toEqual(route);
+    }
+  });
+
+  it("releases the Setup mode lock on every other page and respects unavailable simulation", () => {
+    for (const page of ["map", "brief", "intelligence", "lab"] as const) {
+      for (const mode of ["live", "history", "sim"] as const) {
+        expect(normalizePlatformRoute({ page, mode })).toEqual({ page, mode });
+      }
+    }
+    expect(normalizePlatformRoute({ page: "setup", mode: "sim" }, false)).toEqual({ page: "map", mode: "live" });
+    expect(normalizePlatformRoute({ page: "map", mode: "history" }, false)).toEqual({ page: "map", mode: "history" });
   });
 
   it("resolves old paths and root links at both domain and repository roots", () => {

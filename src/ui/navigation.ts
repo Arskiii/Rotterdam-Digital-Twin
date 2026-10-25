@@ -2,6 +2,17 @@ import { readMapNavigation, type MapMode, type MapPage } from "./header";
 
 export interface PlatformRoute { page: MapPage; mode: MapMode }
 
+/** Setup always edits the simulation; unsupported devices stay on the map. */
+export function normalizePlatformRoute(route: PlatformRoute, simulationAvailable = true): PlatformRoute {
+  if (!simulationAvailable) {
+    return {
+      page: route.page === "setup" ? "map" : route.page,
+      mode: route.mode === "sim" ? "live" : route.mode,
+    };
+  }
+  return route.page === "setup" ? { page: "setup", mode: "sim" } : route;
+}
+
 export function isWorkspace(page: MapPage): page is "intelligence" | "lab" {
   return page === "intelligence" || page === "lab";
 }

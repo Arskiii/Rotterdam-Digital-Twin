@@ -5,6 +5,7 @@ import * as THREE from "three";
 import type { Chrome } from "./chrome";
 import { setMeter, barGlyphHTML } from "./chrome";
 import { PHONE_MQ, readMapNavigation, type MapPage, type MapMode } from "./header";
+import { normalizePlatformRoute } from "./navigation";
 import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
 import type { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "../render/dynamic";
@@ -1111,6 +1112,7 @@ export class App {
       btn.classList.add("unavailable");
       btn.title = `Simulation unavailable on this device — ${reason}`;
     }
+    if (this.page === "setup") this.setPage("map");
     if (this.mode === "sim") this.setMode("live");
     this.log("warn", `SIM CORE UNAVAILABLE — ${reason.toUpperCase()} · MEASURED FEEDS UNAFFECTED`);
     const note = document.getElementById("smn-text");
@@ -1121,9 +1123,6 @@ export class App {
         `sensor congestion, incidents, weather and the archive. The live map uses ` +
         `a small labelled local animation for cars, bikes and people; Simulation mode is unavailable.`;
     }
-    // there is no simulation to switch to
-    const go = document.getElementById("smn-go");
-    if (go) go.style.display = "none";
   }
 
   /** Minutes since midnight in Rotterdam, from the viewer's own clock. */
@@ -1164,8 +1163,12 @@ export class App {
   }
 
   setMode(m: MapMode, persist = false) {
-    // a mode that cannot run is not a mode
-    if (m === "sim" && (!this.simAvailable || App.PHONE)) m = "live";
+    this.applyMode(m, persist);
+    this.onNavigate?.(this.page, this.mode);
+  }
+
+  private applyMode(m: MapMode, persist = false) {
+    m = normalizePlatformRoute({ page: this.page, mode: m }, this.simAvailable && !App.PHONE).mode;
     const prevMode = this.mode;
     if (prevMode === "sim" && m !== "sim" && this.trial) this.cancelTrial();
     this.mode = m;
@@ -1227,18 +1230,13 @@ export class App {
       this.closeHistory();
     }
 
-    // SETUP alters model variables; in LIVE and HISTORY there is nothing to
-    // alter, and pretending otherwise would imply the sliders change the city
+    // Keep hidden Setup controls inert outside the simulation too.
     this.ui.pageSetup.classList.toggle("mode-locked", !sim);
     this.lockSetupControls(!sim);
     const noteText = document.getElementById("smn-text");
-    const noteGo = document.getElementById("smn-go") as HTMLButtonElement | null;
     if (noteText && this.simAvailable) {
-      noteText.textContent = sim
-        ? ""
-        : `Variables are a simulation control. Fleet density, demand, signal timing, scenarios, calibration and the signal trial all move the model, not the city.`;
+      noteText.textContent = "";
     }
-    if (noteGo) noteGo.style.display = !sim && this.simAvailable ? "" : "none";
     // the brief leads with a different set of figures per mode
     if (this.page === "brief") this.renderBrief();
     this.log(
@@ -1250,7 +1248,6 @@ export class App {
           : "HISTORY MODE — REPLAYING THE ARCHIVE"
     );
     if (persist) this.saveSetting("mode", this.mode);
-    this.onNavigate?.(this.page, this.mode);
   }
 
   /**
@@ -1673,9 +1670,9 @@ export class App {
   }
 
   setPage(p: typeof this.page) {
-    // SETUP only moves simulation variables, and a phone has no simulation
-    if (p === "setup" && App.PHONE) p = "map";
+    p = normalizePlatformRoute({ page: p, mode: this.mode }, this.simAvailable && !App.PHONE).page;
     this.page = p;
+    if (p === "setup" && this.mode !== "sim") this.applyMode("sim", true);
     // The stylesheet needs to know which page is up: the toast stack and the
     // top-right of a page both want the same corner, and only one of them can
     // have it. Mirrors body[data-mode], which already does this for the modes.
@@ -3149,7 +3146,7 @@ export class App {
     p.innerHTML = `
       <h1>Setup</h1>
       <div class="sub">SIMULATION CORE · OBSERVATION GRID · SYSTEM</div>
-      <div id="setup-mode-note"><span id="smn-text"></span><button class="action-btn" id="smn-go">Switch to Simulation</button></div>
+      <div id="setup-mode-note" role="status"><span id="smn-text"></span></div>
       <div id="setup-grid">
         <div class="panel">
           <div class="p-title">Simulation core</div>
@@ -3373,11 +3370,6 @@ export class App {
       link.download = "rotterdam-signal-trial.json";
       link.click();
       window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    });
-    // The note said "switch to SIMULATION" and left you to find the switch.
-    $("smn-go").addEventListener("click", () => {
-      this.setMode("sim");
-      this.saveSetting("mode", this.mode);
     });
   }
 
