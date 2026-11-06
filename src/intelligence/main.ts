@@ -1,4 +1,5 @@
 import { mountIntelligenceChrome } from "./chrome";
+import { fetchCityBuffer, fetchCityJson } from "../data/city-assets";
 
 import { type LiveFeed, type LiveSnapshot } from "../data/live";
 import type { ExperimentResultMsg, InitMsg } from "../sim/protocol";
@@ -23,17 +24,11 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
   interface Exposure { retrievedAt: string; source: string; method: string; exposedEdges: number[]; erasmusBridgeEdges: number[]; districts: { name: string; roadKm: number; floodModelRoadKm: number; exposurePct: number | null; sampledEdges: number }[] }
   interface Cbs { retrievedAt: string | null; source: string; caveat: string; neighborhoods: { code: string; name: string; residents: number; age65Plus: number | null; households: number | null; lowIncomeHouseholdsPct: number | null }[] }
   interface Ndw { stations: { edge: number; flow: number; name: string; cls: number }[] }
-  const load = async <T>(path: string): Promise<T> => {
-    const response = await fetch(`${dataBase}${path}`);
-    if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
-    return response.json() as Promise<T>;
-  };
+  const load = <T>(path: string): Promise<T> => fetchCityJson<T>(dataBase, path);
   let graphPromise: Promise<ArrayBuffer> | null = null;
   function loadGraph(): Promise<ArrayBuffer> {
-    graphPromise ??= fetch(`${dataBase}graph.bin`).then((response) => {
-      if (!response.ok) throw new Error("Road graph unavailable");
-      return response.arrayBuffer();
-    }).catch((error) => { graphPromise = null; throw error; });
+    graphPromise ??= fetchCityBuffer(dataBase, "graph.bin")
+      .catch((error) => { graphPromise = null; throw error; });
     return graphPromise;
   }
   let latest: LiveSnapshot | null = null;

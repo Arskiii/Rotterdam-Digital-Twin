@@ -1,11 +1,15 @@
 import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
+import { cityAssetVersions } from "./scripts/city-asset-versions.mjs";
 
 // Relative base ("./") makes asset URLs work no matter the repo-name casing
 // or subpath GitHub Pages serves us under. Override with VITE_BASE=/ if you
 // ever host this at the domain root.
 export default defineConfig({
   base: process.env.VITE_BASE ?? "./",
+  define: {
+    __CITY_ASSET_VERSIONS__: JSON.stringify(cityAssetVersions(fileURLToPath(new URL("./public/data", import.meta.url)))),
+  },
   build: {
     manifest: true,
     target: "es2022",
