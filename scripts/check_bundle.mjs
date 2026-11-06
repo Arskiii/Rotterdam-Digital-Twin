@@ -44,6 +44,11 @@ console.log(`Lazy map: ${(mapBytes / 1000).toFixed(1)} kB JavaScript; budget 800
 if (mapBytes > 800_000) throw new Error("Map exceeds its 800 kB JavaScript budget.");
 
 const lab = manifest["src/lab/main.ts"];
+const studyAsset = lab?.assets?.find((asset) => asset.includes("study-network-") && asset.endsWith(".json"));
+if (!studyAsset) throw new Error("Missing fingerprinted study network asset.");
+const studyBytes = readFileSync(resolve(output, studyAsset));
+console.log(`Study network: ${(studyBytes.length / 1000).toFixed(1)} kB JSON (${(gzipSync(studyBytes).length / 1000).toFixed(1)} kB gzip); budget 500 kB`);
+if (studyBytes.length > 500_000) throw new Error("Study network exceeds its 500 kB data budget.");
 if (!lab?.assets?.some((asset) => asset.includes("scenario.worker") && asset.endsWith(".js"))) {
   throw new Error("Missing Scenario Lab worker in the build manifest.");
 }

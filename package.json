@@ -5,8 +5,10 @@
   "type": "module",
   "description": "Rotterdam Intelligence Platform — city-wide 3D traffic simulation on the real OSM street network",
   "scripts": {
+    "predev": "npm run build:lab-network",
     "dev": "vite",
-    "build": "node scripts/check-publish-guards.mjs && tsc --noEmit && npm test && vite build && node scripts/check_bundle.mjs",
+    "build": "node scripts/check-publish-guards.mjs && npm run build:lab-network && tsc --noEmit && npm test && vite build && node scripts/check_bundle.mjs",
+    "build:lab-network": "node scripts/build-lab-network.mjs",
     "test": "vitest run && npm run test:scenario",
     "test:watch": "vitest",
     "preview": "vite preview",
@@ -34,12 +36,13 @@
   },
   "dependencies": {
     "earcut": "^3.2.3",
-    "three": "^0.166.1",
-    "lil-gui": "^0.19.2"
+    "lil-gui": "^0.19.2",
+    "three": "^0.166.1"
   },
   "devDependencies": {
     "@types/earcut": "^2.1.4",
     "@types/three": "^0.166.0",
+    "@xmldom/xmldom": "^0.9.12",
     "typescript": "^5.9.3",
     "vite": "^8.3.5",
     "vitest": "^5.0.5"

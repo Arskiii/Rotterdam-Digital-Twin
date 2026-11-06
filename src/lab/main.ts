@@ -1,7 +1,7 @@
 import { safeReading, parseImported } from "./imports";
 import { mountWorkspaceChrome } from "../ui/workspace";
 import { siteUrl } from "../ui/siteUrl";
-import { buildOsmNetwork } from "../v03/osm";
+import studyNetworkUrl from "../../.generated/study-network.json?url";
 import { applyOverrides, loadOverrides } from "../v03/overrides";
 import { ScenarioRunner } from "./scenarioRunner";
 import {
@@ -43,6 +43,7 @@ export function mountLab(root: HTMLElement) {
   let origin: { lat: number; lon: number };
   let corridor: CorridorMatch | null = null;
   let replayTimer: number | undefined;
+  let active = false;
   let controller: AbortController | null = null;
   let activeTask: "comparison" | "fit" | null = null;
   let exportData: ScenarioReport | null = null;
@@ -749,13 +750,16 @@ export function mountLab(root: HTMLElement) {
       const handoff = handoffToken ? readHandoff(handoffToken, lockedEdgeId ?? "") : null;
       transferredNetwork = handoff !== null;
       const [summary, history] = await Promise.all([
-        handoff ? Promise.resolve(handoff) : fetch(siteUrl("map.osm"), { signal: AbortSignal.any([sourceLoadController.signal, AbortSignal.timeout(15_000)]) }).then(async (response) => {
+        handoff ? Promise.resolve(handoff) : fetch(studyNetworkUrl, { signal: AbortSignal.any([sourceLoadController.signal, AbortSignal.timeout(15_000)]) }).then(async (response) => {
           if (!response.ok) throw new Error(`Map: HTTP ${response.status}`);
-          const xml = await response.text();
+          const study = await response.json();
           if (restoredReport) return null;
-          const summary = buildOsmNetwork(xml);
-          applyOverrides(summary.network, loadOverrides());
-          return summary;
+          if (study.version !== 1 || !Number.isFinite(study.origin?.lat) || !Number.isFinite(study.origin?.lon)) {
+            throw new Error("Invalid study network");
+          }
+          const network = unpackNetwork(study.network);
+          applyOverrides(network, loadOverrides());
+          return { network, origin: study.origin as { lat: number; lon: number } };
         }),
         handoff ? Promise.resolve(null) : fetch(siteUrl("data/traffic-history.json"), { signal: AbortSignal.any([sourceLoadController.signal, AbortSignal.timeout(10_000)]) })
           .then(async (response) => response.ok ? await response.json() as unknown : null)
@@ -796,7 +800,9 @@ export function mountLab(root: HTMLElement) {
   refreshSavedReports();
   void boot();
 
-  return { setActive(active: boolean) {
+  return { setActive(next: boolean) {
+    if (active === next) return;
+    active = next;
     if (!active) stopReplay();
     else { showReplay(); redrawCorridorMap(); refreshSavedReports(); }
   } };

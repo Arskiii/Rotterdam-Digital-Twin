@@ -306,7 +306,7 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
     requestAnimationFrame(loop);
     const realDt = Math.min(0.1, (now - lastNow) / 1000);
     lastNow = now;
-    if (ui.viewport.hidden) return; // retain the scene without rendering an invisible map
+    if (document.hidden || ui.viewport.hidden) return; // retain the scene without rendering an invisible map
     if (localActivity && app.mode === "live" && localActivity.update(now, scene.controls.target.x, -scene.controls.target.z)) {
       app.setRoadFrame(localActivity.data, localActivity.ids, localActivity.speeds, localActivity.count);
     }

@@ -286,9 +286,15 @@ npm test        # vitest: binary parsers, snapshot migrations, archive
                 # patterns, the search matcher, the format helpers
 ```
 
-`npm run build` runs the workflow guards, `tsc --noEmit`, the test suite and
+`npm run build` runs the workflow guards, prepares the Scenario Lab network,
+`tsc --noEmit`, the test suite and
 then Vite, so CI cannot publish a build whose parsers or migrations have
 drifted.
+
+`npm run dev` also prepares the compact study network from `public/map.osm`.
+After editing that source during development, run `npm run build:lab-network`.
+The generated file lives in `.generated/`; Vite publishes a fingerprinted asset.
+See [the November performance review](docs/performance-2026-11-06.md) for measurements.
 
 Open `http://localhost:5173`. Left-drag pans, right-drag orbits, scroll zooms toward the
 cursor. The UI distinguishes observations from simulation and static planning
