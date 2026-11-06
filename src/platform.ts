@@ -11,6 +11,8 @@ import { LiveFeed } from "./data/live";
 import { TIMEZONE } from "./config";
 import { fmtClockAmPm } from "./ui/format";
 import type { App } from "./ui/app";
+import { registerServiceWorker } from "./data/sw-register";
+import { preloadCity } from "./data/city-assets";
 
 const ui = buildChrome(document.getElementById("app")!);
 const siteRoot = siteUrl("./");
@@ -107,6 +109,7 @@ function navigate(page: MapPage, mode = route.mode, historyMode: "push" | "repla
 }
 
 function ensureMap(): Promise<void> {
+  if (!mapPromise) preloadCity(siteUrl("data/").href);
   mapPromise ??= import("./main").then(async ({ mountMap }) => {
     map = await mountMap(ui, feed);
     map.onNavigate = (page, mode) => { if (!syncingMap) navigate(page, mode); };
@@ -186,6 +189,7 @@ feed.subscribe(renderHeader);
 renderHeader();
 setInterval(renderHeader, 1000);
 navigate(route.page, route.mode, "replace", location.hash);
+void registerServiceWorker();
 // Prepare controllers and their data in parallel with the first map load.
 // Switching views never imports a new document or creates a second controller.
 void ensureWorkspace("intelligence");

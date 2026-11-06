@@ -1,35 +1,31 @@
-import { describe, it, expect } from "vitest";
-import { dataVersion } from "./sw-register";
-import type { Meta } from "./loader";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { ownServiceWorkers, registerServiceWorker } from "./sw-register";
 
-const meta = (over: Partial<Meta> = {}): Meta =>
-  ({
-    version: 4,
-    origin: { lat: 51.92, lon: 4.48 },
-    extent: { minX: -1000, minY: -1000, maxX: 1000, maxY: 1000 },
-    counts: { roadKm: 5093, graphEdges: 210000, buildings: 264000 },
-    districts: [{ key: "centrum", name: "Centrum", x: 0, y: 0 }],
-    ...over,
-  }) as Meta;
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-describe("dataVersion", () => {
-  it("is stable for the same city", () => {
-    expect(dataVersion(meta())).toBe(dataVersion(meta()));
+describe("offline cache registration", () => {
+  it("only unregisters the application's exact scope", () => {
+    const own = { scope: "https://example.test/twin/" } as ServiceWorkerRegistration;
+    const other = { scope: "https://example.test/other/" } as ServiceWorkerRegistration;
+    const parent = { scope: "https://example.test/" } as ServiceWorkerRegistration;
+    expect(ownServiceWorkers([other, own, parent], own.scope)).toEqual([own]);
   });
 
-  it("changes when the city is rebuilt differently", () => {
-    const a = dataVersion(meta());
-    expect(dataVersion(meta({ counts: { ...meta().counts, buildings: 264001 } }))).not.toBe(a);
-    expect(dataVersion(meta({ extent: { minX: -1001, minY: -1000, maxX: 1000, maxY: 1000 } }))).not.toBe(a);
-    expect(dataVersion(meta({ districts: [] }))).not.toBe(a);
+  it("registers from the site root, including repository-prefixed deep links", async () => {
+    vi.stubEnv("PROD", true);
+    vi.stubGlobal("document", { documentElement: { dataset: { root: "../" } }, baseURI: "https://example.test/twin/lab/" });
+    vi.stubGlobal("location", new URL("https://example.test/twin/lab/"));
+    const register = vi.fn().mockResolvedValue({});
+    vi.stubGlobal("navigator", { serviceWorker: { register } });
+    await registerServiceWorker();
+    expect(register).toHaveBeenCalledWith("https://example.test/twin/sw.js", { scope: "/twin/", updateViaCache: "none" });
   });
 
-  it("leads with the format version, so a format change is legible in the key", () => {
-    expect(dataVersion(meta())).toMatch(/^4-[0-9a-z]+$/);
-    expect(dataVersion(meta({ version: 5 }))).toMatch(/^5-/);
-  });
-
-  it("produces a key safe to use in a cache name", () => {
-    expect(dataVersion(meta())).not.toMatch(/[^0-9a-z-]/);
+  it("a blocked service worker does not reject application startup", async () => {
+    vi.stubEnv("PROD", true);
+    vi.stubGlobal("document", { documentElement: { dataset: { root: "./" } }, baseURI: "https://example.test/twin/" });
+    vi.stubGlobal("location", new URL("https://example.test/twin/"));
+    vi.stubGlobal("navigator", { serviceWorker: { register: vi.fn().mockRejectedValue(new Error("Denied")) } });
+    await expect(registerServiceWorker()).resolves.toBeUndefined();
   });
 });

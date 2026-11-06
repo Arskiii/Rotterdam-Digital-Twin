@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { type buildChrome, setMeter } from "./ui/chrome";
 import { SceneCtx } from "./render/scene";
 import { buildCity, buildDistrictBounds, syncFog, setAmbient, releaseToGPU, RoofStreamer } from "./render/city";
-import type { RoofIndex } from "./data/loader";
+import type { CityData, Meta, RoofIndex } from "./data/loader";
 import { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer, AirLayer, LiveIncidentsLayer } from "./render/dynamic";
 import { TransitLayer, LiveTransitLayer, LiveStopsLayer } from "./render/transit";
 import { ResilienceLayers } from "./render/resilience";
@@ -11,7 +11,8 @@ import { pollObservedSignals } from "./data/live-signals";
 import { loadCity } from "./data/loader";
 import { type LiveFeed, currentLiveSnapshot, type LiveSnapshot } from "./data/live";
 import { watchForNewBuild } from "./data/buildwatch";
-import { registerServiceWorker } from "./data/sw-register";
+import { CityVersionError, fetchCityBuffer, fetchCityJson } from "./data/city-assets";
+import { startSimulationWorker } from "./sim/start-worker";
 import { App } from "./ui/app";
 import { LocalActivity } from "./sim/local-activity";
 import { siteUrl } from "./ui/siteUrl";
@@ -21,21 +22,15 @@ import { siteUrl } from "./ui/siteUrl";
 const DATA_FALLBACK =
   "https://cdn.jsdelivr.net/gh/Arskiii/Rotterdam-Digital-Twin@2ac52386897c1be74a128ca095acd73fc05a8f26/public/data/";
 
-async function resolveDataBase(): Promise<string> {
+async function resolveDataBase(): Promise<{ base: string; meta: Meta }> {
   const local = siteUrl("data/").href;
   try {
-    // A GET, not a HEAD. `Cache.match` is keyed by method, so a HEAD never
-    // matches the GET the service worker stored — which made this probe fail
-    // offline, send the boot to the jsDelivr mirror, and fail again there with
-    // the whole city sitting in a cache two lines away. The body is 2 KB and
-    // loadCity asks for the same file immediately afterwards, so it costs
-    // nothing and warms the entry it is about to read.
-    const res = await fetch(`${local}meta.json`);
-    if (res.ok) return local;
-  } catch {
+    return { base: local, meta: await fetchCityJson<Meta>(local, "meta.json", 8_000) };
+  } catch (error) {
+    if (error instanceof CityVersionError) throw error;
     /* fall through */
   }
-  return DATA_FALLBACK;
+  return { base: DATA_FALLBACK, meta: await fetchCityJson<Meta>(DATA_FALLBACK, "meta.json", 8_000) };
 }
 
 /**
@@ -70,9 +65,7 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
     }
   }
 
-  const scene = new SceneCtx(ui.sceneCanvas);
-
-  const dataBase = await resolveDataBase();
+  const { base: dataBase, meta } = await resolveDataBase();
 
   // The sim engine boots on its own thread the moment graph.bin lands —
   // in parallel with the rest of the download and all mesh building. Its
@@ -80,45 +73,20 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
   // worker failure surfaces as a boot error instead of a silent hang.
   let worker: Worker | null = null;
   let simReady: Promise<void> | null = null;
+  let cancelSim = () => {};
   const startSim = (graphBuffer: ArrayBuffer, meta: { districts: { name: string; x: number; y: number }[] }) => {
-    const w = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
-    worker = w;
-    paintBoot("sim", 0.04);
-    simReady = new Promise<void>((resolve, reject) => {
-      const h = (ev: MessageEvent) => {
-        if (ev.data?.type === "initProgress") paintBoot("sim", 0.04 + 0.92 * ev.data.frac);
-        else if (ev.data?.type === "ready") {
-          paintBoot("sim", 1);
-          w.removeEventListener("message", h);
-          resolve();
-        }
-      };
-      w.addEventListener("message", h);
-      // A worker that dies from memory pressure reports an empty message — the
-      // common case on phones, where the graph and its derived tables are a
-      // lot to hold beside a 3D scene. Saying "see console" there is useless:
-      // the device that fails is the one with no console.
-      w.addEventListener("error", (e) =>
-        reject(new Error(e.message || "out of memory, or workers are blocked in this browser"))
-      );
-      w.addEventListener("messageerror", () => reject(new Error("message decode error")));
-    });
-    simReady.catch(() => {}); // surfaced at the await below
-    const graphCopy = graphBuffer.slice(0);
-    w.postMessage(
-      {
-        type: "init",
-        graphBuffer: graphCopy,
-        districtCount: meta.districts.length,
-        districts: meta.districts.map((d) => ({ name: d.name, x: d.x, y: d.y })),
-      },
-      [graphCopy]
+    const startup = startSimulationWorker(
+      () => new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" }),
+      graphBuffer, meta.districts.map(({ name, x, y }) => ({ name, x, y })),
+      (fraction) => paintBoot("sim", fraction),
     );
+    worker = startup.worker;
+    simReady = startup.ready;
+    cancelSim = startup.cancel;
   };
 
   // roofs index is tiny — fetch it alongside everything else, attach later
-  const roofsIndexP: Promise<RoofIndex | null> = fetch(`${dataBase}roofs/index.json`)
-    .then((res) => (res.ok ? (res.json() as Promise<RoofIndex>) : null))
+  const roofsIndexP = fetchCityJson<RoofIndex>(dataBase, "roofs/index.json")
     .catch(() => null);
 
   // A phone never starts the simulation core. iOS refuses it under memory
@@ -127,13 +95,23 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
   // point on a phone and it needs no simulation.
   if (App.PHONE) document.body.dataset.phone = "1";
 
-  const data = await loadCity(dataBase, paintBoot, App.PHONE ? undefined : startSim);
+  let data: CityData;
+  let loading = true;
+  try {
+    data = await loadCity(dataBase, paintBoot, App.PHONE ? undefined : (buffer, loadedMeta) => {
+      if (loading) startSim(buffer, loadedMeta);
+    }, meta);
+  } catch (error) {
+    cancelSim();
+    throw error;
+  } finally { loading = false; }
   paintBoot("grid", 1);
   paintBoot("signals", 1);
   if (!simReady && !App.PHONE) startSim(data.graphBuffer!, data.meta);
   // the worker has its copy; this one is 11 MB of bytes nobody will read again
   data.graphBuffer = null;
 
+  const scene = new SceneCtx(ui.sceneCanvas);
   const meshes = await buildCity(data, scene.scene, (f) => paintBoot("structures", 0.55 + f * 0.45));
   paintBoot("structures", 1);
 
@@ -192,7 +170,7 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
     // and this path can afford a download.
     await new Promise((r) => setTimeout(r, 400)); // let the collector catch up
     try {
-      const buf = await (await fetch(`${dataBase}graph.bin`)).arrayBuffer();
+      const buf = await fetchCityBuffer(dataBase, "graph.bin");
       startSim(buf, data.meta);
       await simReady!;
       simError = null;
@@ -282,13 +260,6 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
 
   // A tab left open keeps refreshing its data but never its code
   watchForNewBuild(() => app.offerReload());
-
-  // Hold the 27 MB of city binaries past the ten minutes GitHub Pages allows,
-  // so a second visit is instant and the map works with no network at all.
-  // Registered after the boot rather than before it: the first load gains
-  // nothing from a worker that is still installing, and a failure here must
-  // not be able to touch the load that matters.
-  void registerServiceWorker(data.meta);
 
   // initial camera frame on the city center, looking north-north-east
   scene.camera.position.set(-2600, 10600, 8600);

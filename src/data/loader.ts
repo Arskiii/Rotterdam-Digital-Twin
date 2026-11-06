@@ -1,5 +1,7 @@
 // Loads and parses the binary city data produced by scripts/build-data.mjs.
 
+import { fetchCityBuffer, fetchCityJson } from "./city-assets";
+
 export interface Meta {
   version: number;
   graphSha256: string; // binds authorized SPaT head indices to this exact graph
@@ -178,34 +180,6 @@ export interface CityData {
   transit: TransitRoute[];
   districtBounds: DistrictBoundary[];
   ndw: NdwData | null;
-}
-
-async function fetchBuf(url: string, onProgress: (frac: number) => void): Promise<ArrayBuffer> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
-  const total = Number(res.headers.get("Content-Length") ?? 0);
-  if (!res.body || !total) {
-    const buf = await res.arrayBuffer();
-    onProgress(1);
-    return buf;
-  }
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let got = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    got += value.length;
-    onProgress(Math.min(1, got / total));
-  }
-  const out = new Uint8Array(got);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out.buffer;
 }
 
 class Reader {
@@ -450,39 +424,36 @@ export async function loadCity(
   onProgress: ProgressFn,
   // fires the moment graph.bin is fully downloaded — lets the caller boot the
   // sim worker in parallel with the rest of the download and mesh building
-  onGraphReady?: (graphBuffer: ArrayBuffer, meta: Meta) => void
+  onGraphReady?: (graphBuffer: ArrayBuffer, meta: Meta) => void,
+  preparedMeta?: Meta,
 ): Promise<CityData> {
-  const metaRes = await fetch(`${base}meta.json`);
-  if (!metaRes.ok) throw new Error("meta.json missing — run: npm run fetch-data && npm run build-data");
-  const meta: Meta = await metaRes.json();
+  const meta = preparedMeta ?? await fetchCityJson<Meta>(base, "meta.json");
 
   // optional files (older mirrors may lack them) — fetched alongside the rest
   const optionalBuf = async (name: string): Promise<ArrayBuffer | null> => {
     try {
-      const res = await fetch(`${base}${name}`);
-      return res.ok ? await res.arrayBuffer() : null;
+      return await fetchCityBuffer(base, name, undefined, 15_000);
     } catch {
       return null;
     }
   };
   const optionalJson = async <T>(name: string): Promise<T | null> => {
     try {
-      const res = await fetch(`${base}${name}`);
-      return res.ok ? ((await res.json()) as T) : null;
+      return await fetchCityJson<T>(base, name);
     } catch {
       return null;
     }
   };
 
   const [roadsBuf, graphBuf, waterBuf, railBuf, bldBuf, transitBuf, districtsBuf, ndw] = await Promise.all([
-    fetchBuf(`${base}roads.bin`, (f) => onProgress("grid", f * 0.5)),
-    fetchBuf(`${base}graph.bin`, (f) => onProgress("signals", f * 0.6)).then((buf) => {
+    fetchCityBuffer(base, "roads.bin", (f) => onProgress("grid", f * 0.5)),
+    fetchCityBuffer(base, "graph.bin", (f) => onProgress("signals", f * 0.6)).then((buf) => {
       onGraphReady?.(buf, meta);
       return buf;
     }),
-    fetchBuf(`${base}water.bin`, (f) => onProgress("grid", 0.5 + f * 0.2)),
-    fetchBuf(`${base}rail.bin`, (f) => onProgress("grid", 0.7 + f * 0.1)),
-    fetchBuf(`${base}buildings.bin`, (f) => onProgress("structures", f * 0.55)),
+    fetchCityBuffer(base, "water.bin", (f) => onProgress("grid", 0.5 + f * 0.2)),
+    fetchCityBuffer(base, "rail.bin", (f) => onProgress("grid", 0.7 + f * 0.1)),
+    fetchCityBuffer(base, "buildings.bin", (f) => onProgress("structures", f * 0.55)),
     optionalBuf("transit.bin"),
     optionalBuf("districts.bin"),
     optionalJson<NdwData>("ndw.json"),

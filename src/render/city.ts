@@ -4,6 +4,7 @@
 import * as THREE from "three";
 import earcut from "earcut";
 import { parseRoofTile } from "../data/loader";
+import { fetchCityBuffer } from "../data/city-assets";
 import type { CityData, PolylineSet, BuildingTile, RoofShell, RoofIndex } from "../data/loader";
 
 // class: motorway, trunk, primary, secondary, tertiary, residential, service,
@@ -550,9 +551,7 @@ export class RoofStreamer {
     st.status = "loading";
     this.inflight++;
     try {
-      const res = await fetch(`${this.base}roofs/${key}.bin`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const shells = parseRoofTile(await res.arrayBuffer());
+      const shells = parseRoofTile(await fetchCityBuffer(this.base, `roofs/${key}.bin`, undefined, 15_000));
       const near = buildNearTileMesh(st.tile, shells);
       releaseToGPU(near.geometry); // streamed in, written once, disposed on the way out
       near.userData.tileKey = key;
@@ -572,7 +571,7 @@ export class RoofStreamer {
 const yieldTask = () =>
   new Promise<void>((r) => {
     const mc = new MessageChannel();
-    mc.port1.onmessage = () => r();
+    mc.port1.onmessage = () => { mc.port1.close(); mc.port2.close(); r(); };
     mc.port2.postMessage(0);
   });
 
