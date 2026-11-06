@@ -13,6 +13,7 @@ import { fmtClockAmPm } from "./ui/format";
 import type { App } from "./ui/app";
 import { registerServiceWorker } from "./data/sw-register";
 import { preloadCity } from "./data/city-assets";
+import { StudySelection } from "./study/context";
 
 const ui = buildChrome(document.getElementById("app")!);
 const siteRoot = siteUrl("./");
@@ -29,7 +30,16 @@ function savedMode(): MapMode {
 let route: PlatformRoute = { page: initial?.page ?? "map", mode: initial?.mode ?? savedMode() };
 let map: App | null = null;
 let mapPromise: Promise<void> | null = null;
+let mapFailed = false;
 let syncingMap = false;
+const selection = new StudySelection(new URL(location.href).searchParams.get("corridor"), (page) => navigate(page));
+selection.subscribe((id) => {
+  const url = new URL(location.href);
+  if (url.searchParams.get("corridor") === id) return;
+  if (id) url.searchParams.set("corridor", id); else url.searchParams.delete("corridor");
+  url.searchParams.delete("handoff");
+  history.pushState(null, "", url);
+});
 
 // Retain each view and its DOM instead of rebuilding forms or discarding results.
 const mapRail = document.createElement("div");
@@ -109,24 +119,43 @@ function navigate(page: MapPage, mode = route.mode, historyMode: "push" | "repla
 }
 
 function ensureMap(): Promise<void> {
+  if (mapFailed) return Promise.resolve();
   if (!mapPromise) preloadCity(siteUrl("data/").href);
   mapPromise ??= import("./main").then(async ({ mountMap }) => {
-    map = await mountMap(ui, feed);
+    map = await mountMap(ui, feed, selection);
     map.onNavigate = (page, mode) => { if (!syncingMap) navigate(page, mode); };
     syncMap();
     navigate(route.page, route.mode, "replace", location.hash);
   }).catch((error) => {
+    map?.dispose(); map = null;
+    mapFailed = true;
+    mapPromise = null;
     console.error(error);
     ui.bootError.style.display = "block";
     ui.bootError.textContent = `MAP UNAVAILABLE — ${error?.message ?? error}`;
+    const retry = document.createElement("button"); retry.textContent = "Retry map";
+    retry.addEventListener("click", () => {
+      if (!mapFailed) return;
+      mapFailed = false;
+      // Replace only the failed map surface. Workspace forms, comparisons and
+      // the shared navigation keep their existing DOM and controller instances.
+      const fresh = buildChrome(document.createElement("div"));
+      const shared = { rail: ui.rail, clock: ui.clock, liveChip: ui.liveChip, liveDot: ui.liveDot, liveText: ui.liveText, navBtns: ui.navBtns, modeBtns: ui.modeBtns };
+      mapRail.replaceChildren(...fresh.rail.childNodes);
+      fresh.viewport.append(fresh.boot);
+      ui.viewport.replaceWith(fresh.viewport);
+      Object.assign(ui, fresh, shared);
+      renderRoute(); void ensureMap();
+    });
+    ui.bootError.append(" ", retry);
   });
   return mapPromise;
 }
 
 function ensureWorkspace(page: "intelligence" | "lab"): Promise<void> {
   workspacePromises[page] ??= (page === "lab"
-    ? import("./lab/main").then(({ mountLab }) => mountLab(workspaces.lab))
-    : import("./intelligence/main").then(({ mountIntelligence }) => mountIntelligence(workspaces.intelligence, feed, siteUrl("data/").href)))
+    ? import("./lab/main").then(({ mountLab }) => mountLab(workspaces.lab, selection))
+    : import("./intelligence/main").then(({ mountIntelligence }) => mountIntelligence(workspaces.intelligence, feed, siteUrl("data/").href, selection)))
     .then((controller) => {
       controllers[page] = controller;
       controller.setActive(route.page === page);
@@ -152,12 +181,14 @@ document.addEventListener("click", (event) => {
   const target = readPlatformRoute(url, siteRoot);
   if (!target) return;
   event.preventDefault();
+  if (url.searchParams.has("corridor")) selection.select(url.searchParams.get("corridor"));
   const owner = link.closest<HTMLElement>("[data-workspace], [data-workspace-rail]");
   const page = link.getAttribute("href")?.startsWith("#") && owner
     ? (owner.dataset.workspace ?? owner.dataset.workspaceRail) as MapPage : target.page;
   navigate(page, target.mode ?? route.mode, "push", url.hash);
 });
 const restoreRoute = () => {
+  selection.select(new URL(location.href).searchParams.get("corridor"));
   const target = readPlatformRoute(new URL(location.href), siteRoot);
   if (target) navigate(target.page, target.mode ?? "live", "none", location.hash);
 };
@@ -167,8 +198,14 @@ window.addEventListener("hashchange", restoreRoute);
 // One clock and one observation poller serve every tab, even before WebGL loads.
 function renderHeader() {
   ui.clock.textContent = fmtClockAmPm(new Date(), TIMEZONE);
-  if (!feed.snapshot) return;
+  refreshFeed.disabled = feed.refreshing;
+  refreshFeed.textContent = feed.refreshing ? "Refreshing…" : "Refresh feeds";
+  refreshFeed.hidden = !!feed.snapshot && feed.health() === "live" && !feed.refreshing;
   ui.liveChip.style.display = "";
+  if (!feed.snapshot) {
+    ui.liveText.textContent = feed.refreshing ? "CONNECTING TO FEEDS…" : "FEEDS UNAVAILABLE";
+    ui.liveDot.style.background = "#e3b23c"; return;
+  }
   const health = feed.health();
   ui.liveDot.style.background = health === "live" ? "#3ddc84" : health === "lagging" ? "#e3b23c" : "#d0453c";
   const age = feed.ageMin();
@@ -185,6 +222,11 @@ function renderHeader() {
   if (snap.bridges?.length) parts.push(`${snap.bridges.length} BRUG`);
   ui.liveText.textContent = parts.join(" · ");
 }
+const refreshFeed = document.createElement("button");
+refreshFeed.id = "refresh-feeds"; refreshFeed.type = "button";
+refreshFeed.addEventListener("click", () => void feed.refresh());
+ui.liveChip.append(refreshFeed);
+feed.subscribeStatus(renderHeader);
 feed.subscribe(renderHeader);
 renderHeader();
 setInterval(renderHeader, 1000);

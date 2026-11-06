@@ -97,4 +97,13 @@ export class DroneViewer {
     }
     this.renderer.render(this.scene, this.camera);
   }
+
+  dispose() {
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      mesh.geometry?.dispose();
+      for (const material of Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []) material.dispose();
+    });
+    this.renderer.dispose(); this.renderer.forceContextLoss();
+  }
 }

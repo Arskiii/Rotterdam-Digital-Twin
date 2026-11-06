@@ -16,6 +16,13 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => vi.useRealTimers());
 
 describe("simulation startup", () => {
+  it("can transfer raw graph ownership after the renderer has parsed its own arrays", async () => {
+    const fake = new TestWorker(), graph = new Uint8Array([1, 2, 3]).buffer;
+    const run = startSimulationWorker(() => fake as unknown as Worker, graph, districts, () => {}, true);
+    expect(fake.postMessage.mock.calls[0][0].graphBuffer).toBe(graph);
+    expect(fake.postMessage.mock.calls[0][1]).toEqual([graph]);
+    fake.send({ type: "ready" }); await run.ready;
+  });
   it("transfers a separate graph copy and cleans its startup listeners/timers on readiness", async () => {
     const run = start();
     const sent = run.fake.postMessage.mock.calls[0];

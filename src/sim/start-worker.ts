@@ -6,6 +6,7 @@ export function startSimulationWorker(
   graphBuffer: ArrayBuffer,
   districts: District[],
   onProgress: (fraction: number) => void,
+  transferOwnership = false,
 ) {
   let worker: Worker | null = null;
   let cancel = () => {};
@@ -52,7 +53,7 @@ export function startSimulationWorker(
     deadline = setTimeout(timedOut, 120_000);
     onProgress(0.04);
     try {
-      const copy = graphBuffer.slice(0);
+      const copy = transferOwnership ? graphBuffer : graphBuffer.slice(0);
       w.postMessage({ type: "init", graphBuffer: copy, districtCount: districts.length, districts }, [copy]);
     } catch (error) {
       finish(error instanceof Error ? error : new Error(String(error)));

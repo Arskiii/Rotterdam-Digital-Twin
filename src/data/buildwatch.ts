@@ -13,8 +13,8 @@
 //
 // Reloading is deliberately not immediate. Yanking the page out from under
 // someone reading a departure board is worse than being a few minutes old, so
-// a visible tab is offered the reload and a hidden one just takes it — coming
-// back to a fresh app is the least disruptive moment there is.
+// every tab is offered a reload. Returning to a tab must retain its unsaved
+// comparisons and settings, even when a new build is available.
 
 const CHECK_MS = 5 * 60_000;
 
@@ -29,7 +29,7 @@ async function deployed(): Promise<string | null> {
   try {
     // no-store, not no-cache: an index.html served from the browser's own disk
     // cache would report the build this tab already has and never notice
-    const res = await fetch(`${import.meta.env.BASE_URL}index.html`, { cache: "no-store" });
+    const res = await fetch(`${import.meta.env.BASE_URL}index.html`, { cache: "no-store", signal: AbortSignal.timeout(8_000) });
     if (!res.ok) return null;
     const m = (await res.text()).match(/<script[^>]+type="module"[^>]+src="([^"]+)"/);
     return m ? new URL(m[1], location.href).href : null;
@@ -47,22 +47,21 @@ async function deployed(): Promise<string | null> {
  */
 export function watchForNewBuild(onStale: () => void) {
   const mine = running();
-  if (!mine || !/-[A-Za-z0-9_-]{6,}\.js$/.test(mine)) return;
+  if (!mine || !/-[A-Za-z0-9_-]{6,}\.js$/.test(mine)) return () => {};
   let fired = false;
   const check = async () => {
     if (fired) return;
     const theirs = await deployed();
-    if (!theirs || theirs === mine) return;
+    if (fired || !theirs || theirs === mine) return;
     fired = true;
     clearInterval(timer);
-    if (document.hidden) location.reload();
-    else onStale();
+    onStale();
   };
   const timer = setInterval(check, CHECK_MS);
   // A tab coming back after hours is the most likely stale one, and the moment
   // its owner is about to look at it
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) void check();
-  });
-  setTimeout(check, 30_000); // one early check, past the boot
+  const visible = () => { if (!document.hidden) void check(); };
+  document.addEventListener("visibilitychange", visible);
+  const early = setTimeout(check, 30_000);
+  return () => { fired = true; clearInterval(timer); clearTimeout(early); document.removeEventListener("visibilitychange", visible); };
 }

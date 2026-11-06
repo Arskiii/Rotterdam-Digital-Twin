@@ -18,6 +18,8 @@ export class SceneCtx {
   fog: THREE.Fog;
   private viewportWidth = 800;
   private viewportHeight = 600;
+  private resizeObserver: ResizeObserver;
+  private readonly onResize = () => this.resize();
   // SETUP render-scale override; null tracks the display's ratio (capped at 2)
   pixelRatioOverride: number | null = null;
 
@@ -132,9 +134,10 @@ export class SceneCtx {
     this.controls.panSpeed = 1.1;
     this.controls.rotateSpeed = 0.55;
 
-    window.addEventListener("resize", () => this.resize());
+    window.addEventListener("resize", this.onResize);
     // Also catch the persistent map becoming visible after a workspace resize.
-    new ResizeObserver(() => this.resize()).observe(canvas);
+    this.resizeObserver = new ResizeObserver(this.onResize);
+    this.resizeObserver.observe(canvas);
     this.resize();
   }
 
@@ -148,6 +151,17 @@ export class SceneCtx {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+  }
+
+  dispose() {
+    window.removeEventListener("resize", this.onResize);
+    this.resizeObserver.disconnect(); this.controls.dispose();
+    this.scene.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      mesh.geometry?.dispose();
+      for (const material of Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : []) material.dispose();
+    });
+    this.renderer.dispose(); this.renderer.forceContextLoss();
   }
 
   get distance() {

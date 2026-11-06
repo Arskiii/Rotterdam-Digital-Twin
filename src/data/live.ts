@@ -205,13 +205,44 @@ export class LiveFeed {
   private onUpdate: (snap: LiveSnapshot) => void;
   private listeners = new Set<(snap: LiveSnapshot) => void>();
   private lastT = "";
-  private polling = false;
+  private inFlight: Promise<void> | null = null;
+  private lastAttempt = 0;
+  private timer: ReturnType<typeof setInterval>;
+  private disposed = false;
+  private statusListeners = new Set<() => void>();
+  private resume = () => {
+    if ((typeof document === "undefined" || !document.hidden) && Date.now() - this.lastAttempt >= 15_000) void this.refresh();
+  };
+  private reconnect = () => { void this.refresh(); };
 
   constructor(dataBase: string, onUpdate: (snap: LiveSnapshot) => void = () => {}) {
     this.localUrl = `${dataBase}live/live.json`;
     this.onUpdate = onUpdate;
-    void this.poll();
-    setInterval(() => void this.poll(), POLL_MS);
+    void this.refresh();
+    this.timer = setInterval(() => { if (typeof document === "undefined" || !document.hidden) void this.refresh(); }, POLL_MS);
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", this.resume);
+    if (typeof window !== "undefined") window.addEventListener("online", this.reconnect);
+  }
+
+  get refreshing() { return this.inFlight !== null; }
+  subscribeStatus(listener: () => void) { this.statusListeners.add(listener); return () => { this.statusListeners.delete(listener); }; }
+  /** Manual, timer and resume refreshes all join the same bounded request. */
+  refresh(): Promise<void> {
+    if (this.disposed) return Promise.resolve();
+    if (this.inFlight) return this.inFlight;
+    this.lastAttempt = Date.now();
+    this.inFlight = this.poll().finally(() => {
+      this.inFlight = null;
+      for (const listener of this.statusListeners) listener();
+    });
+    for (const listener of this.statusListeners) listener();
+    return this.inFlight;
+  }
+  dispose() {
+    this.disposed = true; clearInterval(this.timer);
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", this.resume);
+    if (typeof window !== "undefined") window.removeEventListener("online", this.reconnect);
+    this.listeners.clear(); this.statusListeners.clear();
   }
 
   /** Map and Intelligence share one poller, including its already loaded snapshot. */
@@ -245,9 +276,6 @@ export class LiveFeed {
   }
 
   private async poll() {
-    if (this.polling) return;
-    this.polling = true;
-    try {
       // Prefer a configured observation service; retain GitHub and the bundled
       // copy as fallbacks when it is unavailable or older than a known snapshot.
       const sources: ["service" | "branch" | "local", string][] = [
@@ -255,6 +283,7 @@ export class LiveFeed {
         ["branch", LIVE_BRANCH_URL], ["local", this.localUrl],
       ];
       for (const [source, url] of sources) {
+        if (this.disposed) return;
         let snap: LiveSnapshot;
         try {
           const res = await fetch(url, { cache: source === "service" ? "default" : "no-cache", credentials: "omit", signal: AbortSignal.timeout(8_000) });
@@ -265,6 +294,7 @@ export class LiveFeed {
         }
         // v1 snapshots predate the departure boards but still carry traffic,
         // weather and tide, so they are accepted and simply offer less
+        if (this.disposed) return;
         const verdict = admitSnapshot(snap, this.snapshot);
         if (verdict === "invalid") continue;
         if (verdict === "stale") continue; // try other paths, but never undo a fresher publish
@@ -276,14 +306,14 @@ export class LiveFeed {
           // it meant a bug anywhere downstream looked exactly like an offline
           // feed: the snapshot was dropped, the next source was tried, and the
           // app sat there with no data and nothing in the console.
-          this.onUpdate(snap);
-          for (const listener of this.listeners) listener(snap);
+          for (const listener of [this.onUpdate, ...this.listeners]) {
+            try { listener(snap); } catch (error) { console.error("Observation subscriber failed", error); }
+          }
         }
         // A service can be reachable yet lag its publisher. When it is already
         // several minutes old, check the mirror before declaring this poll done.
         if (this.ageMin() > (source === "service" ? 3 : LIVE_STALE_MIN)) continue;
         return;
       }
-    } finally { this.polling = false; }
   }
 }

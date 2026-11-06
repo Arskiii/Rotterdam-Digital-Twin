@@ -1955,6 +1955,30 @@ table.district td:first-child {
   opacity: 0;
   pointer-events: none;
 }
+#boot[hidden] { display: none; }
+#map-loading-status {
+  position: absolute; bottom: 212px; left: 14px;
+  padding: 8px 12px; max-width: calc(100% - 32px); background: var(--panel, #141414);
+  border: 1px solid var(--line, #333); color: var(--muted, #aaa); font: 10px var(--mono, monospace);
+}
+#map-loading-status[hidden] { display: none; }
+#map-loading-status button, #boot-error button, #refresh-feeds {
+  color: inherit; background: transparent; border: 1px solid #555; padding: 4px 8px;
+  cursor: pointer; font: inherit;
+}
+#refresh-feeds { margin-left: 8px; }
+#study-picker { position: absolute; top: 65px; right: 16px; width: 292px; max-width: calc(100% - 32px); border: 1px solid var(--line); background: var(--bg-panel); color: var(--text); font-size: 10px; }
+#study-picker summary { padding: 10px 12px; cursor: pointer; text-transform: uppercase; letter-spacing: .08em; }
+#study-picker summary span { float: right; }
+.study-picker-body { padding: 0 12px 12px; }
+.study-picker-body label { display: grid; gap: 8px; color: var(--text-dim); }
+.study-picker-body select { width: 100%; min-width: 0; background: var(--bg-inset); color: var(--text); border: 1px solid var(--line); padding: 7px; font: inherit; }
+.study-picker-body p { line-height: 1.6; margin: 12px 0; color: var(--text-dim); }
+.study-actions { display: flex; gap: 8px; margin-top: 8px; }
+.study-actions button { flex: 1; border: 1px solid var(--line-bright); padding: 7px 4px; font: inherit; }
+.study-actions button[aria-pressed="true"] { background: var(--bg-active); color: var(--tick); }
+.study-actions button:disabled { opacity: .4; cursor: default; }
+body:not([data-page="map"]) #study-picker { display: none; }
 #boot-inner {
   width: 340px;
   display: flex;
