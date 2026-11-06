@@ -37,13 +37,17 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
     return graphPromise;
   }
   let latest: LiveSnapshot | null = null;
+  let active = !root.hidden;
   let meta: Meta | null = null;
   let exposure: Exposure | null = null;
   let cbs: Cbs | null = null;
   let ndw: Ndw | null = null;
   let validation: ValidationReport | null = null;
   let lastTrial: { runAt: string; seed: number; clockMin: number; observedAt: string | null; results: ExperimentResultMsg[] } | null = null;
-  feed.subscribe((snapshot) => { latest = snapshot; renderSources(); renderConditions(); renderBridgeOptions(); });
+  const refreshLive = () => {
+    if (active && !document.hidden) { renderSources(); renderConditions(); renderBridgeOptions(); }
+  };
+  feed.subscribe((snapshot) => { latest = snapshot; refreshLive(); });
 
   function renderSources() {
     const status = $("#snapshot-status");
@@ -348,7 +352,8 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
   });
 
   // Keep the shared header and source ages honest between feed publications.
-  window.setInterval(() => { renderSources(); renderConditions(); }, 60_000);
+  window.setInterval(refreshLive, 60_000);
+  document.addEventListener("visibilitychange", refreshLive);
 
-  return { setActive(active: boolean) { if (active) { renderSources(); renderConditions(); } } };
+  return { setActive(next: boolean) { if (active !== next) { active = next; refreshLive(); } } };
 }

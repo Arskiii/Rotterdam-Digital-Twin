@@ -16,6 +16,8 @@ export class SceneCtx {
   onScaleChange?: (s: ScaleName) => void;
   private lastScale: ScaleName = "city";
   fog: THREE.Fog;
+  private viewportWidth = 800;
+  private viewportHeight = 600;
   // SETUP render-scale override; null tracks the display's ratio (capped at 2)
   pixelRatioOverride: number | null = null;
 
@@ -131,13 +133,17 @@ export class SceneCtx {
     this.controls.rotateSpeed = 0.55;
 
     window.addEventListener("resize", () => this.resize());
+    // Also catch the persistent map becoming visible after a workspace resize.
+    new ResizeObserver(() => this.resize()).observe(canvas);
     this.resize();
   }
 
   resize() {
     const el = this.renderer.domElement;
-    const w = el.clientWidth || el.parentElement?.clientWidth || 800;
-    const h = el.clientHeight || el.parentElement?.clientHeight || 600;
+    const w = el.clientWidth || el.parentElement?.clientWidth || this.viewportWidth;
+    const h = el.clientHeight || el.parentElement?.clientHeight || this.viewportHeight;
+    this.viewportWidth = w;
+    this.viewportHeight = h;
     this.renderer.setPixelRatio(this.desiredPixelRatio());
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
@@ -239,9 +245,10 @@ export class SceneCtx {
   project(x: number, y: number, z: number, out: { x: number; y: number }): boolean {
     const v = _projV.set(x, y, z).project(this.camera);
     if (v.z > 1) return false;
-    const el = this.renderer.domElement;
-    out.x = (v.x * 0.5 + 0.5) * el.clientWidth;
-    out.y = (-v.y * 0.5 + 0.5) * el.clientHeight;
+    // Marker transforms are written between projections. Reading layout here
+    // would force the browser to lay out the page again for every marker.
+    out.x = (v.x * 0.5 + 0.5) * this.viewportWidth;
+    out.y = (-v.y * 0.5 + 0.5) * this.viewportHeight;
     return v.x > -1.15 && v.x < 1.15 && v.y > -1.15 && v.y < 1.15;
   }
 }

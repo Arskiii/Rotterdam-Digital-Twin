@@ -2,6 +2,7 @@ node_modules
 dist
 dist-ssr
 .vite
+.generated
 *.local
 .DS_Store
 .env

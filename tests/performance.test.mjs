@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { after, test } from "node:test";
 import { Color, Matrix4, Raycaster, Vector3 } from "three";
 import { createServer } from "vite";
+import { DOMParser } from "@xmldom/xmldom";
 
 const vite = await createServer({ configFile: false,
   server: { middlewareMode: true, hmr: { server: createHttpServer() } } });
@@ -18,6 +19,23 @@ const { simulateScenario } = await vite.ssrLoadModule("/src/v03/scenario.ts");
 const { ScenarioRunner } = await vite.ssrLoadModule("/src/lab/scenarioRunner.ts");
 const { LocalActivity } = await vite.ssrLoadModule("/src/sim/local-activity.ts");
 const { parseGraph } = await vite.ssrLoadModule("/src/data/loader.ts");
+const { buildOsmNetwork } = await vite.ssrLoadModule("/src/v03/osm.ts");
+const { packNetwork, unpackNetwork } = await vite.ssrLoadModule("/src/lab/networkSnapshot.ts");
+
+test("precompiled study data retains road order, signal settings and seeded simulation outcomes", async (t) => {
+  mockGlobal(t, "DOMParser", DOMParser);
+  const xml = readFileSync(new URL("../public/map.osm", import.meta.url), "utf8");
+  const original = buildOsmNetwork(xml).network;
+  const compact = JSON.stringify(packNetwork(original));
+  const restored = unpackNetwork(JSON.parse(compact));
+  assert.equal(JSON.stringify(packNetwork(restored)), compact);
+  assert.ok(Buffer.byteLength(compact) < Buffer.byteLength(xml) / 10, "keep study downloads below a tenth of the original city XML");
+  for (const seed of [42, 99]) {
+    const before = await simulateScenario(original, config, seed, null, () => {}, undefined, () => Promise.resolve());
+    const after = await simulateScenario(restored, config, seed, null, () => {}, undefined, () => Promise.resolve());
+    assert.deepEqual(after, before, `seed ${seed} must produce the same traffic`);
+  }
+});
 
 test("phone animation stays bounded on the published city graph", () => {
   const bytes = readFileSync(new URL("../public/data/graph.bin", import.meta.url));

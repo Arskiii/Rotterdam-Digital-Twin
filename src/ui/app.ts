@@ -6,6 +6,7 @@ import type { Chrome } from "./chrome";
 import { setMeter, barGlyphHTML } from "./chrome";
 import { PHONE_MQ, readMapNavigation, type MapPage, type MapMode } from "./header";
 import { normalizePlatformRoute } from "./navigation";
+import { mapSimulationRunning } from "./activity";
 import type { SceneCtx, ScaleName } from "../render/scene";
 import type { CityMeshes } from "../render/city";
 import type { SignalsLayer, VehiclesLayer, CongestionLayer, NdwLayer } from "../render/dynamic";
@@ -269,8 +270,12 @@ export class App {
     this.log("info", "UPLINK ESTABLISHED — SURVEILTRACK NODE 04 ONLINE");
     this.log("info", `CITY GRID LOADED — ${fmtInt(this.data.meta.counts.roadKm)} KM ROADWAY / ${fmtInt(this.data.meta.counts.signalsInventory)} SIGNAL UNITS`);
     this.selectUnit(this.units[0], false);
+    document.addEventListener("visibilitychange", () => {
+      this.syncLiveClock(this.mode === "live");
+      if (!document.hidden) this.slowTick();
+    });
     setInterval(() => this.slowTick(), 1500);
-    setInterval(() => this.flavorEvent(), 26000);
+    setInterval(() => { if (!document.hidden && this.page === "map") this.flavorEvent(); }, 26000);
   }
 
   // ---------- units ----------
@@ -1150,16 +1155,21 @@ export class App {
    */
   private syncLiveClock(live: boolean) {
     clearInterval(this.liveClockTimer);
+    const running = this.simulationRunning();
     this.worker.postMessage(
       live
-        ? { type: "params", liveClock: true, running: true, simSpeed: 1, timeOfDayMin: App.rotterdamTodMin() }
-        : { type: "params", liveClock: false, running: !this.paused, simSpeed: this.simSpeed }
+        ? { type: "params", liveClock: true, running, simSpeed: 1, timeOfDayMin: App.rotterdamTodMin() }
+        : { type: "params", liveClock: false, running, simSpeed: this.simSpeed }
     );
-    if (!live || !this.simAvailable) return;
+    if (!live || !this.simAvailable || document.hidden) return;
     this.liveClockTimer = setInterval(
       () => this.worker.postMessage({ type: "params", timeOfDayMin: App.rotterdamTodMin() }),
       60_000
     );
+  }
+
+  private simulationRunning() {
+    return this.simAvailable && mapSimulationRunning(this.page, this.mode, this.paused, !document.hidden);
   }
 
   setMode(m: MapMode, persist = false) {
@@ -1694,8 +1704,7 @@ export class App {
     (document.getElementById("scale-switch") as HTMLElement).style.display = mapUi ? "" : "none";
     (document.getElementById("map-tools") as HTMLElement).style.display = mapUi ? "" : "none";
     if (p === "brief") this.renderBrief();
-    const workspace = p === "intelligence" || p === "lab";
-    this.worker.postMessage({ type: "params", running: !workspace && (this.mode === "live" || this.mode === "sim" && !this.paused) });
+    this.worker.postMessage({ type: "params", running: this.simulationRunning() });
     this.onNavigate?.(p, this.mode);
   }
 
@@ -2069,6 +2078,7 @@ export class App {
 
   // ---------- slow tick (1.5s): unit drift, live panels ----------
   private slowTick() {
+    if (document.hidden || this.page === "intelligence" || this.page === "lab") return;
     for (const u of this.units) {
       if (u.status === "active") {
         u.sessionSec += 1.5;
@@ -3246,7 +3256,7 @@ export class App {
         const v = +b.dataset.v!;
         this.paused = v === 0;
         this.simSpeed = Math.max(1, v);
-        this.worker.postMessage({ type: "params", running: v > 0, simSpeed: Math.max(1, v) });
+        this.worker.postMessage({ type: "params", running: this.simulationRunning(), simSpeed: this.simSpeed });
         this.log("info", v === 0 ? "SIM CORE PAUSED BY OPERATOR" : `PHYSICS RATE SET TO ${v}×`);
       })
     );
