@@ -44,7 +44,10 @@ console.log(`Lazy map: ${(mapBytes / 1000).toFixed(1)} kB JavaScript; budget 800
 if (mapBytes > 800_000) throw new Error("Map exceeds its 800 kB JavaScript budget.");
 
 const lab = manifest["src/lab/main.ts"];
-const studyAsset = lab?.assets?.find((asset) => asset.includes("study-network-") && asset.endsWith(".json"));
+// The study is now shared by Map, Intelligence and Lab. Follow static imports
+// so moving the URL into a shared chunk cannot hide it from the data budget.
+const labAssets = [...initialScripts("src/lab/main.ts")].flatMap((file) => manifest[chunksByFile.get(file)]?.assets ?? []);
+const studyAsset = labAssets.find((asset) => asset.includes("study-network-") && asset.endsWith(".json"));
 if (!studyAsset) throw new Error("Missing fingerprinted study network asset.");
 const studyBytes = readFileSync(resolve(output, studyAsset));
 console.log(`Study network: ${(studyBytes.length / 1000).toFixed(1)} kB JSON (${(gzipSync(studyBytes).length / 1000).toFixed(1)} kB gzip); budget 500 kB`);

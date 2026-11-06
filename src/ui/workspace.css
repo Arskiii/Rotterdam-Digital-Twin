@@ -1,6 +1,12 @@
 /* SurveilTrack's shared frame, palette, typography and header come from ../style.css.
    Evidence workspaces share this scrollable layout and these content primitives. */
 .workspace-page { color-scheme: dark; }
+.study-evidence-body { display: flex; gap: 22px; align-items: center; }
+.study-evidence-body canvas { width: 168px; height: 100px; flex: none; border: 1px solid var(--line); }
+.study-evidence-body p { line-height: 1.7; font-size: 11px; margin: 8px 0; }
+.study-selection-pending { border: 1px solid var(--line-bright); padding: 12px; margin-bottom: 16px; font-size: 11px; line-height: 1.7; }
+.study-selection-pending button { margin-left: 12px; }
+@media (max-width: 650px) { .study-evidence-body { display: block; } }
 .workspace-view { display: flex; flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
 .workspace-view[hidden], #viewport[hidden], .rail-view[hidden] { display: none !important; }
 .rail-view { display: contents; }

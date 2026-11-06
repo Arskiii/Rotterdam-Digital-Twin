@@ -169,10 +169,9 @@ export interface CityData {
   rail: PolylineSet;
   graph: Graph;
   /**
-   * Raw graph bytes for the sim worker, which gets its own copy — the worker
-   * is started mid-load, before the main thread has finished parsing these,
-   * so the buffer cannot simply be transferred. Cleared once the worker has
-   * been handed its copy: 11 MB nothing reads again.
+   * Raw graph bytes for the sim worker. After parsing, all graph fields have
+   * their own typed storage, so ownership can be transferred without copying
+   * this buffer. Cleared after the handoff.
    */
   graphBuffer: ArrayBuffer | null;
   water: { verts: Float32Array; tris: Uint32Array };
@@ -195,7 +194,7 @@ class Reader {
   f32() { const v = this.dv.getFloat32(this.pos, true); this.pos += 4; return v; }
 }
 
-function parsePolylines(buf: ArrayBuffer, magic: number): PolylineSet {
+export function parsePolylines(buf: ArrayBuffer, magic: number): PolylineSet {
   const r = new Reader(buf);
   if (r.u32() !== magic) throw new Error("bad polyline magic");
   const count = r.u32();
@@ -204,8 +203,15 @@ function parsePolylines(buf: ArrayBuffer, magic: number): PolylineSet {
   const ptOffset = new Uint32Array(count);
   const ptCount = new Uint32Array(count);
   let totalPts = 0;
-  // first pass to count points requires walking; do single pass into growable array
-  const coordsArr: number[] = [];
+  const start = r.pos;
+  for (let i = 0; i < count; i++) {
+    r.pos += 2;
+    const n = r.u16(); totalPts += n; r.pos += n * 8;
+  }
+  if (r.pos !== buf.byteLength) throw new Error("Invalid polyline length");
+  const coords = new Float32Array(totalPts * 2);
+  r.pos = start;
+  totalPts = 0;
   for (let i = 0; i < count; i++) {
     cls[i] = r.u8();
     flags[i] = r.u8();
@@ -213,11 +219,12 @@ function parsePolylines(buf: ArrayBuffer, magic: number): PolylineSet {
     ptOffset[i] = totalPts;
     ptCount[i] = n;
     for (let k = 0; k < n; k++) {
-      coordsArr.push(r.f32(), r.f32());
+      coords[(totalPts + k) * 2] = r.f32();
+      coords[(totalPts + k) * 2 + 1] = r.f32();
     }
     totalPts += n;
   }
-  return { count, cls, flags, ptOffset, ptCount, coords: Float32Array.from(coordsArr) };
+  return { count, cls, flags, ptOffset, ptCount, coords };
 }
 
 export function parseGraph(buf: ArrayBuffer): Graph {
@@ -317,7 +324,7 @@ export function parseGraph(buf: ArrayBuffer): Graph {
   return { nodeCount, nodesXY, inCore, signals, aux, clusters, edges, names, geo };
 }
 
-function parseWater(buf: ArrayBuffer) {
+export function parseWater(buf: ArrayBuffer) {
   const r = new Reader(buf);
   if (r.u32() !== 0x574d5452) throw new Error("bad water magic");
   const nVerts = r.u32();
@@ -328,7 +335,7 @@ function parseWater(buf: ArrayBuffer) {
   return { verts, tris };
 }
 
-function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
+export function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
   const r = new Reader(buf);
   if (r.u32() !== 0x424d5452) throw new Error("bad buildings magic");
   const tileCount = r.u32();
@@ -343,8 +350,16 @@ function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
     const vertOff = new Uint32Array(count);
     const triOff = new Uint32Array(count);
     let vTot = 0, tTot = 0;
-    const vertsArr: number[] = [];
-    const trisArr: number[] = [];
+    const start = r.pos;
+    for (let i = 0; i < count; i++) {
+      r.pos += 2;
+      const nv = r.u8(), nt = r.u8();
+      vTot += nv; tTot += nt; r.pos += nv * 4 + nt * 3;
+    }
+    if (r.pos > buf.byteLength) throw new Error("Invalid building tile length");
+    const verts = new Int16Array(vTot * 2);
+    const tris = new Uint8Array(tTot * 3);
+    r.pos = start; vTot = 0; tTot = 0;
     for (let i = 0; i < count; i++) {
       heights[i] = r.u16();
       const nv = r.u8();
@@ -353,23 +368,23 @@ function parseBuildings(buf: ArrayBuffer): BuildingTile[] {
       nTris[i] = nt;
       vertOff[i] = vTot;
       triOff[i] = tTot;
-      for (let k = 0; k < nv * 2; k++) vertsArr.push(r.i16());
-      for (let k = 0; k < nt * 3; k++) trisArr.push(r.u8());
+      for (let k = 0; k < nv * 2; k++) verts[vTot * 2 + k] = r.i16();
+      for (let k = 0; k < nt * 3; k++) tris[tTot * 3 + k] = r.u8();
       vTot += nv;
       tTot += nt;
     }
     tiles.push({
       ox, oy, count, heights, nVerts, nTris, vertOff, triOff,
-      verts: Int16Array.from(vertsArr),
-      tris: Uint8Array.from(trisArr),
+      verts, tris,
       totalVerts: vTot,
       totalTris: tTot,
     });
   }
+  if (r.pos !== buf.byteLength) throw new Error("Invalid buildings length");
   return tiles;
 }
 
-function parseTransit(buf: ArrayBuffer): TransitRoute[] {
+export function parseTransit(buf: ArrayBuffer): TransitRoute[] {
   const r = new Reader(buf);
   if (r.u32() !== 0x544d5452) throw new Error("bad transit magic");
   const count = r.u32();
@@ -392,7 +407,7 @@ function parseTransit(buf: ArrayBuffer): TransitRoute[] {
   return routes;
 }
 
-function parseDistrictBounds(buf: ArrayBuffer): DistrictBoundary[] {
+export function parseDistrictBounds(buf: ArrayBuffer): DistrictBoundary[] {
   const r = new Reader(buf);
   if (r.u32() !== 0x444d5452) throw new Error("bad districts magic");
   const count = r.u16();
@@ -426,6 +441,7 @@ export async function loadCity(
   // sim worker in parallel with the rest of the download and mesh building
   onGraphReady?: (graphBuffer: ArrayBuffer, meta: Meta) => void,
   preparedMeta?: Meta,
+  includeBuildings = true,
 ): Promise<CityData> {
   const meta = preparedMeta ?? await fetchCityJson<Meta>(base, "meta.json");
 
@@ -453,7 +469,7 @@ export async function loadCity(
     }),
     fetchCityBuffer(base, "water.bin", (f) => onProgress("grid", 0.5 + f * 0.2)),
     fetchCityBuffer(base, "rail.bin", (f) => onProgress("grid", 0.7 + f * 0.1)),
-    fetchCityBuffer(base, "buildings.bin", (f) => onProgress("structures", f * 0.55)),
+    includeBuildings ? fetchCityBuffer(base, "buildings.bin", (f) => onProgress("structures", f * 0.55)) : null,
     optionalBuf("transit.bin"),
     optionalBuf("districts.bin"),
     optionalJson<NdwData>("ndw.json"),
@@ -469,7 +485,7 @@ export async function loadCity(
   const water = parseWater(waterBuf);
   onProgress("grid", 1);
   const rail = parsePolylines(railBuf, 0x4c4d5452);
-  const buildings = parseBuildings(bldBuf);
+  const buildings = bldBuf ? parseBuildings(bldBuf) : [];
   onProgress("structures", 0.7);
 
   return { meta, roads, rail, graph, graphBuffer: graphBuf, water, buildings, transit, districtBounds, ndw };

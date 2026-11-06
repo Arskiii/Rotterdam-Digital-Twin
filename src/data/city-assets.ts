@@ -18,12 +18,14 @@ export function cityAssetUrl(base: string, path: string): string {
 
 /** Overlap the map's large downloads with its lazy module, only when it is opened. */
 export function preloadCity(base: string): void {
-  for (const path of ["graph.bin", "roads.bin", "buildings.bin"]) {
+  for (const path of ["graph.bin", "roads.bin"]) {
+    if (document.querySelector(`link[data-city-preload="${path}"]`)) continue;
     const link = document.createElement("link");
     link.rel = "preload";
     link.as = "fetch";
     link.crossOrigin = "anonymous";
     link.href = cityAssetUrl(base, path);
+    link.dataset.cityPreload = path;
     document.head.append(link);
   }
 }

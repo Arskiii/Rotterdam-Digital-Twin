@@ -1,8 +1,8 @@
-import { safeReading, parseImported } from "./imports";
+import { parseImported } from "./imports";
 import { mountWorkspaceChrome } from "../ui/workspace";
 import { siteUrl } from "../ui/siteUrl";
-import studyNetworkUrl from "../../.generated/study-network.json?url";
-import { applyOverrides, loadOverrides } from "../v03/overrides";
+import { loadStudy } from "../study/data";
+import type { StudySelection } from "../study/context";
 import { ScenarioRunner } from "./scenarioRunner";
 import {
   aggregateTraffic, calibrationError, matchCorridor, sampleMean,
@@ -20,7 +20,7 @@ import { mean, metricChange, nearestObservation } from "./presentation";
 import { DEFAULT_SETUP, SetupValidationError, defaultScenarioConfig as config, matchingPreset, sameScenarioPair,
   scenarioPair, setupFromPair, timingPresets, type LabSetup } from "./setup";
 
-export function mountLab(root: HTMLElement) {
+export function mountLab(root: HTMLElement, selection?: StudySelection) {
   mountWorkspaceChrome({ root, page: "lab", sections: [
     { id: "observations", label: "Traffic observations", icon: "shield" },
     { id: "scenario-setup", label: "Signal comparison", icon: "sliders" },
@@ -58,7 +58,13 @@ export function mountLab(root: HTMLElement) {
   let transferredNetwork = false;
   let savedReports: ReturnType<typeof readSavedReports> = [];
   let reportStorageIssue = false;
-  const sourceLoadController = new AbortController();
+  let publishingSelection = false;
+  let selectionRevision = 0;
+  const pendingSelection = document.createElement("div");
+  pendingSelection.className = "study-selection-pending"; pendingSelection.hidden = true;
+  pendingSelection.innerHTML = `A different corridor is selected on the map. Your current comparison stays here until you apply it. <button type="button">Use map selection</button>`;
+  el("observations").prepend(pendingSelection);
+  const applySelection = pendingSelection.querySelector("button")!;
   type ResultsState = "empty" | "running" | "complete" | "stale" | "error" | "cancelled";
   let resultsState: ResultsState = "empty";
 
@@ -259,7 +265,9 @@ export function mountLab(root: HTMLElement) {
     el<HTMLElement>("selection-detail").textContent = restoredReport
       ? "Saved report network and observations. The map opens with its current road edits."
       : transferredNetwork ? "Exact network transferred from the map, including your road edits." : "Bundled road network with edits saved in this browser.";
-    const url = siteUrl("v03/"); if (edgeId) url.searchParams.set("corridor", edgeId);
+    const url = siteUrl(restoredReport || transferredNetwork ? "v03/" : "./");
+    if (!restoredReport && !transferredNetwork) url.searchParams.set("page", "map");
+    if (edgeId) url.searchParams.set("corridor", edgeId);
     el<HTMLAnchorElement>("selection-map").href = url.href;
     el<HTMLButtonElement>("clear-corridor").hidden = !lockedEdgeId;
     redrawCorridorMap();
@@ -303,6 +311,7 @@ export function mountLab(root: HTMLElement) {
 
   function updateAvailability() {
     const value = importing || controller !== null;
+    applySelection.disabled = value;
     fitButton.disabled = value || !networkReady || !modelCompatible || !corridor || !samples.some((sample) => sample.speedKmh !== null);
     runButton.disabled = value || !networkReady || !modelCompatible || (!!lockedEdgeId && !corridor);
     cancelButton.disabled = controller === null;
@@ -536,7 +545,12 @@ export function mountLab(root: HTMLElement) {
   chart.addEventListener("lostpointercapture", endScrub);
   chart.addEventListener("pointercancel", endScrub);
   chart.addEventListener("pointerup", (event) => { if (event.pointerId === scrubPointer) { scrubChart(event.clientX); endScrub(); } });
-  sensorSelect.addEventListener("change", refreshSelection);
+  sensorSelect.addEventListener("change", () => {
+    refreshSelection();
+    if (!restoredReport && !transferredNetwork && selection) {
+      publishingSelection = true; selection.select(corridor?.edgeIds[0] ?? null); publishingSelection = false;
+    }
+  });
   el<HTMLButtonElement>("replay-play").addEventListener("click", () => {
     if (replayTimer) { stopReplay(); return; }
     if (samples.length < 2) return;
@@ -577,6 +591,7 @@ export function mountLab(root: HTMLElement) {
 
   el<HTMLButtonElement>("clear-corridor").addEventListener("click", () => {
     lockedEdgeId = null;
+    publishingSelection = true; selection?.select(null); publishingSelection = false;
     const url = new URL(location.href); url.searchParams.delete("corridor"); url.searchParams.delete("handoff"); history.replaceState(null, "", url);
     populateSensors();
   });
@@ -614,7 +629,6 @@ export function mountLab(root: HTMLElement) {
     restoredReport = true;
     networkReady = true;
     sourceFailed = false;
-    sourceLoadController.abort();
     modelCompatible = report.modelVersion === MODEL_VERSION;
     el<HTMLInputElement>("report-name").value = report.name;
     writeSetup(setupFromPair(report.baseline.config, report.candidate.config));
@@ -634,6 +648,8 @@ export function mountLab(root: HTMLElement) {
     url.searchParams.delete("handoff");
     if (lockedEdgeId) url.searchParams.set("corridor", lockedEdgeId); else url.searchParams.delete("corridor");
     history.replaceState(null, "", url);
+    publishingSelection = true; selection?.select(lockedEdgeId); publishingSelection = false;
+    pendingSelection.hidden = true;
   }
 
   async function openReport(raw: string | Promise<string>) {
@@ -749,33 +765,11 @@ export function mountLab(root: HTMLElement) {
       const handoffToken = new URL(location.href).searchParams.get("handoff");
       const handoff = handoffToken ? readHandoff(handoffToken, lockedEdgeId ?? "") : null;
       transferredNetwork = handoff !== null;
-      const [summary, history] = await Promise.all([
-        handoff ? Promise.resolve(handoff) : fetch(studyNetworkUrl, { signal: AbortSignal.any([sourceLoadController.signal, AbortSignal.timeout(15_000)]) }).then(async (response) => {
-          if (!response.ok) throw new Error(`Map: HTTP ${response.status}`);
-          const study = await response.json();
-          if (restoredReport) return null;
-          if (study.version !== 1 || !Number.isFinite(study.origin?.lat) || !Number.isFinite(study.origin?.lon)) {
-            throw new Error("Invalid study network");
-          }
-          const network = unpackNetwork(study.network);
-          applyOverrides(network, loadOverrides());
-          return { network, origin: study.origin as { lat: number; lon: number } };
-        }),
-        handoff ? Promise.resolve(null) : fetch(siteUrl("data/traffic-history.json"), { signal: AbortSignal.any([sourceLoadController.signal, AbortSignal.timeout(10_000)]) })
-          .then(async (response) => response.ok ? await response.json() as unknown : null)
-          .catch(() => null),
-      ]);
+      const summary = handoff ?? await loadStudy();
       if (restoredReport || !summary) return;
       network = summary.network;
       origin = summary.origin;
-      if (history) {
-        const rows = history && typeof history === "object" ? (history as { readings?: unknown }).readings : null;
-        readings = Array.isArray(rows) ? rows.slice(0, 3000).map(safeReading).filter((row): row is TrafficReading => row !== null) : [];
-      }
-      if (handoff) {
-        const merged = new Map([...readings, ...handoff.readings].map((row) => [`${row.id}|${row.observedAt}`, row]));
-        readings = [...merged.values()].sort((a, b) => a.observedAt.localeCompare(b.observedAt)).slice(-3000);
-      }
+      readings = summary.readings;
       networkReady = true;
       sourceFailed = false;
       el<HTMLInputElement>("history-import").disabled = false;
@@ -799,6 +793,37 @@ export function mountLab(root: HTMLElement) {
 
   refreshSavedReports();
   void boot();
+  async function useMapSelection() {
+    if (!selection || controller || importing) return;
+    const revision = ++selectionRevision;
+    applySelection.disabled = true;
+    try {
+      const study = await loadStudy();
+      if (revision !== selectionRevision) return;
+      if (restoredReport || transferredNetwork) readings = study.readings;
+      network = study.network; origin = study.origin;
+      lockedEdgeId = selection.id; restoredReport = false; transferredNetwork = false;
+      modelCompatible = true; networkReady = true; sourceFailed = false;
+      activeSeeds = [42, 99, 123]; pendingSelection.hidden = true;
+      populateSensors();
+      status.textContent = "Selected corridor from Unit Map · Configuration retained.";
+      status.dataset.state = "ready";
+    } catch (error) { status.textContent = `Could not select corridor: ${error instanceof Error ? error.message : String(error)}`; }
+    finally { updateAvailability(); }
+  }
+  applySelection.onclick = () => void useMapSelection();
+  selection?.subscribe((id) => {
+    if (publishingSelection) return;
+    ++selectionRevision;
+    if (id === lockedEdgeId || !restoredReport && !transferredNetwork && id && corridor?.edgeIds.includes(id)) {
+      pendingSelection.hidden = true; return;
+    }
+    if (!networkReady) { lockedEdgeId = id; return; }
+    if (exportData || controller || importing || restoredReport || transferredNetwork) {
+      pendingSelection.hidden = false; return;
+    }
+    void useMapSelection();
+  });
 
   return { setActive(next: boolean) {
     if (active === next) return;

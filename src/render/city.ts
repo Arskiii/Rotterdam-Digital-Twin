@@ -577,21 +577,27 @@ const yieldTask = () =>
 
 export async function buildBuildings(
   tiles: BuildingTile[],
-  onProgress: (frac: number) => void
+  onProgress: (frac: number) => void,
+  group = new THREE.Group(),
+  signal?: AbortSignal,
 ): Promise<THREE.Group> {
-  const group = new THREE.Group();
   group.matrixAutoUpdate = false;
   let i = 0;
-  const CHUNK = 14;
   while (i < tiles.length) {
-    const end = Math.min(tiles.length, i + CHUNK);
-    for (; i < end; i++) {
+    signal?.throwIfAborted();
+    const until = performance.now() + 5;
+    do {
       const mesh = buildTileMesh(tiles[i]);
       mesh.userData.tileKey = tileKeyOf(tiles[i]);
+      releaseToGPU(mesh.geometry);
       group.add(mesh);
-    }
+      i++;
+    } while (i < tiles.length && performance.now() < until);
     onProgress(i / tiles.length);
-    await yieldTask();
+    // Once visible, let the browser paint between geometry batches. Hidden
+    // views must still finish loading, since rAF is suspended in hidden tabs.
+    if (typeof document !== "undefined" && !document.hidden) await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    else await yieldTask();
   }
   return group;
 }
@@ -669,7 +675,8 @@ export function releaseToGPU(geo: THREE.BufferGeometry) {
 export async function buildCity(
   data: CityData,
   scene: THREE.Scene,
-  onStructures: (frac: number) => void
+  onStructures: (frac: number) => void,
+  deferBuildings = false,
 ): Promise<CityMeshes> {
   const ground = buildGround(data.meta.extent);
   const water = buildWater(data.water);
@@ -678,7 +685,7 @@ export async function buildCity(
   const roadLines = buildRoadLines(data.roads);
   const rail = buildRail(data.rail);
   scene.add(ground, water, roads, junctions, roadLines, rail);
-  const buildings = await buildBuildings(data.buildings, onStructures);
+  const buildings = deferBuildings ? new THREE.Group() : await buildBuildings(data.buildings, onStructures);
   scene.add(buildings);
   for (const m of [ground, water, roads, junctions, roadLines, rail]) releaseToGPU(m.geometry);
   buildings.traverse((o) => {

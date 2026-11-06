@@ -22,6 +22,7 @@ import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
 import { buildSearchIndex, stopEntries, searchIndex, type SearchEntry, type SearchHit } from "./search";
 import { transitHealth, KIND_LABEL, type LineHealth } from "../data/transit-health";
 import { liveTimeFresh } from "../data/live";
+import type { SimulationPort } from "../sim/deferred-worker";
 
 interface UnitRuntime {
   def: UnitDef;
@@ -127,6 +128,8 @@ export class App {
   // false on a phone from the start: main.ts never starts the worker there, so
   // a true here would be a flag describing a core that does not exist
   simAvailable = !App.PHONE;
+  simReady = false;
+  dispose() { this.lifetime.abort(); }
   /** the operator's congestion-flux choice, remembered across mode switches */
   private simCongestion = false;
   private historyBar!: HTMLElement;
@@ -186,9 +189,11 @@ export class App {
       stopsLayer?: import("../render/transit").LiveStopsLayer;
       resilience: import("../render/resilience").ResilienceLayers;
     },
-    public worker: Worker
+    public worker: SimulationPort,
+    private lifetime = new AbortController(),
   ) {
     this.drone = new DroneViewer(ui.droneCanvas);
+    this.lifetime.signal.addEventListener("abort", () => { this.drone.dispose(); clearInterval(this.liveClockTimer); }, { once: true });
 
     this.streetChip = document.createElement("div");
     this.streetChip.id = "street-chip";
@@ -273,9 +278,10 @@ export class App {
     document.addEventListener("visibilitychange", () => {
       this.syncLiveClock(this.mode === "live");
       if (!document.hidden) this.slowTick();
-    });
-    setInterval(() => this.slowTick(), 1500);
-    setInterval(() => { if (!document.hidden && this.page === "map") this.flavorEvent(); }, 26000);
+    }, { signal: this.lifetime.signal });
+    const slow = setInterval(() => this.slowTick(), 1500);
+    const flavor = setInterval(() => { if (!document.hidden && this.page === "map") this.flavorEvent(); }, 26000);
+    this.lifetime.signal.addEventListener("abort", () => { clearInterval(slow); clearInterval(flavor); clearInterval(this.liveClockTimer); }, { once: true });
   }
 
   // ---------- units ----------
@@ -464,7 +470,9 @@ export class App {
       ui.stripThumb.style.left = `${p * (100 - w)}%`;
     };
     strip.addEventListener("scroll", syncThumb);
-    new ResizeObserver(syncThumb).observe(strip);
+    const stripResize = new ResizeObserver(syncThumb);
+    stripResize.observe(strip);
+    this.lifetime.signal.addEventListener("abort", () => stripResize.disconnect(), { once: true });
     ui.stripLeft.addEventListener("click", () => strip.scrollBy({ left: -320, behavior: "smooth" }));
     ui.stripRight.addEventListener("click", () => strip.scrollBy({ left: 320, behavior: "smooth" }));
     let dragging = false;
@@ -562,7 +570,7 @@ export class App {
       if (row) this.commitSearch(+(row.dataset.i ?? "-1"));
     });
 
-    window.addEventListener("keydown", (e) => this.onKey(e));
+    window.addEventListener("keydown", (e) => this.onKey(e), { signal: this.lifetime.signal });
   }
 
   /**
@@ -1672,11 +1680,7 @@ export class App {
     el.addEventListener("click", () => location.reload());
     this.ui.hud.appendChild(el);
     this.log("warn", "THIS TAB IS RUNNING AN OLDER BUILD — RELOAD TO PICK UP THE CURRENT ONE");
-    // If they background it before tapping, take the reload then: coming back
-    // to a fresh app is less disruptive than the page changing under them.
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) location.reload();
-    });
+    // Keep in-progress comparisons and controls intact until the user reloads.
   }
 
   setPage(p: typeof this.page) {
@@ -1815,7 +1819,7 @@ export class App {
     const cars = v.cars.mesh.count + v.trucks.mesh.count;
     const people = v.peds.mesh.count;
     const transit = this.layers.fixesLayer?.vehicles.length ?? 0;
-    el.textContent = `${fmtInt(cars)} CARS · ${fmtInt(people)} PEOPLE · MODELLED${this.simAvailable ? "" : " PREVIEW"} | ${transit ? `${transit} TRANSIT · LIVE` : "TRANSIT UNAVAILABLE"}`;
+    el.textContent = `${fmtInt(cars)} CARS · ${fmtInt(people)} PEOPLE · MODELLED${this.simReady ? "" : " PREVIEW"} | ${transit ? `${transit} TRANSIT · LIVE` : "TRANSIT UNAVAILABLE"}`;
   }
 
   private onWorker(msg: WorkerToMain) {

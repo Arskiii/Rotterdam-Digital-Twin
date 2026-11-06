@@ -9,6 +9,42 @@ const NEWER = "2026-08-21T10:00:00.000Z";
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("live delivery and expiry", () => {
+  it("refreshes on return and reconnect while coalescing concurrent requests", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
+    const doc = Object.assign(new EventTarget(), { hidden: false }), win = new EventTarget();
+    vi.stubGlobal("document", doc); vi.stubGlobal("window", win);
+    let respond!: (value: Response) => void;
+    const fetcher = vi.fn(() => new Promise<Response>((resolve) => { respond = resolve; }));
+    vi.stubGlobal("fetch", fetcher);
+    const feed = new LiveFeed("/data/");
+    const first = feed.refresh(); expect(feed.refresh()).toBe(first);
+    win.dispatchEvent(new Event("online")); expect(fetcher).toHaveBeenCalledTimes(1);
+    respond(Response.json({ v: 3, t: NEWER, bridges: [] })); await first;
+    doc.hidden = true; await vi.advanceTimersByTimeAsync(60_000);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    doc.hidden = false; doc.dispatchEvent(new Event("visibilitychange"));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    const resumed = feed.refresh(); respond(Response.json({ v: 3, t: new Date().toISOString(), bridges: [] })); await resumed;
+    await vi.advanceTimersByTimeAsync(1_000); win.dispatchEvent(new Event("online"));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    const online = feed.refresh(); respond(Response.json({ v: 3, t: new Date().toISOString(), bridges: [] })); await online;
+    feed.dispose(); await vi.advanceTimersByTimeAsync(60_000); win.dispatchEvent(new Event("online"));
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("retains newer observations and delivers updates even if one view fails", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
+    const fetcher = vi.fn(async () => Response.json({ v: 3, t: NEWER, bridges: [] }));
+    vi.stubGlobal("fetch", fetcher);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const feed = new LiveFeed("/data/", () => { throw new Error("broken view"); });
+    const healthy = vi.fn(); feed.subscribe(healthy);
+    await feed.refresh(); expect(healthy).toHaveBeenCalledOnce(); expect(errors).toHaveBeenCalledOnce();
+    fetcher.mockImplementation(async () => Response.json({ v: 3, t: OLDER, bridges: [] }));
+    await feed.refresh(); expect(feed.snapshot?.t).toBe(NEWER); expect(healthy).toHaveBeenCalledOnce();
+    feed.dispose(); errors.mockRestore();
+  });
+
   it("shares a loaded snapshot and later refreshes without starting a second poller", async () => {
     vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
     const fetcher = vi.fn(async () => Response.json({ v: 3, t: new Date().toISOString(), bridges: [] }));

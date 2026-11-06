@@ -7,9 +7,12 @@ import { qualityRows, heldoutStations, validateHoldout } from "./model";
 import { calculateHospitalAccess, HOSPITALS, type AccessRow } from "./routing";
 import { corridorOf, verdict, type ValidationReport } from "./validation";
 import { beyondNoise, compareWhatIf, type Change, type WhatIfResult } from "./whatif";
+import type { StudySelection } from "../study/context";
+import { mountCorridorEvidence } from "../study/evidence";
 
-export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: string) {
+export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: string, selection?: StudySelection) {
   mountIntelligenceChrome(root);
+  if (selection) mountCorridorEvidence(root, selection);
 
   const $ = <T extends HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
   const format = (value: number | null | undefined, suffix = "") => value === null || value === undefined ? "—" : `${value.toLocaleString("en-GB")}${suffix}`;
@@ -43,6 +46,11 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
     if (active && !document.hidden) { renderSources(); renderConditions(); renderBridgeOptions(); }
   };
   feed.subscribe((snapshot) => { latest = snapshot; refreshLive(); });
+  const refresh = document.createElement("button"); refresh.type = "button"; refresh.id = "intelligence-refresh";
+  refresh.textContent = "Refresh observations";
+  $("#snapshot-status").after(refresh);
+  refresh.onclick = () => void feed.refresh();
+  feed.subscribeStatus(() => { refresh.disabled = feed.refreshing; refresh.textContent = feed.refreshing ? "Refreshing…" : "Refresh observations"; refreshLive(); });
 
   function renderSources() {
     const status = $("#snapshot-status");
