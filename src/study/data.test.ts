@@ -1,7 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import packed from "../../.generated/study-network.json";
 import history from "../../public/data/traffic-history.json";
-import { cityPoint, nearestSection, studySections } from "./data";
+import { cityPoint, loadStudy, nearestSection, studySections } from "./data";
+import { corridorHistory } from "./history";
 import { StudySelection } from "./context";
 import { unpackNetwork } from "../lab/networkSnapshot";
 import { corridorReadings, selectedCorridor } from "../v03/corridors";
@@ -9,6 +10,22 @@ import { safeReading } from "../lab/imports";
 import type { TrafficReading } from "../v03/scenario";
 
 describe("shared corridor workflow", () => {
+  it("reuses geometry while delivering refreshed history to newly opened workspaces", async () => {
+    const observedAt = new Date(Date.now() - 60_000).toISOString();
+    const fresh = { ...history, generatedAt: new Date().toISOString(), readings: [{ ...history.readings[0], observedAt }] };
+    let updated = false;
+    const fetcher = vi.fn(async (url: string | URL) => Response.json(String(url).includes("study-network") ? packed : updated ? fresh : history));
+    vi.stubGlobal("fetch", fetcher);
+    try {
+      const original = await loadStudy();
+      updated = true; await corridorHistory.refresh(true);
+      const latest = await loadStudy();
+      expect(latest.network).toBe(original.network);
+      expect(latest.readings[0].observedAt).toBe(observedAt);
+      expect(original.readings[0].observedAt).not.toBe(observedAt);
+      expect(fetcher.mock.calls.filter(([url]) => String(url).includes("study-network"))).toHaveLength(1);
+    } finally { corridorHistory.dispose(); vi.unstubAllGlobals(); }
+  });
   it("converts both origins and latitude scales without shifting selected roads", () => {
     const study = { lat: 51.916916, lon: 4.4867455 }, city = { lat: 51.92, lon: 4.48 };
     const lat = 51.917, lon = 4.487;

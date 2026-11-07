@@ -101,10 +101,13 @@ jobs:
 
   # Collect study-area evidence alongside the existing city live refresh. A feed
   # outage must not block the main map deployment; the lab labels old readings.
-  # A later site build restores the latest completed same-branch artifact.
+  # Publish independently of site builds: both Vercel and Pages read this mirror.
   scenario-data:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    concurrency:
+      group: corridor-history-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
@@ -127,6 +130,35 @@ jobs:
           github-token: ${{ github.token }}
       - run: python3 scripts/update_public_data.py
       - run: python3 scripts/update_history.py
+      - name: Publish corridor observations
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          OUT="$RUNNER_TEMP/corridor-publish"
+          mkdir -p "$OUT"
+          cp public/data/traffic-history.json "$OUT/traffic-history.json"
+          printf '{"git":{"deploymentEnabled":{"corridor-data":false}}}\n' > "$OUT/vercel.json"
+          cd "$OUT"
+          git init -q -b corridor-data
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          REPO_URL="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          PREVIOUS=""
+          if git fetch -q --depth=1 "$REPO_URL" corridor-data 2>/dev/null; then
+            PREVIOUS=$(git rev-parse FETCH_HEAD)
+            git show FETCH_HEAD:traffic-history.json > previous.json
+            # A delayed run must never overwrite a newer collection.
+            if python3 -c 'import json; from datetime import datetime; old=json.load(open("previous.json")); new=json.load(open("traffic-history.json")); raise SystemExit(0 if datetime.fromisoformat(old["generatedAt"].replace("Z","+00:00")) >= datetime.fromisoformat(new["generatedAt"].replace("Z","+00:00")) else 1)'; then
+              echo 'Newer corridor history is already published'
+              exit 0
+            fi
+          fi
+          git add traffic-history.json vercel.json
+          git commit -q -m 'Refresh measured corridor observations'
+          # One bounded snapshot; the lease protects another publisher's update.
+          git push -q --force-with-lease="refs/heads/corridor-data:$PREVIOUS" "$REPO_URL" corridor-data
       - name: Retain corridor observations
         uses: actions/upload-artifact@v4
         with:
