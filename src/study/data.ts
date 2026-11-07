@@ -1,7 +1,6 @@
 import studyNetworkUrl from "../../.generated/study-network.json?url";
-import { siteUrl } from "../ui/siteUrl";
 import { unpackNetwork } from "../lab/networkSnapshot";
-import { safeReading } from "../lab/imports";
+import { corridorHistory } from "./history";
 import { applyOverrides, loadOverrides } from "../v03/overrides";
 import { selectedCorridor } from "../v03/corridors";
 import { matchCorridor, type TrafficReading } from "../v03/scenario";
@@ -9,23 +8,17 @@ import type { Network } from "../sim/types";
 
 export type Origin = { lat: number; lon: number };
 export interface StudyData { network: Network; origin: Origin; readings: TrafficReading[] }
-let pending: Promise<StudyData> | null = null;
+let pending: Promise<Omit<StudyData, "readings">> | null = null;
 export function loadStudy(): Promise<StudyData> {
-  pending ??= Promise.all([
-    fetch(studyNetworkUrl, { signal: AbortSignal.timeout(15_000) }).then(async (response) => {
+  pending ??= fetch(studyNetworkUrl, { signal: AbortSignal.timeout(15_000) }).then(async (response) => {
       if (!response.ok) throw new Error(`Study map: HTTP ${response.status}`);
       const study = await response.json();
       if (study.version !== 1 || !Number.isFinite(study.origin?.lat) || !Number.isFinite(study.origin?.lon)) throw new Error("Invalid study network");
       const network = unpackNetwork(study.network);
       applyOverrides(network, loadOverrides());
       return { network, origin: study.origin as Origin };
-    }),
-    fetch(siteUrl("data/traffic-history.json"), { signal: AbortSignal.timeout(10_000) })
-      .then(async (r) => r.ok ? await r.json() : null).catch(() => null),
-  ]).then(([study, history]) => ({ ...study,
-    readings: Array.isArray(history?.readings) ? history.readings.slice(0, 3000).map(safeReading).filter((r: TrafficReading | null): r is TrafficReading => r !== null) : [],
-  })).catch((error) => { pending = null; throw error; });
-  return pending;
+    }).catch((error) => { pending = null; throw error; });
+  return Promise.all([pending, corridorHistory.load()]).then(([study, history]) => ({ ...study, readings: history?.readings ?? [] }));
 }
 
 /** The city and corridor models use different latitude scales and origins. */

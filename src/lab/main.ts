@@ -2,6 +2,7 @@ import { parseImported } from "./imports";
 import { mountWorkspaceChrome } from "../ui/workspace";
 import { siteUrl } from "../ui/siteUrl";
 import { loadStudy } from "../study/data";
+import { corridorHistory } from "../study/history";
 import type { StudySelection } from "../study/context";
 import { ScenarioRunner } from "./scenarioRunner";
 import {
@@ -56,6 +57,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
   let modelCompatible = true;
   let restoredReport = false;
   let transferredNetwork = false;
+  let importedHistory = false;
   let savedReports: ReturnType<typeof readSavedReports> = [];
   let reportStorageIssue = false;
   let publishingSelection = false;
@@ -65,6 +67,28 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
   pendingSelection.innerHTML = `A different corridor is selected on the map. Your current comparison stays here until you apply it. <button type="button">Use map selection</button>`;
   el("observations").prepend(pendingSelection);
   const applySelection = pendingSelection.querySelector("button")!;
+  const pendingHistory = document.createElement("div");
+  pendingHistory.className = "study-selection-pending"; pendingHistory.hidden = true;
+  pendingHistory.innerHTML = `<span></span> <button type="button">Use latest observations</button>`;
+  el("observations").prepend(pendingHistory);
+  const applyHistory = pendingHistory.querySelector("button")!;
+  function refreshHistoryNotice() {
+    const latest = corridorHistory.snapshot;
+    pendingHistory.hidden = !networkReady || importedHistory || restoredReport || transferredNetwork || !latest || latest.readings === readings;
+    pendingHistory.querySelector("span")!.textContent = latest?.latestObservedAt
+      ? `Updated observations available through ${new Date(latest.latestObservedAt).toLocaleString()}. Applying them starts a new comparison.`
+      : "Updated corridor history available. Applying it starts a new comparison.";
+    applyHistory.disabled = !!controller || importing;
+  }
+  applyHistory.onclick = () => {
+    const latest = corridorHistory.snapshot;
+    if (!latest || controller || importing || restoredReport || transferredNetwork || importedHistory) return;
+    readings = latest.readings;
+    populateSensors();
+    refreshHistoryNotice();
+    status.textContent = `Updated to ${readings.length} published detector records. Signal settings retained.`;
+  };
+  corridorHistory.subscribe(refreshHistoryNotice);
   type ResultsState = "empty" | "running" | "complete" | "stale" | "error" | "cancelled";
   let resultsState: ResultsState = "empty";
 
@@ -310,6 +334,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
   }
 
   function updateAvailability() {
+    refreshHistoryNotice();
     const value = importing || controller !== null;
     applySelection.disabled = value;
     fitButton.disabled = value || !networkReady || !modelCompatible || !corridor || !samples.some((sample) => sample.speedKmh !== null);
@@ -568,6 +593,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
     try {
       if (file.size > 1_000_000) throw new Error("File exceeds 1 MB.");
       readings = parseImported(await file.text(), file.name);
+      importedHistory = true; refreshHistoryNotice();
       populateSensors();
       status.textContent = `Imported ${readings.length} observations for this browser session.`;
       status.dataset.state = "ready";
@@ -627,6 +653,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
     lockedEdgeId = report.corridorEdgeId;
     activeSeeds = [...report.seeds];
     restoredReport = true;
+    refreshHistoryNotice();
     networkReady = true;
     sourceFailed = false;
     modelCompatible = report.modelVersion === MODEL_VERSION;
@@ -700,6 +727,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
   });
 
   function populateSensors() {
+    const previous = sensorSelect.value;
     sensorSelect.replaceChildren();
     const selection = lockedEdgeId ? selectedCorridor(network, lockedEdgeId) : null;
     eligibleReadings = lockedEdgeId ? selection ? corridorReadings(network, readings, origin, selection) : [] : readings;
@@ -710,6 +738,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
     for (const row of unique.values()) {
       const option = document.createElement("option"); option.value = row.id; option.textContent = `${row.name} · ${row.id}`; sensorSelect.append(option);
     }
+    if (unique.has(previous)) sensorSelect.value = previous;
     refreshSelection();
   }
 
@@ -776,6 +805,7 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
       populateSensors();
       status.textContent = `Map ready · ${network.edges.size} directed roads · ${readings.length} measured detector records. ${readings.length ? "" : "Import a CSV or JSON history to replay observations."}`;
       status.dataset.state = "ready";
+      refreshHistoryNotice();
       updateAvailability();
     } catch (error) {
       if (restoredReport) return;
@@ -800,12 +830,13 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
     try {
       const study = await loadStudy();
       if (revision !== selectionRevision) return;
-      if (restoredReport || transferredNetwork) readings = study.readings;
+      if (restoredReport || transferredNetwork || !importedHistory) { readings = study.readings; importedHistory = false; }
       network = study.network; origin = study.origin;
       lockedEdgeId = selection.id; restoredReport = false; transferredNetwork = false;
       modelCompatible = true; networkReady = true; sourceFailed = false;
       activeSeeds = [42, 99, 123]; pendingSelection.hidden = true;
       populateSensors();
+      refreshHistoryNotice();
       status.textContent = "Selected corridor from Unit Map · Configuration retained.";
       status.dataset.state = "ready";
     } catch (error) { status.textContent = `Could not select corridor: ${error instanceof Error ? error.message : String(error)}`; }
@@ -829,6 +860,6 @@ export function mountLab(root: HTMLElement, selection?: StudySelection) {
     if (active === next) return;
     active = next;
     if (!active) stopReplay();
-    else { showReplay(); redrawCorridorMap(); refreshSavedReports(); }
+    else { showReplay(); redrawCorridorMap(); refreshSavedReports(); refreshHistoryNotice(); void corridorHistory.refresh(); }
   } };
 }
