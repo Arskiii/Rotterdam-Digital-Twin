@@ -20,7 +20,7 @@ export function createLiveHandler({ collect = collectLiveSnapshot, catalog = loa
         const snap = await collect({ signal, transit });
         // A new envelope around old environmental readings is not a live map.
         const current = [snap.vehicles, snap.traffic].some((section) => {
-          const age = now() - Date.parse(section?.t);
+          const age = now() - Date.parse(section?.observedAt ?? section?.t);
           return Number.isFinite(age) && age >= -60_000 && age < 5 * 60_000;
         });
         if (!current) throw new Error("No current traffic or transit observations");

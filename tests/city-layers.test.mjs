@@ -10,6 +10,7 @@ const vite = await createServer({
 });
 after(() => vite.close());
 const { installCityLayers } = await vite.ssrLoadModule("/src/v03/cityLayers.ts");
+const { PUBLIC_SNAPSHOT_URL, loadPublicSnapshot, loadPublishedData } = await vite.ssrLoadModule("/src/data/public-snapshot.ts");
 
 class Element extends EventTarget {
   children = [];
@@ -60,12 +61,12 @@ test("observation groups expire at the oldest reading, and ended roadworks canno
   const ui = environment(t);
   const snapshot = {
     schemaVersion: 1,
-    traffic: { retrievedAt: iso(0), readings: [1_000 - 90 * 60_000, 0].map((offset) => ({ ...point, name: "Detector", observedAt: iso(offset), speedKmh: 30, vehiclesPerHour: 200 })) },
+    traffic: { retrievedAt: iso(0), readings: [1_000 - 20 * 60_000, 0].map((offset) => ({ ...point, name: "Detector", observedAt: iso(offset), speedKmh: 30, vehiclesPerHour: 200 })) },
     disruptions: { retrievedAt: iso(0), events: [4_000, 3600_000].map((offset) => ({ ...point, description: "Roadworks", startsAt: iso(-3600_000), endsAt: iso(offset) })) },
     air: { retrievedAt: iso(0), reading: { ...point, name: "Station", values: {
       NO2: { value: 10, observedAt: iso(2_000 - 4 * 3600_000) }, PM10: { value: 20, observedAt: iso(0) },
     } } },
-    water: { retrievedAt: iso(0), readings: [3_000 - 3 * 3600_000, 0].map((offset) => ({ ...point, name: "Gauge", observedAt: iso(offset), cmNAP: 90 })) },
+    water: { retrievedAt: iso(0), readings: [3_000 - 3600_000, 0].map((offset) => ({ ...point, name: "Gauge", observedAt: iso(offset), cmNAP: 90 })) },
   };
   let requestedUrl;
   t.mock.method(globalThis, "fetch", async (url) => {
@@ -74,7 +75,7 @@ test("observation groups expire at the oldest reading, and ended roadworks canno
   });
   const scene = new Scene();
   await installCityLayers(scene, summary);
-  assert.equal(requestedUrl, "https://example.org/Rotterdam-Digital-Twin/data/rotterdam-snapshot.json");
+  assert.equal(requestedUrl, PUBLIC_SNAPSHOT_URL);
   for (const [label, title, groupIndex] of [
     ["Traffic sensors", "Measured traffic", 2], ["Air station", "Air quality", 4],
     ["Water gauges", "Water level", 5], ["Road disruptions", "Roadworks", 3],
@@ -100,9 +101,9 @@ test("observation groups expire at the oldest reading, and ended roadworks canno
 test("visibility and toggle changes recheck freshness when background timers are delayed", async (t) => {
   const ui = environment(t, "https://example.org/Rotterdam-Digital-Twin/v03/", "../");
   t.mock.method(globalThis, "fetch", async (url) => {
-    assert.equal(String(url), "https://example.org/Rotterdam-Digital-Twin/data/rotterdam-snapshot.json");
+    assert.equal(String(url), PUBLIC_SNAPSHOT_URL);
     return { ok: true, json: async () => ({ schemaVersion: 1, traffic: {
-      retrievedAt: iso(0), readings: [{ ...point, name: "Detector", observedAt: iso(1_000 - 90 * 60_000) }],
+      retrievedAt: iso(0), readings: [{ ...point, name: "Detector", observedAt: iso(1_000 - 20 * 60_000) }],
     } }) };
   });
   const scene = new Scene();
@@ -130,17 +131,36 @@ test("an empty traffic layer is disabled instead of appearing to contain current
 
 test("snapshot fetch times out and leaves base map layers available", async (t) => {
   const ui = environment(t);
-  let signal;
+  const controllers = [];
+  t.mock.method(AbortSignal, "timeout", () => {
+    const controller = new AbortController(); controllers.push(controller); return controller.signal;
+  });
   t.mock.method(globalThis, "fetch", (_url, options) => new Promise((_resolve, reject) => {
-    signal = options.signal;
-    signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
+    options.signal.addEventListener("abort", () => reject(new Error("Aborted")), { once: true });
   }));
   const scene = new Scene();
   const pending = installCityLayers(scene, summary);
-  t.mock.timers.tick(8_000);
+  controllers[0].abort();
+  await new Promise((resolve) => setImmediate(resolve));
+  controllers[1].abort();
   await pending;
-  assert.equal(signal.aborted, true);
+  assert.ok(controllers.every((controller) => controller.signal.aborted));
   assert.ok(ui.card("Public data unavailable"));
   assert.equal(scene.children.length, 2);
   assert.equal(ui.toggle("3D buildings").checked, true);
+});
+
+test("published city layers and CBS figures fall back without changing their observation dates", async (t) => {
+  environment(t, "https://example.org/Rotterdam-Digital-Twin/v03/", "../");
+  const urls = [];
+  const fallback = { schemaVersion: 1, retrievedAt: iso(-86400_000), neighborhoods: [{ code: "BU05990101" }] };
+  t.mock.method(globalThis, "fetch", async (url) => {
+    urls.push(String(url));
+    return { ok: true, json: async () => String(url).startsWith("https://raw.") ? { schemaVersion: 99 } : fallback };
+  });
+  assert.equal(await loadPublicSnapshot(), fallback);
+  assert.equal(urls[1], "https://example.org/Rotterdam-Digital-Twin/data/rotterdam-snapshot.json");
+  assert.equal(await loadPublishedData("cbs-neighborhoods.json", (value) => Array.isArray(value.neighborhoods)), fallback);
+  assert.equal(urls[3], "https://example.org/Rotterdam-Digital-Twin/data/cbs-neighborhoods.json");
+  assert.equal(fallback.retrievedAt, iso(-86400_000));
 });

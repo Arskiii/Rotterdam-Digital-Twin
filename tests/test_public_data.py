@@ -15,6 +15,8 @@ from scripts.update_public_data import (
     read_traffic_measurements,
     read_traffic_sites,
     read_water,
+    read_water_series,
+    read_air,
     timestamp,
 )
 from scripts.update_history import merge_history, write_history
@@ -22,6 +24,32 @@ from scripts.check_public_data import check
 
 
 class PublicDataTests(unittest.TestCase):
+    def test_river_series_requires_actual_recent_measurements(self):
+        now = datetime(2026, 11, 7, 16, 0, tzinfo=timezone.utc)
+        def series(kind, minutes, value):
+            return {"AquoMetadata": {"ProcesType": kind, "Eenheid": {"Code": "cm"}, "Hoedanigheid": {"Code": "NAP"}},
+                    "Locatie": {"Code": "boompjes", "Lat": 51.91528, "Lon": 4.49194},
+                    "MetingenLijst": [{"Tijdstip": (now - timedelta(minutes=minutes)).isoformat(), "Meetwaarde": {"Waarde_Numeriek": value}}]}
+        rows = read_water_series({"WaarnemingenLijst": [series("verwachting", 0, 99), series("meting", 10, 20), series("meting", -10, 30), series("meting", 120, 40)]}, now)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["cmNAP"], 20)
+        with self.assertRaisesRegex(ValueError, "No recent measured"):
+            read_water_series({"WaarnemingenLijst": [series("verwachting", 0, 99)]}, now)
+
+    def test_empty_air_does_not_report_a_successful_refresh(self):
+        station = {"data": {"location": "Monitor", "geometry": {"coordinates": [4.48, 51.92]}}}
+        with self.assertRaisesRegex(ValueError, "No recent air"):
+            read_air(station, {"NO2": {"data": []}}, datetime.now(timezone.utc))
+
+    def test_health_checks_environmental_measurements_despite_recent_retrieval(self):
+        now = datetime(2026, 11, 7, 16, 0, tzinfo=timezone.utc)
+        current = now.isoformat()
+        snapshot = {"schemaVersion": 1, "water": {"retrievedAt": current, "readings": []},
+                    "air": {"retrievedAt": current, "reading": {"values": {"NO2": {"observedAt": "2026-09-27T12:00:00Z", "value": 10}}}}}
+        errors, _ = check(snapshot, {"schemaVersion": 1, "readings": []}, now)
+        self.assertIn("Water observations are missing or over 1 hours old", errors)
+        self.assertIn("Air observations are missing or over 4 hours old", errors)
+
     def test_ndw_measurement_matches_only_local_detector_and_total_vehicle_index(self):
         sites_xml = """<root xmlns:r="http://datex2.eu/schema/3/roadTrafficData"
             xmlns:c="http://datex2.eu/schema/3/common"

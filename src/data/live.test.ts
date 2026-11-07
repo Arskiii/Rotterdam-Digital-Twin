@@ -9,6 +9,29 @@ const NEWER = "2026-08-21T10:00:00.000Z";
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
 
 describe("live delivery and expiry", () => {
+  it("expires environmental layers independently of a fresh envelope", () => {
+    const now = Date.parse(NEWER), ago = (minutes: number) => new Date(now - minutes * 60000).toISOString();
+    const snap: LiveSnapshot = { v: 3, t: NEWER, situationsAt: ago(30), bridges: [], incidents: [],
+      water: { t: ago(61), station: "Gauge", cm: 20, trend: 1 },
+      weather: { t: ago(61), temp: 10, wind: 3, dir: 90, gust: 4, rain: 2, desc: "rain" },
+      air: { t: ago(65), s: [[0, 0, 1, 2, "Monitor"]] } };
+    const current = currentLiveSnapshot(snap, now);
+    expect(current.weather).toBeUndefined(); expect(current.water).toBeUndefined();
+    expect(current.bridges).toBeUndefined(); expect(current.incidents).toBeUndefined();
+    expect(current.air).toBe(snap.air);
+    expect(currentLiveSnapshot(snap, now + 4 * 3600_000).air).toBeUndefined();
+    expect(snap.weather).toBeDefined();
+  });
+
+  it("does not regress individual providers inside a newer delivery envelope", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
+    const weather = { t: NEWER, temp: 10, wind: 3, dir: 90, gust: 4, rain: 2, desc: "rain" };
+    const fetcher = vi.fn(async () => Response.json({ v: 3, t: NEWER, weather })); vi.stubGlobal("fetch", fetcher);
+    const feed = new LiveFeed("/data/"); await feed.refresh();
+    fetcher.mockResolvedValueOnce(Response.json({ v: 3, t: new Date(Date.parse(NEWER) + 1000).toISOString(), weather: { ...weather, t: OLDER, rain: 0 } }));
+    await feed.refresh(); expect(feed.snapshot?.weather).toEqual(weather);
+    feed.dispose();
+  });
   it("refreshes on return and reconnect while coalescing concurrent requests", async () => {
     vi.useFakeTimers(); vi.setSystemTime(Date.parse(NEWER));
     const doc = Object.assign(new EventTarget(), { hidden: false }), win = new EventTarget();
@@ -18,6 +41,7 @@ describe("live delivery and expiry", () => {
     vi.stubGlobal("fetch", fetcher);
     const feed = new LiveFeed("/data/");
     const first = feed.refresh(); expect(feed.refresh()).toBe(first);
+    expect(fetcher.mock.calls[0]).toEqual([expect.any(String), expect.objectContaining({ credentials: "same-origin" })]);
     win.dispatchEvent(new Event("online")); expect(fetcher).toHaveBeenCalledTimes(1);
     respond(Response.json({ v: 3, t: NEWER, bridges: [] })); await first;
     doc.hidden = true; await vi.advanceTimersByTimeAsync(60_000);
