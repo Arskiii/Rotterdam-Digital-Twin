@@ -41,6 +41,7 @@ describe("live delivery and expiry", () => {
     vi.stubGlobal("fetch", fetcher);
     const feed = new LiveFeed("/data/");
     const first = feed.refresh(); expect(feed.refresh()).toBe(first);
+    expect(fetcher.mock.calls[0]).toEqual([expect.any(String), expect.objectContaining({ credentials: "same-origin" })]);
     win.dispatchEvent(new Event("online")); expect(fetcher).toHaveBeenCalledTimes(1);
     respond(Response.json({ v: 3, t: NEWER, bridges: [] })); await first;
     doc.hidden = true; await vi.advanceTimersByTimeAsync(60_000);

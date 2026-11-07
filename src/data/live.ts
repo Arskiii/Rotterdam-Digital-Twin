@@ -295,7 +295,9 @@ export class LiveFeed {
         if (this.disposed) return;
         let snap: LiveSnapshot;
         try {
-          const res = await fetch(url, { cache: source === "service" ? "default" : "no-cache", credentials: "omit", signal: AbortSignal.timeout(8_000) });
+          // Same-origin previews may require the existing deployment-access
+          // cookie. Cross-origin public providers still receive no credentials.
+          const res = await fetch(url, { cache: source === "service" ? "default" : "no-cache", credentials: "same-origin", signal: AbortSignal.timeout(8_000) });
           if (!res.ok) continue;
           snap = (await readSnapshotJson(res)) as LiveSnapshot;
         } catch {

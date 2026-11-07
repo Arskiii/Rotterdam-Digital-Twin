@@ -353,7 +353,7 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
   $("#whatif-run").addEventListener("click", () => void whatIf());
   $("#trial-export").addEventListener("click", exportTrial);
   renderSources(); renderConditions();
-  void Promise.allSettled([load<Meta>("meta.json"), load<Exposure>("exposure.json"), loadPublishedData<Cbs>("cbs-neighborhoods.json", (value) => value?.source !== undefined && Array.isArray(value.neighborhoods) && value.neighborhoods.length > 0), load<Ndw>("ndw.json"), load<ValidationReport>("model-validation.json")]).then((results) => {
+  void Promise.allSettled([load<Meta>("meta.json"), load<Exposure>("exposure.json"), loadPublishedData<Cbs>("cbs-neighborhoods.json", (value) => typeof value?.source === "string" && Array.isArray(value.neighborhoods) && value.neighborhoods.length > 0), load<Ndw>("ndw.json"), load<ValidationReport>("model-validation.json")]).then((results) => {
     if (results[0].status === "fulfilled") meta = results[0].value;
     if (results[1].status === "fulfilled") exposure = results[1].value;
     if (results[2].status === "fulfilled") cbs = results[2].value;
