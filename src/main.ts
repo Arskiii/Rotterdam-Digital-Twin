@@ -19,7 +19,6 @@ import { LocalActivity } from "./sim/local-activity";
 import { siteUrl } from "./ui/siteUrl";
 import { performanceStage, performanceFrame } from "./ui/performance";
 import type { StudySelection } from "./study/context";
-import { mountStudyMap } from "./study/map";
 
 // Data binaries live in-repo (public/data). Deployments that ship only source
 // (e.g. Vercel file deploys) fall back to the pinned GitHub mirror via jsDelivr.
@@ -201,7 +200,7 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
     let liveWater: LiveSnapshot["water"] | null = null;
     let liveValidity = "";
     const validity = (snap: LiveSnapshot) => [snap.traffic?.t, snap.vehicles?.t, snap.departures?.t,
-      snap.bridges?.length, snap.incidents?.length].join("|");
+      snap.bridges?.length, snap.incidents?.length, snap.weather?.t, snap.water?.t, snap.air?.t].join("|");
     const applyLive = (raw: LiveSnapshot) => {
       const snap = currentLiveSnapshot(raw);
       liveValidity = validity(snap);
@@ -240,14 +239,14 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
       const at = Date.parse(snap.vehicles?.t ?? "");
       fixesLayer.set(snap.vehicles?.v ?? [], snap.vehicles?.plan, Number.isFinite(at) ? at : undefined);
       stopsLayer.set(snap.departures?.stops ?? {}, snap.departures?.dep ?? {});
-      if (!snap.traffic) ndwLayer.setLive(data.ndw?.stations.map(() => null) ?? []);
-      if (snap.air) airLayer.set(snap.air.s);
-      if (snap.weather) {
+      if (!snap.traffic?.s.length) ndwLayer.setLive(data.ndw?.stations.map(() => null) ?? []);
+      airLayer.set(snap.air?.s ?? []);
+      {
         // wet roads slow motorized traffic
-        const rain = snap.weather.rain ?? 0;
+        const rain = snap.weather?.rain ?? 0;
         sim.postMessage({ type: "params", speedFactor: rain > 2 ? 0.85 : rain > 0.2 ? 0.93 : 1 });
       }
-      if (snap.water) liveWater = snap.water;
+      liveWater = snap.water ?? null;
       app.setLive(snap);
     };
     cleanups.push(live.subscribe(applyLive));
@@ -305,7 +304,7 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
       meshes.roadLines.visible = meshes.roads.visible;
       roofs?.update(view.controls.target, now);
       liveIncidentsLayer.update(now / 1000);
-      // real Maas level (Boompjes gauge): the flat world puts quay lips near y 0,
+      // real Maas level: the flat world puts quay lips near y 0,
       // so NAP maps 1:1 onto mesh height, eased, clamped just below flood
       if (liveWater) {
         const target = THREE.MathUtils.clamp(-0.45 + liveWater.cm / 100, -1.6, -0.08);
@@ -336,7 +335,14 @@ export async function mountMap(ui: ReturnType<typeof buildChrome>, live: LiveFee
       }
     }
     requestAnimationFrame(loop);
-    void mountStudyMap(ui, view, data.meta.origin, selection, lifetime.signal);
+    const loadStudyPicker = () => void import("./study/map").then(({ mountStudyMap }) => {
+      if (!lifetime.signal.aborted) return mountStudyMap(ui, view, data.meta.origin, selection, lifetime.signal);
+    }).catch(() => {
+      if (lifetime.signal.aborted) return;
+      const retry = document.createElement("button"); retry.textContent = "Retry study corridors";
+      retry.onclick = () => { retry.remove(); loadStudyPicker(); }; ui.hud.append(retry);
+    });
+    loadStudyPicker();
 
     (window as unknown as { __meshes: unknown }).__meshes = meshes;
     (window as unknown as { __layers: unknown }).__layers = { signals, vehicles, congestion };

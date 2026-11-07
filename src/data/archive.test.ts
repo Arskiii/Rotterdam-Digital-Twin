@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseCoarse, type DistrictSample } from "./archive";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { ArchiveReader, parseCoarse, type DistrictSample } from "./archive";
 
 // A second implementation of the wire format, written from
 // scripts/archive-live.mjs rather than from the parser. The point of writing it
@@ -47,6 +47,51 @@ function writeCoarse(hourEpoch: number, records: { slot: number; city: City; dis
 
 const city: City = { temp: 17.4, rain: 0.6, waterCm: -23, incidents: 3, bridges: 1, transit: 214, no2: 28, pm25: 9 };
 const HOUR = Date.UTC(2026, 7, 21, 9, 0, 0) / 1000;
+
+afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe("ArchiveReader freshness", () => {
+  const start = new Date("2026-11-07T16:00:00Z"), end = new Date("2026-11-07T16:59:59Z");
+  const binary = (slots: number[]) => writeCoarse(start.getTime() / 1000, slots.map((slot) => ({ slot, city, districts: [] })));
+  it("rechecks missing hours and then sees newly appended samples", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(start);
+    let slots: number[] = [];
+    const fetcher = vi.fn(async () => slots.length ? new Response(binary(slots)) : new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetcher);
+    const reader = new ArchiveReader();
+    expect(await reader.range(start, end)).toEqual([]);
+    const calls = fetcher.mock.calls.length;
+    slots = [0]; expect(await reader.range(start, end)).toEqual([]); expect(fetcher).toHaveBeenCalledTimes(calls);
+    vi.setSystemTime(start.getTime() + 300001);
+    expect(await reader.range(start, end)).toHaveLength(1);
+    slots = [0, 5]; vi.setSystemTime(start.getTime() + 600002);
+    expect(await reader.range(start, end)).toHaveLength(2);
+  });
+  it("does not cache server failures and preserves observations through malformed refreshes", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(start);
+    let mode = "error";
+    vi.stubGlobal("fetch", vi.fn(async () => mode === "error" ? new Response(null, { status: 503 }) : new Response(mode === "valid" ? binary([0]) : new ArrayBuffer(0))));
+    const reader = new ArchiveReader();
+    expect(await reader.range(start, end)).toEqual([]);
+    mode = "valid"; vi.setSystemTime(start.getTime() + 300001);
+    const records = await reader.range(start, end); expect(records).toHaveLength(1);
+    mode = "bad"; vi.setSystemTime(start.getTime() + 600002);
+    expect(await reader.range(start, end)).toEqual(records);
+  });
+  it("refreshes this month's incidents and retains them during an outage", async () => {
+    vi.useFakeTimers(); vi.setSystemTime(start);
+    const event = { t: start.toISOString(), type: "incident", name: "Road", x: 1, y: 2, until: null };
+    let events = [event], fail = false;
+    vi.stubGlobal("fetch", vi.fn(async () => fail ? new Response(null, { status: 503 }) : Response.json(events)));
+    const reader = new ArchiveReader();
+    expect(await reader.events(2026, 11)).toHaveLength(1);
+    events = [event, { ...event, name: "New road" }];
+    vi.setSystemTime(start.getTime() + 300001);
+    expect(await reader.events(2026, 11)).toHaveLength(2);
+    fail = true; vi.setSystemTime(start.getTime() + 600002);
+    expect(await reader.events(2026, 11)).toHaveLength(2);
+  });
+});
 
 describe("parseCoarse", () => {
   it("round-trips a record the writer would produce", () => {

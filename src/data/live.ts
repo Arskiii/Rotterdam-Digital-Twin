@@ -5,6 +5,8 @@
 // bundled snapshot remain fallbacks when the endpoint is unavailable.
 
 /** [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec] */
+import { observationFresh } from "./freshness";
+
 export type LiveVehicle = [number, number, number, string, string, number, number, string, number];
 
 /** [line, kind, destination, secondsUntil, delaySec, isLive, tripId] */
@@ -13,11 +15,15 @@ export type Departure = [string, number, string, number, number, number, string]
 export interface LiveSnapshot {
   v: number;
   t: string;
+  /** Publisher timestamp for bridge and incident records, separate from retrieval. */
+  situationsAt?: string;
   traffic?: { t: string; todMin: number; s: [number, number, number][] }; // [stationIdx, veh/h, km/h]
   bridges?: { name: string; x: number; y: number; edges: number[]; until: string }[];
   incidents?: { x: number; y: number; kind: number; edge: number; name: string; until: string }[];
   vehicles?: {
     t: string;
+    /** Oldest included position fix; t remains the interpolation time origin. */
+    observedAt?: string;
     v: LiveVehicle[];
     /**
      * tripId → the trip's remaining calls as [x, y, secondsAfter `t`], already
@@ -95,10 +101,11 @@ export function liveTimeFresh(t: string | undefined, now = Date.now()): boolean 
 /** Missing/expired observations clear their layer instead of retaining an old fix. */
 export function currentLiveSnapshot(snap: LiveSnapshot, now = Date.now()): LiveSnapshot {
   const current = { ...snap };
-  for (const key of ["traffic", "vehicles", "departures"] as const) {
-    if (!liveTimeFresh(snap[key]?.t, now)) delete current[key];
+  for (const key of ["traffic", "vehicles", "departures", "water", "weather", "air"] as const) {
+    const time = key === "vehicles" ? snap.vehicles?.observedAt ?? snap.vehicles?.t : snap[key]?.t;
+    if (!observationFresh(key, time, now)) delete current[key];
   }
-  if (!liveTimeFresh(snap.t, now)) {
+  if (!observationFresh("situations", snap.situationsAt ?? snap.t, now)) {
     delete current.bridges;
     delete current.incidents;
   } else {
@@ -154,6 +161,8 @@ export function admitSnapshot(raw: unknown, current: LiveSnapshot | null, now = 
   const snapshotTime = Date.parse(snap.t);
   if (!Number.isFinite(snapshotTime) || snapshotTime > now + 60_000 ||
       !["traffic", "bridges", "incidents", "vehicles", "departures", "water", "weather", "air"].some((key) => Object.hasOwn(snap, key))) return "invalid";
+  if (snap.situationsAt !== undefined && !validTime(snap.situationsAt) ||
+      snap.vehicles?.observedAt !== undefined && !validTime(snap.vehicles.observedAt)) return "invalid";
   // The mirror and optional observation receiver are external JSON. Reject
   // malformed sections before the renderer can assume array/object methods.
   if (snap.traffic !== undefined && (!record(snap.traffic) || !validTime(snap.traffic.t) ||
@@ -298,7 +307,19 @@ export class LiveFeed {
         const verdict = admitSnapshot(snap, this.snapshot);
         if (verdict === "invalid") continue;
         if (verdict === "stale") continue; // try other paths, but never undo a fresher publish
-        if (snap.t !== this.lastT) {
+        // A fresher envelope can contain an older provider response from a
+        // different warm instance. Preserve each section's actual chronology.
+        for (const key of ["traffic", "vehicles", "departures", "water", "weather", "air"] as const) {
+          const old = this.snapshot?.[key], next = snap[key];
+          const oldTime = key === "vehicles" ? this.snapshot?.vehicles?.observedAt ?? old?.t : old?.t;
+          const nextTime = key === "vehicles" ? snap.vehicles?.observedAt ?? next?.t : next?.t;
+          if (old && next && Date.parse(nextTime!) < Date.parse(oldTime!)) Object.assign(snap, { [key]: old });
+        }
+        if (this.snapshot && Date.parse(snap.situationsAt ?? snap.t) < Date.parse(this.snapshot.situationsAt ?? this.snapshot.t)) {
+          snap.bridges = this.snapshot.bridges; snap.incidents = this.snapshot.incidents;
+          snap.situationsAt = this.snapshot.situationsAt ?? this.snapshot.t;
+        }
+        if (snap.t !== this.lastT || JSON.stringify(snap) !== JSON.stringify(this.snapshot)) {
           this.lastT = snap.t;
           this.source = source;
           this.snapshot = snap;

@@ -105,10 +105,13 @@ function hourPath(tier: "c" | "f", at: Date): string {
 export class ArchiveReader {
   /** hour key → records, or null when that hour was never archived */
   private hours = new Map<string, ArchiveRecord[] | null>();
+  private hourLoadedAt = new Map<string, number>();
   private inflight = new Map<string, Promise<ArchiveRecord[] | null>>();
   private basePromise: Promise<string | null> | null = null;
+  private baseLoadedAt = 0;
   /** month key → its events, so a re-render costs nothing */
   private eventsByMonth = new Map<string, ArchiveEvent[]>();
+  private eventsLoadedAt = new Map<string, number>();
 
   /**
    * Pick the archive source once, not per hour.
@@ -120,14 +123,15 @@ export class ArchiveReader {
    * not archived, which is the normal case.
    */
   private resolveBase(probe: string): Promise<string | null> {
-    if (this.basePromise) return this.basePromise;
+    if (this.basePromise && Date.now() - this.baseLoadedAt < 300_000) return this.basePromise;
+    this.baseLoadedAt = Date.now();
     this.basePromise = (async () => {
       for (const base of ARCHIVE_SOURCES) {
         try {
           // short: a healthy CDN answers well inside this, and the point is
           // to fall through quickly when it cannot be reached at all
-          await fetch(`${base}/${probe}`, { cache: "default", signal: AbortSignal.timeout(3500) });
-          return base; // answered at all — this host is serving the archive
+          const response = await fetch(`${base}/${probe}`, { cache: "no-cache", signal: AbortSignal.timeout(3500) });
+          if (response.ok || response.status === 404) return base;
         } catch {
           /* unreachable — try the next source */
         }
@@ -139,27 +143,32 @@ export class ArchiveReader {
 
   private async loadHour(hourStart: Date): Promise<ArchiveRecord[] | null> {
     const path = hourPath("c", hourStart);
-    if (this.hours.has(path)) return this.hours.get(path)!;
+    const cached = this.hours.get(path);
+    const mutable = !cached || Date.now() - hourStart.getTime() < 48 * 3_600_000;
+    if (this.hours.has(path) && (!mutable || Date.now() - (this.hourLoadedAt.get(path) ?? 0) < 300_000)) return cached!;
     const pending = this.inflight.get(path);
     if (pending) return pending;
     const p = (async () => {
       try {
         const base = await this.resolveBase(path);
-        if (!base) return null; // no reachable archive at all
+        if (!base) return cached ?? null; // no reachable archive at all
         let buf: ArrayBuffer;
         try {
-          const res = await fetch(`${base}/${path}`, { cache: "default", signal: AbortSignal.timeout(8000) });
+          const res = await fetch(`${base}/${path}`, { cache: mutable ? "no-cache" : "default", signal: AbortSignal.timeout(8000) });
           if (!res.ok) {
-            // a missing hour is normal — the pipeline was not running then
-            this.hours.set(path, null);
-            return null;
+            // A missing hour can still be published later; server failures
+            // never poison that hour's cache for the rest of the session.
+            if (res.status === 404 && !cached) { this.hours.set(path, null); this.hourLoadedAt.set(path, Date.now()); }
+            return cached ?? null;
           }
           buf = await res.arrayBuffer();
         } catch {
-          return null; // transient: do not cache, a later scrub can retry
+          return cached ?? null;
         }
         const recs = parseCoarse(buf);
+        if (!recs.length) return cached ?? null;
         this.hours.set(path, recs.length ? recs : null);
+        this.hourLoadedAt.set(path, Date.now());
         return recs.length ? recs : null;
       } finally {
         this.inflight.delete(path);
@@ -205,7 +214,9 @@ export class ArchiveReader {
   async events(year: number, month: number): Promise<ArchiveEvent[]> {
     const key = `${year}-${pad(month)}`;
     const cached = this.eventsByMonth.get(key);
-    if (cached) return cached;
+    const now = new Date();
+    const mutable = year === now.getUTCFullYear() && month === now.getUTCMonth() + 1;
+    if (cached && (!mutable || Date.now() - (this.eventsLoadedAt.get(key) ?? 0) < 300_000)) return cached;
     const path = `e/${key}.json`;
     // Through resolveBase, not its own walk of the source list: the hours have
     // already settled which host is serving this archive, and re-deciding here
@@ -213,16 +224,17 @@ export class ArchiveReader {
     // Measured against an unreachable branch, one month of events took 22
     // seconds to arrive that way and sometimes timed out entirely.
     const base = await this.resolveBase(path);
-    if (!base) return [];
+    if (!base) return cached ?? [];
     try {
-      const res = await fetch(`${base}/${path}`, { cache: "default", signal: AbortSignal.timeout(8000) });
-      if (!res.ok) return [];
+      const res = await fetch(`${base}/${path}`, { cache: mutable ? "no-cache" : "default", signal: AbortSignal.timeout(8000) });
+      if (!res.ok) return cached ?? [];
       const raw = (await res.json()) as ArchiveEvent[];
-      if (!Array.isArray(raw)) return [];
+      if (!Array.isArray(raw)) return cached ?? [];
       this.eventsByMonth.set(key, raw);
+      this.eventsLoadedAt.set(key, Date.now());
       return raw;
     } catch {
-      return [];
+      return cached ?? [];
     }
   }
 }

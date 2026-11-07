@@ -1,7 +1,8 @@
 import { mountIntelligenceChrome } from "./chrome";
 import { fetchCityBuffer, fetchCityJson } from "../data/city-assets";
 
-import { type LiveFeed, type LiveSnapshot } from "../data/live";
+import { currentLiveSnapshot, type LiveFeed, type LiveSnapshot } from "../data/live";
+import { loadPublishedData } from "../data/public-snapshot";
 import type { ExperimentResultMsg, InitMsg } from "../sim/protocol";
 import { qualityRows, heldoutStations, validateHoldout } from "./model";
 import { calculateHospitalAccess, HOSPITALS, type AccessRow } from "./routing";
@@ -80,7 +81,7 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
     const conditions = [
       ["Reported open bridges", recent("bridges") ? `${latest?.bridges?.length ?? 0}${recent("bridges")}` : "No recent report"],
       ["Observed rain", recent("weather") && latest?.weather ? `${format(latest.weather.rain)} mm/h${recent("weather")}` : "No recent reading"],
-      ["Boompjes river gauge", recent("water") && latest?.water ? `${format(latest.water.cm)} cm${recent("water")}` : "No recent reading"],
+      [`${latest?.water?.station ?? "Maas"} river gauge`, recent("water") && latest?.water ? `${format(latest.water.cm)} cm${recent("water")}` : "No recent reading"],
       ["Transit vehicle fixes", recent("transit") && latest?.vehicles ? `${latest.vehicles.v.length}${recent("transit")}` : "No recent fixes"],
     ];
     box.replaceChildren(...conditions.map(([label, value]) => {
@@ -93,7 +94,8 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
     const select = $("#bridge-select") as HTMLSelectElement;
     const previous = select.value;
     select.replaceChildren(new Option("Erasmusbrug — hypothetical", "erasmus"));
-    for (const [index, bridge] of (feed.fresh ? latest?.bridges ?? [] : []).entries()) select.add(new Option(`${bridge.name} — currently reported open`, `live:${index}`));
+    const current = latest ? currentLiveSnapshot(latest).bridges ?? [] : [];
+    for (const [index, bridge] of (latest?.bridges ?? []).entries()) if (current.includes(bridge)) select.add(new Option(`${bridge.name} — currently reported open`, `live:${index}`));
     if ([...select.options].some((option) => option.value === previous)) select.value = previous;
   }
 
@@ -351,7 +353,7 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
   $("#whatif-run").addEventListener("click", () => void whatIf());
   $("#trial-export").addEventListener("click", exportTrial);
   renderSources(); renderConditions();
-  void Promise.allSettled([load<Meta>("meta.json"), load<Exposure>("exposure.json"), load<Cbs>("cbs-neighborhoods.json"), load<Ndw>("ndw.json"), load<ValidationReport>("model-validation.json")]).then((results) => {
+  void Promise.allSettled([load<Meta>("meta.json"), load<Exposure>("exposure.json"), loadPublishedData<Cbs>("cbs-neighborhoods.json", (value) => value?.source !== undefined && Array.isArray(value.neighborhoods) && value.neighborhoods.length > 0), load<Ndw>("ndw.json"), load<ValidationReport>("model-validation.json")]).then((results) => {
     if (results[0].status === "fulfilled") meta = results[0].value;
     if (results[1].status === "fulfilled") exposure = results[1].value;
     if (results[2].status === "fulfilled") cbs = results[2].value;

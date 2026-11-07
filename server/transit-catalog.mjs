@@ -1,12 +1,16 @@
 import { gunzipSync } from "node:zlib";
-import { parseTimetable } from "../scripts/fetch-live.mjs";
+import { parseTimetable, serviceDateNum } from "../scripts/fetch-live.mjs";
 
 const URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/transit-data/transit.json.gz";
 
 export function createTransitCatalog({ fetcher = fetch, now = Date.now } = {}) {
-  let cached = null, loadedAt = 0, inflight = null;
+  let cached = null, loadedAt = 0, inflight = null, retryAt = 0;
+  const usable = (value) => {
+    const day = serviceDateNum(new Date(now()));
+    return value?.timetable.trips.some((trip) => value.timetable.dateSets[trip.dates]?.has(day));
+  };
   return async (signal) => {
-    if (cached && now() - loadedAt < 15 * 60_000) return cached;
+    if (usable(cached) && (now() - loadedAt < 15 * 60_000 || now() < retryAt)) return cached;
     if (inflight) return inflight;
     inflight = (async () => {
       try {
@@ -19,9 +23,16 @@ export function createTransitCatalog({ fetcher = fetch, now = Date.now } = {}) {
         const timetable = parseTimetable(Buffer.from(data.timetable, "base64"));
         if (!timetable.trips.length) throw new Error("Empty transit timetable");
         const value = { routes: data.routes, stops: data.stops, timetable };
+        if (!usable(value)) throw new Error("Transit timetable does not cover today");
         cached = value;
         loadedAt = now();
         return value;
+      } catch (error) {
+        retryAt = now() + 60_000;
+        // Keep usable identities through a brief mirror outage, but never carry
+        // an expired service calendar into a new day.
+        if (usable(cached)) return cached;
+        throw error;
       } finally { inflight = null; }
     })();
     return inflight;

@@ -29,7 +29,7 @@ SIT = "http://datex2.eu/schema/3/situation"
 NS = {"r": ROA, "c": COM, "l": LOC, "s": SIT}
 NDW_BASE = "https://opendata.ndw.nu/"
 TREE_URL = "https://diensten.rotterdam.nl/arcgis/rest/services/SB_Infra/Bomen/MapServer/0/query"
-WATER_URL = "https://geo.rijkswaterstaat.nl/services/ogc/hws/DDAPI20/ows"
+WATER_URL = "https://ddapi20-waterwebservices.rijkswaterstaat.nl/ONLINEWAARNEMINGENSERVICES/OphalenWaarnemingen"
 AIR_URL = "https://api.luchtmeetnet.nl/open_api/stations/NL10418"
 CBS_URL = "https://datasets.cbs.nl/odata/v1/CBS/86333NED/Observations"
 THREEDBAG_URL = "https://data.3dbag.nl/api/BAG3D/wfs"
@@ -60,8 +60,11 @@ def within(lat, lon, padding=0):
             BOUNDS[1] - padding <= lon <= BOUNDS[3] + padding)
 
 
-def get_bytes(url, max_bytes=60_000_000):
-    request = Request(url, headers={"User-Agent": "Rotterdam-Digital-Twin/0.3 public-data-snapshot"})
+def get_bytes(url, max_bytes=60_000_000, payload=None):
+    headers = {"User-Agent": "Rotterdam-Digital-Twin/0.3 public-data-snapshot"}
+    if payload is not None:
+        headers.update({"Content-Type": "application/json", "X-API-KEY": "rotterdam-digital-twin"})
+    request = Request(url, data=json.dumps(payload).encode() if payload is not None else None, headers=headers)
     for attempt in range(3):
         try:
             with urlopen(request, timeout=25) as response:
@@ -75,8 +78,8 @@ def get_bytes(url, max_bytes=60_000_000):
             time.sleep(attempt + 1)
 
 
-def source_bytes(url, local_path=None):
-    return Path(local_path).read_bytes() if local_path else get_bytes(url)
+def source_bytes(url, local_path=None, payload=None):
+    return Path(local_path).read_bytes() if local_path else get_bytes(url, payload=payload)
 
 
 def xml_stream(compressed):
@@ -239,6 +242,34 @@ def read_water(document, now):
     return sorted(latest.values(), key=lambda item: item["name"])
 
 
+def read_water_series(document, now):
+    """DDAPI can return forecasts by default. Only measured cm NAP is admissible."""
+    readings = []
+    for series in document.get("WaarnemingenLijst", []):
+        meta = series.get("AquoMetadata", {})
+        if (meta.get("ProcesType") != "meting" or meta.get("Eenheid", {}).get("Code") != "cm"
+                or meta.get("Hoedanigheid", {}).get("Code") != "NAP"):
+            continue
+        location = series.get("Locatie", {})
+        if not all(isinstance(location.get(key), (int, float)) for key in ("Lat", "Lon")):
+            continue
+        valid = []
+        for row in series.get("MetingenLijst", []):
+            observed = timestamp(row.get("Tijdstip"))
+            value = row.get("Meetwaarde", {}).get("Waarde_Numeriek")
+            if (observed and -60 <= (now - observed).total_seconds() <= 5400
+                    and isinstance(value, (int, float)) and math.isfinite(value) and abs(value) < 600):
+                valid.append((observed, value))
+        if valid:
+            observed, value = max(valid, key=lambda row: row[0])
+            readings.append({"id": location["Code"], "name": location.get("Naam", location["Code"]),
+                             "lat": location["Lat"], "lon": location["Lon"], "cmNAP": value,
+                             "observedAt": iso(observed)})
+    if not readings:
+        raise ValueError("No recent measured river levels")
+    return readings
+
+
 def read_air(station, measurements, now):
     data = station["data"]
     point = data["geometry"]["coordinates"]
@@ -247,9 +278,11 @@ def read_air(station, measurements, now):
         for row in document.get("data", []):
             observed = timestamp(row.get("timestamp_measured"))
             value = row.get("value")
-            if observed and isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 1000 and -600 <= (now - observed).total_seconds() <= 10_800:
+            if observed and isinstance(value, (int, float)) and math.isfinite(value) and 0 <= value <= 1000 and -60 <= (now - observed).total_seconds() <= 14_400:
                 values[formula] = {"value": round(value, 1), "observedAt": iso(observed)}
                 break
+    if not values:
+        raise ValueError("No recent air measurements")
     return {"station": "NL10418", "name": data["location"], "lat": point[1], "lon": point[0], "values": values}
 
 
@@ -400,14 +433,13 @@ def main():
         return {"source": TREE_URL, "retrievedAt": iso(now), "trees": read_trees(document)}
 
     def water():
-        water_height_filter = ('<Filter><PropertyIsLike escape="!" singleChar="." wildCard="*">'
-                               '<PropertyName>PARAMETER_WAT_OMSCHRIJVING</PropertyName>'
-                               '<Literal>*Waterhoogte*</Literal></PropertyIsLike></Filter>')
-        params = {"SERVICE": "WFS", "VERSION": "1.1.0", "REQUEST": "GetFeature",
-                  "TYPENAME": "locatiesmetlaatstewaarneming", "outputFormat": "application/json",
-                  "FILTER": water_height_filter}
-        document = json.loads(source_bytes(WATER_URL + "?" + urlencode(params), args.water_file))
-        return {"source": WATER_URL, "retrievedAt": iso(now), "readings": read_water(document, now)}
+        payload = {"AquoPlusWaarnemingMetadata": {"AquoMetadata": {
+            "Compartiment": {"Code": "OW"}, "Grootheid": {"Code": "WATHTE"}, "ProcesType": "meting",
+            "Eenheid": {"Code": "cm"}, "Hoedanigheid": {"Code": "NAP"}}},
+            "Locatie": {"Code": "rotterdam.nieuwemaas.boerengat"},
+            "Periode": {"Begindatumtijd": iso(now - timedelta(minutes=90)), "Einddatumtijd": iso(now)}}
+        document = json.loads(source_bytes(WATER_URL, args.water_file, payload))
+        return {"source": WATER_URL, "retrievedAt": iso(now), "readings": read_water_series(document, now)}
 
     def air():
         station = json.loads(source_bytes(AIR_URL, args.air_station_file))

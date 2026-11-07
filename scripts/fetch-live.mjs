@@ -42,6 +42,12 @@ const getJson = async (url, signal) => {
 };
 const rx = (s, re) => s.match(re)?.[1] ?? null;
 
+function sourceTime(value, now = Date.now()) {
+  const time = Date.parse(value ?? "");
+  if (!Number.isFinite(time) || time > now + 60_000) throw new Error("Missing or invalid source timestamp");
+  return new Date(time).toISOString();
+}
+
 /** Iterate <tag …>…</tag> blocks in an XML string. */
 function* blocks(xml, tag) {
   const close = `</${tag}>`;
@@ -67,35 +73,45 @@ function todMinNL(date) {
 // ---------------- 1. live traffic flows (NDW trafficspeed) ----------------
 async function fetchTraffic(signal) {
   const ndw = JSON.parse(readFileSync(join(ROOT, "public", "data", "ndw.json"), "utf8"));
+  const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/trafficspeed.xml.gz", signal)).toString("utf8");
+  return parseTraffic(xml, ndw.stations);
+}
+
+export function parseTraffic(xml, stations, now = Date.now()) {
   const siteToStation = new Map();
-  ndw.stations.forEach((st, i) => {
+  stations.forEach((st, i) => {
     for (const id of st.ids ?? []) siteToStation.set(id, i);
   });
   if (!siteToStation.size) throw new Error("ndw.json has no station ids — rerun: npm run fetch-ndw");
 
-  const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/trafficspeed.xml.gz", signal)).toString("utf8");
-  const pubTime = rx(xml, /<publicationTime>([^<]+)</);
-  const flow = new Float64Array(ndw.stations.length);
-  const speedSum = new Float64Array(ndw.stations.length);
-  const speedN = new Float64Array(ndw.stations.length);
+  const pubTime = sourceTime(rx(xml, /<publicationTime>([^<]+)</), now);
+  const flow = new Float64Array(stations.length);
+  const measured = new Uint8Array(stations.length);
+  const speedSum = new Float64Array(stations.length);
+  const speedN = new Float64Array(stations.length);
+  let oldest = Infinity;
   for (const rec of blocks(xml, "siteMeasurements")) {
     const id = rx(rec, /measurementSiteReference id="([^"]+)"/);
     const si = id ? siteToStation.get(id) : undefined;
     if (si === undefined) continue;
+    const measuredAt = Date.parse(rx(rec, /<measurementTimeDefault>([^<]+)</) ?? "");
+    if (!Number.isFinite(measuredAt) || measuredAt > now + 60_000 || now - measuredAt > 5 * 60_000) continue;
+    let valid = false;
     for (const m of rec.matchAll(/<vehicleFlowRate>([\d.\-]+)<\/vehicleFlowRate>/g)) {
       const v = parseFloat(m[1]);
-      if (v >= 0) flow[si] += v;
+      if (v >= 0) { flow[si] += v; measured[si] = 1; valid = true; }
     }
     for (const m of rec.matchAll(/<speed>([\d.\-]+)<\/speed>/g)) {
       const v = parseFloat(m[1]);
-      if (v > 0 && v < 200) { speedSum[si] += v; speedN[si]++; }
+      if (v > 0 && v < 200) { speedSum[si] += v; speedN[si]++; valid = true; }
     }
+    if (valid) oldest = Math.min(oldest, measuredAt);
   }
   const s = [];
-  for (let i = 0; i < ndw.stations.length; i++) {
-    if (flow[i] > 0) s.push([i, Math.round(flow[i]), speedN[i] ? +(speedSum[i] / speedN[i]).toFixed(1) : 0]);
+  for (let i = 0; i < stations.length; i++) {
+    if (measured[i]) s.push([i, Math.round(flow[i]), speedN[i] ? +(speedSum[i] / speedN[i]).toFixed(1) : 0]);
   }
-  const t = pubTime ?? new Date().toISOString();
+  const t = Number.isFinite(oldest) ? new Date(oldest).toISOString() : pubTime;
   return { t, todMin: todMinNL(new Date(t)), s };
 }
 
@@ -183,6 +199,7 @@ function recordKind(rec) {
 async function fetchSituations(signal) {
   const xml = gunzipSync(await getBuf("https://opendata.ndw.nu/actueel_beeld.xml.gz", signal)).toString("utf8");
   const now = Date.now();
+  const situationsAt = sourceTime(rx(xml, /<(?:\w+:)?publicationTime>([^<]+)</), now);
   const openBridges = [];
   const rawIncidents = [];
   for (const rec of blocks(xml, "sit:situationRecord")) {
@@ -200,7 +217,7 @@ async function fetchSituations(signal) {
     if (isBridge) openBridges.push({ lat, lon, until: new Date(end).toISOString() });
     else rawIncidents.push({ lat, lon, kind, until: new Date(end).toISOString() });
   }
-  if (!openBridges.length && !rawIncidents.length) return { bridges: [], incidents: [] };
+  if (!openBridges.length && !rawIncidents.length) return { situationsAt, bridges: [], incidents: [] };
 
   const g = loadGraphForBridges();
   const bridges = [];
@@ -233,7 +250,7 @@ async function fetchSituations(signal) {
       until: inc.until,
     });
   }
-  return { bridges, incidents };
+  return { situationsAt, bridges, incidents };
 }
 
 // ---------------- 3. transit vehicle positions (OVapi GTFS-RT) ----------------
@@ -292,8 +309,27 @@ function stopTimeEvent(buf, off, len) {
  */
 async function fetchVehicles(routes, signal) {
   const buf = await getBuf("https://gtfs.ovapi.nl/nl/vehiclePositions.pb", signal);
-  const nowSec = Date.now() / 1000;
+  return parseVehiclePositions(buf, routes);
+}
+
+/** GTFS-RT publication time must be present and recent, even for an empty feed. */
+export function realtimeTime(buf, now = Date.now()) {
+  let seconds = 0;
+  for (const field of pbFields(buf)) {
+    if (field.field !== 1 || field.wt !== 2) continue;
+    for (const header of pbFields(buf, field.off, field.off + field.len)) {
+      if (header.field === 3 && header.wt === 0) seconds = Number(header.varint);
+    }
+  }
+  if (!seconds || now - seconds * 1000 > 5 * 60_000) throw new Error("GTFS-RT publication is missing or stale");
+  return sourceTime(new Date(seconds * 1000).toISOString(), now);
+}
+
+export function parseVehiclePositions(buf, routes, now = Date.now()) {
+  const publication = realtimeTime(buf, now);
+  const nowSec = now / 1000;
   const v = [];
+  let oldest = Infinity;
   for (const ent of pbFields(buf)) {
     if (ent.field !== 2 || ent.wt !== 2) continue;
     for (const e of pbFields(buf, ent.off, ent.off + ent.len)) {
@@ -320,10 +356,11 @@ async function fetchVehicles(routes, signal) {
         if (f.field === 8 && f.wt === 2) vid = vehicleId(buf, f.off, f.len);
       }
       if (lat === null || !inBbox(lat, lon)) continue;
-      if (ts && nowSec - ts > 240) continue; // stale fix
+      if (!ts || nowSec - ts > 240 || ts > nowSec + 60) continue;
       const r = routes[routeId];
       const kind = r ? KIND[r[2]] : undefined;
       if (kind === undefined) continue;
+      oldest = Math.min(oldest, ts * 1000);
       // [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec]
       v.push([
         px(lon), py(lat), kind, r[1] ?? "", tripId, seq,
@@ -332,7 +369,7 @@ async function fetchVehicles(routes, signal) {
       ]);
     }
   }
-  return { t: new Date().toISOString(), v };
+  return { t: new Date(now).toISOString(), observedAt: Number.isFinite(oldest) ? new Date(oldest).toISOString() : publication, v };
 }
 
 // ---------------- the Rotterdam timetable (data/ret-timetable.bin) ----------------
@@ -431,6 +468,11 @@ function serviceDateNum(date) {
  */
 async function fetchTripDelays(signal) {
   const buf = await getBuf("https://gtfs.ovapi.nl/nl/tripUpdates.pb", signal);
+  return parseTripDelays(buf);
+}
+
+export function parseTripDelays(buf, now = Date.now()) {
+  const publication = Date.parse(realtimeTime(buf, now));
   const delays = new Map(); // tripId → { delay, cancelled }
   for (const ent of pbFields(buf)) {
     if (ent.field !== 2 || ent.wt !== 2) continue;
@@ -439,7 +481,9 @@ async function fetchTripDelays(signal) {
       let tripId = "";
       let cancelled = false;
       let delay = null;
+      let measuredAt = publication;
       for (const f of pbFields(buf, e.off, e.off + e.len)) {
+        if (f.field === 4 && f.wt === 0) measuredAt = Number(f.varint) * 1000;
         if (f.field === 1 && f.wt === 2) {
           for (const t of pbFields(buf, f.off, f.off + f.len)) {
             if (t.field === 1 && t.wt === 2) tripId = buf.toString("utf8", t.off, t.off + t.len);
@@ -456,7 +500,9 @@ async function fetchTripDelays(signal) {
           if (d !== null && d !== undefined) delay = d; // keep the last one seen
         }
       }
-      if (tripId) delays.set(tripId, { delay: delay ?? 0, live: delay !== null, cancelled });
+      if (tripId && now - measuredAt <= 5 * 60_000 && measuredAt <= now + 60_000) {
+        delays.set(tripId, { delay: delay ?? 0, live: delay !== null, cancelled });
+      }
     }
   }
   return delays;
@@ -476,7 +522,8 @@ async function fetchTripDelays(signal) {
 async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips = null, signal, transit) {
   const tt = transit?.timetable ?? loadTimetable();
   const stopTable = transit?.stops ?? JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
-  const delays = await fetchTripDelays(signal);
+  // A realtime outage leaves explicitly scheduled services, never old delays.
+  const delays = await fetchTripDelays(signal).catch(() => new Map());
   const nowSec = atSec;
   const HORIZON = 45 * 60;
   const PER_STOP = 6;
@@ -627,7 +674,7 @@ async function fetchDepartures(atSec = Math.floor(Date.now() / 1000), onlyTrips 
   return { t: new Date().toISOString(), planT: nowSec, stops, dep, liveTrips, plans };
 }
 
-// ---------------- 4. Maas water level (Rijkswaterstaat, Boompjes gauge) ----------------
+// ---------------- 4. Maas water level (Rijkswaterstaat, Boerengat gauge) ----------------
 async function fetchWater(signal) {
   const end = new Date();
   const begin = new Date(end.getTime() - 90 * 60_000);
@@ -636,25 +683,31 @@ async function fetchWater(signal) {
     method: "POST",
     headers: { ...UA, "Content-Type": "application/json", "X-API-KEY": "rotterdam-digital-twin" },
     body: JSON.stringify({
-      AquoPlusWaarnemingMetadata: { AquoMetadata: { Compartiment: { Code: "OW" }, Grootheid: { Code: "WATHTE" } } },
-      Locatie: { Code: "rotterdam.nieuwemaas.boompjes" },
+      AquoPlusWaarnemingMetadata: { AquoMetadata: { Compartiment: { Code: "OW" }, Grootheid: { Code: "WATHTE" }, ProcesType: "meting", Eenheid: { Code: "cm" }, Hoedanigheid: { Code: "NAP" } } },
+      Locatie: { Code: "rotterdam.nieuwemaas.boerengat" },
       Periode: { Begindatumtijd: iso(begin), Einddatumtijd: iso(end) },
     }),
     signal: signal ?? AbortSignal.timeout(60_000),
   });
   if (res.status === 204) throw new Error("RWS: no data in window");
   if (!res.ok) throw new Error(`RWS: HTTP ${res.status}`);
-  const j = await res.json();
-  const m = (j.WaarnemingenLijst?.[0]?.MetingenLijst ?? [])
+  return parseWater(await res.json(), end.getTime());
+}
+
+export function parseWater(j, now = Date.now()) {
+  const m = (j.WaarnemingenLijst ?? [])
+    .filter((series) => series.AquoMetadata?.ProcesType === "meting" &&
+      series.AquoMetadata?.Eenheid?.Code === "cm" && series.AquoMetadata?.Hoedanigheid?.Code === "NAP")
+    .flatMap((series) => series.MetingenLijst ?? [])
     .map((x) => ({ t: Date.parse(x.Tijdstip), cm: x.Meetwaarde?.Waarde_Numeriek }))
-    .filter((x) => Number.isFinite(x.cm) && Math.abs(x.cm) < 600)
+    .filter((x) => Number.isFinite(x.t) && x.t <= now + 60_000 && x.t >= now - 90 * 60_000 && Number.isFinite(x.cm) && Math.abs(x.cm) < 600)
     .sort((a, b) => a.t - b.t);
   if (!m.length) throw new Error("RWS: empty series");
   const last = m[m.length - 1];
   const first = m[0];
   const hours = (last.t - first.t) / 3_600_000;
   return {
-    station: "Boompjes",
+    station: "Boerengat",
     cm: Math.round(last.cm),
     trend: hours > 0.2 ? +((last.cm - first.cm) / hours).toFixed(1) : 0, // cm/h
     t: new Date(last.t).toISOString(),
@@ -705,10 +758,11 @@ async function airStations(signal) {
   return out;
 }
 
-async function fetchAir(signal) {
+export async function fetchAir(signal) {
   const stations = await airStations(signal);
   const s = [];
   let oldestMeasuredAt = Infinity;
+  let failure = "no recent measurements";
   const now = Date.now();
   await Promise.all(stations.map(async (st) => {
     try {
@@ -717,7 +771,8 @@ async function fetchAir(signal) {
       for (const m of j.data ?? []) {
         const measuredAt = Date.parse(m.timestamp_measured);
         if (latest[m.formula] === undefined && Number.isFinite(measuredAt) &&
-            measuredAt <= now + 60_000 && now - measuredAt < 4 * 3_600_000 && Number.isFinite(+m.value)) {
+            measuredAt <= now + 60_000 && now - measuredAt < 4 * 3_600_000 &&
+            m.value !== null && m.value !== "" && Number.isFinite(+m.value)) {
           latest[m.formula] = { value: +(+m.value).toFixed(1), measuredAt };
         }
       }
@@ -725,13 +780,26 @@ async function fetchAir(signal) {
         s.push([st.x, st.y, latest.NO2?.value ?? null, latest.PM25?.value ?? null, st.name]);
         for (const item of [latest.NO2, latest.PM25]) if (item) oldestMeasuredAt = Math.min(oldestMeasuredAt, item.measuredAt);
       }
-    } catch {
-      /* station offline */
+    } catch (error) {
+      failure = error.message ?? "station offline";
     }
   }));
-  if (!s.length) throw new Error("Luchtmeetnet: no measurements");
+  if (!s.length) throw new Error(`Luchtmeetnet: ${failure}`);
   return { t: new Date(oldestMeasuredAt).toISOString(), s };
 }
+
+/** Avoid polling nine hourly air monitors on every city request. */
+export function cachedSource(load, ttl, now = Date.now) {
+  let cached, expires = 0, pending;
+  return (signal) => {
+    if (cached && now() < expires) return Promise.resolve(cached);
+    pending ??= Promise.resolve().then(() => load(signal)).then((value) => {
+      cached = value; expires = now() + ttl; return value;
+    }).finally(() => { pending = null; });
+    return pending;
+  };
+}
+const cachedAir = cachedSource(fetchAir, 5 * 60_000);
 
 // Independent feeds run together. The optional shared deadline keeps the public
 // endpoint bounded; a slow water/air provider cannot hold transit indefinitely.
@@ -745,7 +813,7 @@ export async function collectLiveSnapshot({ signal, sources, transit, log = cons
       traffic: () => fetchTraffic(signal), situations: () => fetchSituations(signal),
       vehicles: async () => fetchVehicles((await references).routes, signal),
       departures: async (running) => fetchDepartures(undefined, running, signal, await references),
-      water: () => fetchWater(signal), weather: () => fetchWeather(signal), air: () => fetchAir(signal),
+      water: () => fetchWater(signal), weather: () => fetchWeather(signal), air: () => cachedAir(signal),
     };
   }
   const out = { v: 3, t: new Date().toISOString() };

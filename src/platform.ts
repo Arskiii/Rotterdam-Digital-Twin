@@ -7,7 +7,7 @@ import { buildChrome } from "./ui/chrome";
 import { PHONE_MQ, type MapMode, type MapPage } from "./ui/header";
 import { isWorkspace, normalizePlatformRoute, platformRouteUrl, readPlatformRoute, type PlatformRoute } from "./ui/navigation";
 import { siteUrl } from "./ui/siteUrl";
-import { LiveFeed } from "./data/live";
+import { currentLiveSnapshot, LiveFeed } from "./data/live";
 import { TIMEZONE } from "./config";
 import { fmtClockAmPm } from "./ui/format";
 import type { App } from "./ui/app";
@@ -211,7 +211,7 @@ function renderHeader() {
   const age = feed.ageMin();
   const ageText = age < 1 ? "<1M" : `${Math.round(age)}M`;
   if (health === "stale") { ui.liveText.textContent = `FEED STALE — ${ageText} OLD`; return; }
-  const snap = feed.snapshot;
+  const snap = currentLiveSnapshot(feed.snapshot);
   const parts = [`LIVE ${ageText}`];
   if (snap.weather?.temp != null) parts.push(`${Math.round(snap.weather.temp)}°C`);
   if (snap.water) parts.push(`MAAS ${snap.water.cm >= 0 ? "+" : ""}${snap.water.cm}CM`);

@@ -67,12 +67,6 @@ jobs:
           github-token: ${{ github.token }}
       - run: npm ci
       - run: python3 -m unittest discover -s tests -p 'test_*.py'
-      - name: Refresh released CBS neighborhood figures
-        if: github.ref == 'refs/heads/main'
-        run: |
-          python3 -m venv "$RUNNER_TEMP/cbs-venv"
-          "$RUNNER_TEMP/cbs-venv/bin/pip" install --disable-pip-version-check openpyxl==3.1.5
-          "$RUNNER_TEMP/cbs-venv/bin/python" scripts/fetch-cbs-neighborhoods.py || echo "::warning::CBS download unavailable; using the dated, attributed neighborhood snapshot in the repository."
       - run: npm run build
         env:
           VITE_LIVE_SIGNALS_URL: ${{ vars.LIVE_SIGNALS_URL }}
@@ -128,6 +122,17 @@ jobs:
           path: public/data
           run-id: ${{ steps.history.outputs.run-id }}
           github-token: ${{ github.token }}
+      - name: Refresh released CBS neighborhood figures weekly
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Annual statistics do not need a full workbook download every tick.
+          if python3 -c 'import json; from datetime import datetime, timezone; j=json.load(open("public/data/cbs-neighborhoods.json")); age=(datetime.now(timezone.utc)-datetime.fromisoformat(j["retrievedAt"].replace("Z","+00:00"))).total_seconds(); raise SystemExit(0 if 0 <= age < 604800 and "download.cbs.nl" in j["source"] else 1)'; then
+            echo 'Released CBS figures were checked within the last week'
+          else
+            python3 -m venv "$RUNNER_TEMP/cbs-venv"
+            "$RUNNER_TEMP/cbs-venv/bin/pip" install --disable-pip-version-check openpyxl==3.1.5
+            "$RUNNER_TEMP/cbs-venv/bin/python" scripts/fetch-cbs-neighborhoods.py || echo "::warning::CBS download unavailable; retaining dated neighborhood figures."
+          fi
       - run: python3 scripts/update_public_data.py
       - run: python3 scripts/update_history.py
       - name: Publish corridor observations
@@ -139,6 +144,8 @@ jobs:
           OUT="$RUNNER_TEMP/corridor-publish"
           mkdir -p "$OUT"
           cp public/data/traffic-history.json "$OUT/traffic-history.json"
+          cp public/data/rotterdam-snapshot.json "$OUT/rotterdam-snapshot.json"
+          cp public/data/cbs-neighborhoods.json "$OUT/cbs-neighborhoods.json"
           printf '{"git":{"deploymentEnabled":{"corridor-data":false}}}\n' > "$OUT/vercel.json"
           cd "$OUT"
           git init -q -b corridor-data
@@ -155,7 +162,7 @@ jobs:
               exit 0
             fi
           fi
-          git add traffic-history.json vercel.json
+          git add traffic-history.json rotterdam-snapshot.json cbs-neighborhoods.json vercel.json
           git commit -q -m 'Refresh measured corridor observations'
           # One bounded snapshot; the lease protects another publisher's update.
           git push -q --force-with-lease="refs/heads/corridor-data:$PREVIOUS" "$REPO_URL" corridor-data
@@ -166,6 +173,7 @@ jobs:
           path: |
             public/data/traffic-history.json
             public/data/rotterdam-snapshot.json
+            public/data/cbs-neighborhoods.json
           retention-days: 14
           if-no-files-found: error
       - name: Report corridor feed health

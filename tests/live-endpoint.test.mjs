@@ -70,6 +70,11 @@ test('endpoint rejects mutations and does not cache upstream failures or old obs
   await call(handler); assert.equal(calls, 1, 'a short cooldown prevents retry storms');
 });
 
+test('a new retrieval cannot make old position fixes pass the live endpoint gate', async () => {
+  const handler = createLiveHandler({ catalog, now: () => at, collect: async () => ({ ...fresh(), vehicles: { ...fresh().vehicles, observedAt: new Date(at - 30 * 60000).toISOString() } }) });
+  assert.equal((await call(handler)).statusCode, 503);
+});
+
 function timetableFixture() {
   const u16 = n => { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; };
   const u32 = n => { const b = Buffer.alloc(4); b.writeUInt32LE(n); return b; };
@@ -95,4 +100,16 @@ test('a malformed transit catalog fails closed and may be retried', async () => 
   const load = createTransitCatalog({ fetcher: async () => { calls++; return new Response(gzipSync('{}')); } });
   await assert.rejects(load(), /Invalid transit catalog/);
   await assert.rejects(load(), /Invalid transit catalog/); assert.equal(calls, 2);
+});
+
+test('transit identities survive a mirror outage only while their service calendar is valid', async () => {
+  const bytes = gzipSync(JSON.stringify({ v: 1, routes: {}, stops: {}, timetable: timetableFixture().toString('base64') }));
+  let clock = at, fail = false, calls = 0;
+  const load = createTransitCatalog({ now: () => clock, fetcher: async () => {
+    calls++; if (fail) throw new Error('offline'); return new Response(bytes);
+  } });
+  const first = await load(); fail = true; clock += 16 * 60000;
+  assert.equal(await load(), first); assert.equal(await load(), first); assert.equal(calls, 2);
+  clock += 86400_000; await assert.rejects(load(), /offline/);
+  fail = false; await assert.rejects(load(), /does not cover today/);
 });

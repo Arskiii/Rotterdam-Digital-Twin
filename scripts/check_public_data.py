@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SNAPSHOT = ROOT / "public/data/rotterdam-snapshot.json"
 HISTORY = ROOT / "public/data/traffic-history.json"
-REQUIRED = ("traffic", "disruptions", "trees", "buildings", "resilience")
+REQUIRED = ("traffic", "disruptions", "water", "air", "energy", "trees", "buildings", "resilience")
 
 
 def age_hours(value, now):
@@ -51,6 +51,14 @@ def check(snapshot, history, now):
                 errors.append("NDW detector observations are missing or over two hours old")
         if name == "buildings" and not section.get("buildings"):
             errors.append("No 3DBAG buildings available")
+        if name in ("water", "air"):
+            rows = (section.get("readings") or []) if name == "water" else list((section.get("reading", {}).get("values") or {}).values())
+            latest_age = min((age_hours(row.get("observedAt"), now) for row in rows
+                              if isinstance(row, dict)), default=float("inf"))
+            limit = 1 if name == "water" else 4
+            notes.append(f"| {name} measurements | source timestamp | {latest_age:.1f} h |")
+            if latest_age > limit:
+                errors.append(f"{name.capitalize()} observations are missing or over {limit} hours old")
     if not isinstance(history.get("readings"), list):
         errors.append("Traffic history is invalid")
     return errors, notes

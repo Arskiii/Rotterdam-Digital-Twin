@@ -1,7 +1,7 @@
 import * as THREE from "three";
+import { loadPublicSnapshot } from "../data/public-snapshot";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { OsmBuildSummary } from "./osm";
-import { siteUrl } from "../ui/platform";
 
 type Point = { lat: number; lon: number };
 type TimedPoint = Point & { observedAt: string };
@@ -252,18 +252,11 @@ export async function installCityLayers(scene: THREE.Scene, summary: OsmBuildSum
   addCard(cards, "Public transport · OSM", `${summary.transitStops.length} mapped stops/stations. No live departures yet.`, sources.transit);
 
   let snapshot: Snapshot;
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), 8_000);
   try {
-    const response = await fetch(siteUrl("data/rotterdam-snapshot.json"), { cache: "no-store", signal: controller.signal });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    snapshot = await response.json() as Snapshot;
-    if (snapshot.schemaVersion !== 1) throw new Error("unsupported snapshot version");
+    snapshot = await loadPublicSnapshot<Snapshot>();
   } catch (error) {
     addCard(cards, "Public data unavailable", `Snapshot could not load: ${String(error)}`, sources.traffic);
     return;
-  } finally {
-    window.clearTimeout(timeout);
   }
   onSnapshot?.(snapshot);
   const expiring: Array<{ group: THREE.Group; card: HTMLElement; toggle: HTMLInputElement; expiresAt: number }> = [];
@@ -316,8 +309,8 @@ export async function installCityLayers(scene: THREE.Scene, summary: OsmBuildSum
   }
 
   if (snapshot.traffic) {
-    const readings = (snapshot.traffic.readings ?? []).filter((r) => validPoint(r) && ageMs(r.observedAt) < 90 * 60_000);
-    const expiresAt = Math.min(...readings.map((r) => Date.parse(r.observedAt))) + 90 * 60_000;
+    const readings = (snapshot.traffic.readings ?? []).filter((r) => validPoint(r) && ageMs(r.observedAt) < 20 * 60_000);
+    const expiresAt = Math.min(...readings.map((r) => Date.parse(r.observedAt))) + 20 * 60_000;
     const group = markerGroup(readings, summary.origin, 0x4cc2ff, 3);
     scene.add(group);
     const toggle = addToggle(toggles, `Traffic sensors (${readings.length})`, group, true, readings.length ? expiresAt : 0);
@@ -349,12 +342,12 @@ export async function installCityLayers(scene: THREE.Scene, summary: OsmBuildSum
     if (values.length) expiring.push({ group, card, toggle, expiresAt });
   }
 
-  const water = (snapshot.water?.readings ?? []).filter((r) => ageMs(r.observedAt) < 3 * 3600_000);
+  const water = (snapshot.water?.readings ?? []).filter((r) => ageMs(r.observedAt) < 3600_000);
   const waterCard = addCard(cards, "Water level · Rijkswaterstaat", water.length ? water.slice(0, 3).map((r) => `${r.name}: ${r.cmNAP} cm NAP`).join(" · ") : "No recent valid reading near this tile.", sources.water, water.length ? `Observed ${timeLabel(water[0].observedAt)}` : "Water feed remains unverified for this area");
   if (water.length) {
     const group = markerGroup(water, summary.origin, 0x5b9dff, 4);
     scene.add(group);
-    const expiresAt = Math.min(...water.map((r) => Date.parse(r.observedAt))) + 3 * 3600_000;
+    const expiresAt = Math.min(...water.map((r) => Date.parse(r.observedAt))) + 3600_000;
     const toggle = addToggle(toggles, `Water gauges (${water.length})`, group, true, expiresAt);
     expiring.push({ group, card: waterCard, toggle, expiresAt });
   }
