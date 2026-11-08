@@ -17,7 +17,7 @@ import type { CityData } from "../data/loader";
 import type { MetricsMsg, WorkerToMain } from "../sim/protocol";
 import { DISTRICTS, UNITS, TIMEZONE, type UnitDef } from "../config";
 import { fmtSimClock, fmtSession, fmtInt, fmtTimestamp, drawSparkline, escapeHtml, fmtAge } from "./format";
-import { ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/archive";
+import { archiveCoverage, archiveValue, ArchiveReader, type ArchiveRecord, type ArchiveEvent } from "../data/archive";
 import { congestionPatterns, eventImpacts, impactByType } from "./patterns";
 import { buildSearchIndex, stopEntries, searchIndex, type SearchEntry, type SearchHit } from "./search";
 import { transitHealth, KIND_LABEL, type LineHealth } from "../data/transit-health";
@@ -135,6 +135,7 @@ export class App {
   private historyBar!: HTMLElement;
   private archive = new ArchiveReader();
   private historyRecords: ArchiveRecord[] = [];
+  private historyWindowEnd = Date.now();
   private historyHours = 24;
   private historyIdx = 0;
   private historyLoading = false;
@@ -1315,7 +1316,7 @@ export class App {
         <span class="hb-at" id="hb-at">—</span>
       </div>
       <canvas id="hb-canvas"></canvas>
-      <input id="hb-range" type="range" min="0" max="0" value="0" />
+      <input id="hb-range" type="range" min="0" max="0" value="0" aria-label="Archived observation time" />
       <div class="hb-read" id="hb-read"></div>`;
     this.ui.hud.appendChild(this.historyBar);
     this.historyBar.querySelectorAll<HTMLButtonElement>(".hb-windows button").forEach((b) =>
@@ -1332,7 +1333,8 @@ export class App {
       if (this.patternsOpen) void this.renderPatterns();
     });
     (this.historyBar.querySelector("#hb-range") as HTMLInputElement).addEventListener("input", (e) => {
-      this.historyIdx = +(e.target as HTMLInputElement).value;
+      const at = +(e.target as HTMLInputElement).value;
+      this.historyIdx = this.historyRecords.reduce((best, r, i, all) => Math.abs(r.t - at) < Math.abs(all[best].t - at) ? i : best, 0);
       this.paintHistory();
     });
   }
@@ -1349,6 +1351,7 @@ export class App {
     this.historyLoading = true;
     this.renderHistoryMessage("READING ARCHIVE…");
     const to = new Date();
+    this.historyWindowEnd = to.getTime();
     const from = new Date(to.getTime() - this.historyHours * 3_600_000);
     let recs: ArchiveRecord[] = [];
     try {
@@ -1359,8 +1362,10 @@ export class App {
     this.historyLoading = false;
     this.historyRecords = recs;
     const range = this.historyBar.querySelector("#hb-range") as HTMLInputElement;
-    range.max = String(Math.max(0, recs.length - 1));
-    range.value = String(Math.max(0, recs.length - 1));
+    range.min = String(from.getTime());
+    range.max = String(to.getTime());
+    range.value = String(recs.at(-1)?.t ?? to.getTime());
+    range.step = "1";
     this.historyIdx = Math.max(0, recs.length - 1);
     if (this.patternsOpen) void this.renderPatterns();
     this.paintCoverage(recs, this.historyHours);
@@ -1392,17 +1397,11 @@ export class App {
       el.className = "hb-cover thin";
       return;
     }
-    const spanH = (recs[recs.length - 1].t - recs[0].t) / 3_600_000;
-    const frac = Math.min(1, spanH / hours);
-    // One decimal under ten days rather than a rounded whole: 60 hours is 2.5
-    // days, and rounding it to "3D" overstates coverage — the wrong direction
-    // for the one label whose job is to stop the chart being over-read.
-    const days = spanH / 24;
-    const span = spanH < 48 ? `${Math.round(spanH)}H` : days < 10 ? `${days.toFixed(1)}D` : `${Math.round(days)}D`;
-    el.textContent = `${span} ARCHIVED · ${fmtInt(recs.length)} READINGS`;
-    // Under two thirds of the asked-for window is worth flagging rather than
-    // leaving the reader to infer it from the shape of the line.
-    el.className = frac < 0.66 ? "hb-cover thin" : "hb-cover";
+    const to = this.historyWindowEnd;
+    const coverage = archiveCoverage(recs, to - hours * 3_600_000, to);
+    el.textContent = `${Math.round(coverage.fraction * 100)}% ${coverage.sampled ? "SAMPLED SLOTS" : "COVERAGE"} · ${fmtInt(recs.length)} READINGS`;
+    el.title = `${coverage.captured} of ${coverage.expected} completed five-minute slots collected${coverage.sampled ? " in sampled hours" : ""}. Missing slots are gaps, not quiet traffic.`;
+    el.className = coverage.fraction < 0.95 ? "hb-cover thin" : "hb-cover";
   }
 
   // ---------- patterns: what the archive says keeps happening ----------
@@ -1591,34 +1590,37 @@ export class App {
       // districts with no reporting station contribute nothing rather than a
       // zero, which would read as "free flowing" when it means "unmeasured"
       const seen = r.districts.filter((d) => d.speed > 0);
-      return seen.length ? seen.reduce((p, c) => p + c.congestion, 0) / seen.length : 0;
+      return seen.length ? seen.reduce((p, c) => p + c.congestion, 0) / seen.length : NaN;
     };
 
-    // congestion area
-    ctx.beginPath();
-    ctx.moveTo(0, h);
-    recs.forEach((r, i) => {
-      const x = (i / Math.max(1, recs.length - 1)) * w;
-      ctx.lineTo(x, h - cityCong(r) * h * 0.92);
-    });
-    ctx.lineTo(w, h);
-    ctx.closePath();
+    // Time is proportional to elapsed time. Never draw across missing slots.
+    const start = this.historyWindowEnd - this.historyHours * 3_600_000;
+    const xAt = (r: ArchiveRecord) => (r.t - start) / (this.historyHours * 3_600_000) * w;
     const grad = ctx.createLinearGradient(0, 0, 0, h);
     grad.addColorStop(0, "rgba(238,68,68,0.55)");
     grad.addColorStop(1, "rgba(238,68,68,0.05)");
     ctx.fillStyle = grad;
-    ctx.fill();
+    recs.forEach((r, i) => {
+      const next = recs[i + 1];
+      const value = cityCong(r);
+      if (!Number.isFinite(value)) return;
+      const right = next && next.t - r.t <= 300_000 ? xAt(next) : Math.min(w, xAt(r) + 300_000 / (this.historyHours * 3_600_000) * w);
+      ctx.beginPath(); ctx.moveTo(xAt(r), h);
+      ctx.lineTo(xAt(r), h - value * h * 0.92);
+      const endValue = next && next.t - r.t <= 300_000 && Number.isFinite(cityCong(next)) ? cityCong(next) : value;
+      ctx.lineTo(right, h - endValue * h * 0.92); ctx.lineTo(right, h); ctx.closePath(); ctx.fill();
+    });
 
     // incident ticks along the bottom
     ctx.fillStyle = "rgba(210,160,24,0.85)";
-    recs.forEach((r, i) => {
+    recs.forEach((r) => {
       if (!r.incidents) return;
-      const x = (i / Math.max(1, recs.length - 1)) * w;
+      const x = xAt(r);
       ctx.fillRect(x, h - 3, 1, 3);
     });
 
     // scrub head
-    const sx = (this.historyIdx / Math.max(1, recs.length - 1)) * w;
+    const sx = xAt(recs[Math.min(this.historyIdx, recs.length - 1)]);
     ctx.strokeStyle = "#7abeff";
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -1638,13 +1640,13 @@ export class App {
     const cell = (k: string, v: string) => `<span class="hb-cell"><i>${k}</i><b>${v}</b></span>`;
     const read = this.historyBar.querySelector("#hb-read") as HTMLElement;
     read.innerHTML =
-      cell("CONGESTION", `${Math.round(cityCong(r) * 100)}%`) +
-      cell("INCIDENTS", String(r.incidents)) +
-      cell("BRIDGES", String(r.bridges)) +
-      cell("TRANSIT", String(r.transit)) +
-      cell("TEMP", `${r.temp.toFixed(1)}°C`) +
-      cell("RAIN", `${r.rain.toFixed(1)}MM/H`) +
-      cell("MAAS", `${r.waterCm >= 0 ? "+" : ""}${r.waterCm}CM`) +
+      cell("CONGESTION", archiveValue(cityCong(r) * 100, 0, "%")) +
+      cell("INCIDENTS", archiveValue(r.incidents)) +
+      cell("BRIDGES", archiveValue(r.bridges)) +
+      cell("TRANSIT", archiveValue(r.transit)) +
+      cell("TEMP", `${archiveValue(r.temp, 1)}°C`) +
+      cell("RAIN", `${archiveValue(r.rain, 1)}MM/H`) +
+      cell("MAAS", `${archiveValue(r.waterCm)}CM`) +
       (worst.length
         ? `<span class="hb-cell hb-worst"><i>WORST</i><b>${worst
             .map((x) => `${escapeHtml(x.name)} ${Math.round(x.d.congestion * 100)}%`)
@@ -2883,7 +2885,7 @@ export class App {
         `HOTTEST   ${worst || "none reporting"}`,
         `EVENTS    ${fmtInt(rec.incidents)} incidents · ${fmtInt(rec.bridges)} bridges open`,
         `TRANSIT   ${fmtInt(rec.transit)} vehicles in service`,
-        `WEATHER   ${rec.temp.toFixed(1)}°C · ${rec.rain.toFixed(1)} mm/h · Maas ${rec.waterCm >= 0 ? "+" : ""}${rec.waterCm} cm`
+        `WEATHER   ${archiveValue(rec.temp, 1)}°C · ${archiveValue(rec.rain, 1)} mm/h · Maas ${archiveValue(rec.waterCm)} cm`
       );
     } else if (this.mode === "live") {
       const live = this.liveSummary();
@@ -3030,14 +3032,14 @@ export class App {
       const seen = rec ? rec.districts.filter((d) => d.speed > 0) : [];
       grid.innerHTML = rec
         ? [
-            kpi("Archived congestion", pct(cityCong), `MEAN OVER ${seen.length} MEASURED DISTRICT${seen.length === 1 ? "" : "S"}`),
+            kpi("Archived congestion", seen.length ? pct(cityCong) : "—", `MEAN OVER ${seen.length} MEASURED DISTRICT${seen.length === 1 ? "" : "S"}`),
             kpi(
               "District speed",
-              `${(seen.length ? seen.reduce((p, d) => p + d.speed, 0) / seen.length : 0).toFixed(1)}<span class="u"> KM/H</span>`,
+              `${archiveValue(seen.length ? seen.reduce((p, d) => p + d.speed, 0) / seen.length : NaN, 1)}<span class="u"> KM/H</span>`,
               "MEAN OF THE DISTRICTS THAT REPORTED"
             ),
             kpi("Incidents", fmtInt(rec.incidents), `${fmtInt(rec.bridges)} BRIDGE${rec.bridges === 1 ? "" : "S"} OPEN`),
-            kpi("Transit in service", fmtInt(rec.transit), `${rec.temp.toFixed(1)}°C · ${rec.rain.toFixed(1)} MM/H RAIN`),
+            kpi("Transit in service", fmtInt(rec.transit), `${archiveValue(rec.temp, 1)}°C · ${archiveValue(rec.rain, 1)} MM/H RAIN`),
           ].join("")
         : `<div class="panel kpi"><div class="k">Archive</div><div class="v">—</div><div class="s">SCRUB THE ARCHIVE BAR TO A MOMENT THAT WAS RECORDED</div></div>`;
     } else {

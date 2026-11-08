@@ -145,19 +145,17 @@ all three honestly:
   demand curve, signal program, injected incidents.
 - **HISTORY** — the archive, scrubbed. Congestion over the last day, week or
   month with incident ticks, reading out the moment you land on. The bar says
-  how much of the window the archive actually holds, and turns amber under two
-  thirds of it: the record starts when the refresh loop started, and a 30-day
-  chart drawn from two days of readings is flat and empty for most of its
-  width — which reads as a quiet city rather than an absent record.
+  actual five-minute slot coverage and leaves missing periods empty. Wider
+  windows explicitly label their sampled-hour coverage.
 
 **Live city feeds** — the primary site is
 [rotterdam-digital-twin.vercel.app](https://rotterdam-digital-twin.vercel.app/).
 Both Vercel and GitHub Pages poll the public `/api/live` endpoint once a minute.
-It collects independent providers concurrently with a 6.5-second shared request
-deadline, coalesces requests in each warm instance, and caches successful results
+It reuses the persistent Railway collector, falling back to concurrent provider
+requests within a 6.5-second shared deadline. It coalesces requests and caches successful results
 for 30 seconds (with up to 60 seconds of CDN revalidation). Provider failures omit
 their sections; a package with no current traffic or transit receives HTTP 503.
-The GitHub `live` branch and bundled snapshot remain fallback sources. The header
+The independent collector and bundled snapshot remain fallback sources. The header
 shows package age; traffic, positions and boards expire separately after 20
 minutes, including while an open tab receives no newer package.
 
@@ -184,39 +182,33 @@ minutes, including while an open tab receives no newer package.
   display does; rows with no live position say SCHED rather than implying a
   measurement that does not exist. Grouped by parent station, so Beurs shows
   all five metro lines rather than one board per platform.
-- **Maas water level** (Rijkswaterstaat, Boompjes tide gauge): the river
+- **Maas water level** (Rijkswaterstaat, Boerengat measured river gauge): the river
   surface rides the real tide; **weather** (Buienradar Rotterdam): rain slows
   motorized traffic; **air quality** (Luchtmeetnet, 9 DCMR stations): NO₂/PM2.5
   as a toggleable station layer
 - `npm run fetch-live` produces the snapshot on demand
 
-**The archive** — every snapshot is folded into a history on the `archive`
-branch by `scripts/archive-live.mjs`, so the platform can answer what the city
-was doing last Tuesday at 08:20:
+**The archive** — an always-running Railway collector saves public feeds every
+two minutes into transactional SQLite on a persistent volume. Five-minute slots
+are idempotent; source timestamps and missing measurements are preserved.
 
-- `c/YYYY/MM/DD/HH.bin` — coarse: per district plus city scalars (weather,
-  tide, incidents, transit count, air), one record per 5 minutes, ~1 KB an
-  hour, kept indefinitely (~9 MB a year)
-- `f/YYYY/MM/DD/HH.bin` — fine: every NDW station's flow and speed at the same
-  cadence, ~22 KB an hour, pruned to a rolling 45-day window
-- `e/YYYY-MM.json` — incidents and bridge openings, deduped
-- Appends are idempotent, so a re-run over the same snapshot changes nothing
+- `/archive/c/YYYY/MM/DD/HH.bin`: district/environment records, kept indefinitely.
+- `/archive/f/YYYY/MM/DD/HH.bin`: sensor records, kept for 45 days.
+- `/archive/e/YYYY-MM.json`: deduplicated incidents and bridge openings.
+- `/archive/status`: saved collection heartbeat and actual slot coverage.
 
-**Delivery and timetable maintenance.** GitHub schedule events can be delayed
-by hours. The existing `deploy.yml` loop remains the sole publisher of `live`
-and `archive`, but the interactive feed no longer depends on the next scheduled
-run. The Vercel endpoint fetches public providers on demand and needs no ingest
-secret, database or additional cron. `VITE_OBSERVATION_API_URL` still overrides
-the default service for an existing receiver.
+Daily/weekly volume backups, bounded retries and a stalled-loop watchdog protect
+collection. Pre-cutover GitHub history remains readable. Gaps that were never
+observed are not fabricated. Intelligence shows missing intervals and collector
+health; history coverage counts records rather than the span between them.
 
-The timetable job validates its daily Actions cache and publishes the matching
-routes, stops and timetable together in one compressed bundle on `transit-data`.
-The endpoint reloads that bundle at least every 15 minutes while active. This is
-necessary even when the service calendar has not expired: changed GTFS route/trip
-IDs otherwise silently drop vehicles and remove their movement paths. Each data
-branch writes its own Vercel deployment guard; `npm run check-workflows` enforces
-that rule. The reference branch retains only the current bundle, avoiding binary
-history growth. Archived observations retain their existing delivery cadence.
+**Delivery and timetable maintenance.** GitHub now only builds/deploys the site.
+The collector refreshes corridor observations every five minutes, reference
+layers hourly, GTFS directly daily, and released CBS figures weekly. A staged
+GTFS bundle must pass 14-day coverage validation before atomic activation.
+`VITE_OBSERVATION_API_URL` can still override the frontend observation service.
+See [collection operations and verification](docs/archive-collection.md) for
+storage, source ownership, deployment and recovery details.
 
 Cars, bicycles and pedestrians are modelled, and live transit motion between
 position fixes follows timetable paths. The map shows activity counts and a

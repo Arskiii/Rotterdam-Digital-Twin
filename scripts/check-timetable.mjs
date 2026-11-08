@@ -13,13 +13,13 @@
 // rebuild: a rebuild that produces something worse than what we have must not
 // be kept, and one that produces nothing must not go unnoticed.
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadTimetable, serviceDateNum } from "./fetch-live.mjs";
+import { parseTimetable, serviceDateNum } from "./fetch-live.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const BIN = join(ROOT, "data", "ret-timetable.bin");
+const BIN = join(process.env.TRANSIT_DATA_DIR || join(ROOT, "data"), "ret-timetable.bin");
 const i = process.argv.indexOf("--days");
 const DAYS = i >= 0 ? Math.max(1, +process.argv[i + 1] || 7) : 7;
 const MIN_TRIPS = 20000; // Rotterdam runs ~11k-13k trips on a weekday
@@ -33,7 +33,7 @@ if (!existsSync(BIN)) fail(`${BIN} does not exist`);
 
 let tt;
 try {
-  tt = loadTimetable();
+  tt = parseTimetable(readFileSync(BIN));
 } catch (e) {
   fail(`could not parse it — ${e.message}`);
 }

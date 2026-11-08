@@ -1,8 +1,9 @@
 import { safeReading } from "../lab/imports";
 import type { TrafficReading } from "../v03/scenario";
 import { siteUrl } from "../ui/siteUrl";
+import collection from "../../collection.config.json";
 
-export const CORRIDOR_HISTORY_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/corridor-data/traffic-history.json";
+export const CORRIDOR_HISTORY_URL = `${collection.origin}/data/traffic-history.json`;
 const REFRESH_MS = 60_000;
 export interface CorridorHistory {
   readings: TrafficReading[];
@@ -16,7 +17,7 @@ export function parseHistory(value: unknown, source: CorridorHistory["source"], 
   const data = value as Record<string, unknown> | null;
   const generated = typeof data?.generatedAt === "string" ? Date.parse(data.generatedAt) : NaN;
   if (data?.schemaVersion !== 1 || !Number.isFinite(generated) || generated > now + 120_000 ||
-      !Array.isArray(data.readings) || data.readings.length > 3000) throw new Error("Invalid corridor history");
+      !Array.isArray(data.readings) || data.readings.length > 10_000) throw new Error("Invalid corridor history");
   const readings = data.readings.map(safeReading);
   if (readings.some((row) => !row || Date.parse(row.observedAt) > now + 120_000)) throw new Error("Invalid corridor observations");
   const valid = (readings as TrafficReading[]).sort((a, b) => a.observedAt.localeCompare(b.observedAt) || a.id.localeCompare(b.id));
@@ -69,7 +70,7 @@ export class CorridorHistoryFeed {
       const response = await fetch(target, { cache: "no-store", signal: AbortSignal.timeout(6000) });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const body = await response.text();
-      if (body.length > 1_000_000) throw new Error("Corridor history is too large");
+      if (body.length > 4_000_000) throw new Error("Corridor history is too large");
       return parseHistory(JSON.parse(body), source);
     };
     // Defer work until pending is assigned, so subscribers can safely call load().

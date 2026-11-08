@@ -2280,6 +2280,9 @@ label {
   z-index: 17;
 }
 #history-bar.open { display: flex; }
+/* The current-unit dock obscures the archive controls inside the HUD's
+   stacking context. History owns this area on desktop as well as on phones. */
+body[data-mode="history"] #dock { display: none; }
 .hb-top { display: flex; align-items: center; gap: 14px; }
 .hb-title { font-size: 9px; letter-spacing: 0.18em; color: var(--text-faint); }
 .hb-windows { display: flex; gap: 2px; border: 1px solid var(--line); padding: 2px; }
@@ -2595,6 +2598,8 @@ label {
   /* the mode button already reads HISTORY — the word ARCHIVE beside it is
      50px of a 378px row saying it twice */
   #history-bar .hb-title { display: none; }
+  .hb-top { flex-wrap: wrap; gap: 8px; }
+  .hb-cover { order: 3; flex-basis: 100%; }
   .hb-read { gap: 10px; }
   #mode-switch button { padding: 4px 7px; font-size: 9px; letter-spacing: 0.04em; }
   /* Clear of the dock below (42px of tabs over a 118px body) rather than

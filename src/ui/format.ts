@@ -17,7 +17,7 @@ export function fmtSession(sec: number): string {
 }
 
 export function fmtInt(n: number): string {
-  return Math.round(n).toLocaleString("en-US");
+  return Number.isFinite(n) ? Math.round(n).toLocaleString("en-US") : "—";
 }
 
 export function fmtTimestamp(d: Date, tz: string): string {

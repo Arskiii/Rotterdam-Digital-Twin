@@ -17,7 +17,10 @@
 // The published archive first, then a locally committed copy — the same
 // two-source shape the live feed uses, so the scrubber still works offline,
 // in dev, and on a deployment that ships its own archive slice.
+import collection from "../../collection.config.json";
+
 const ARCHIVE_SOURCES = [
+  `${collection.origin}/archive`,
   "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/archive",
   `${import.meta.env.BASE_URL}data/archive`,
 ];
@@ -45,6 +48,30 @@ export interface ArchiveRecord {
   districts: DistrictSample[];
 }
 
+/** Missing version-2 metrics are NaN; callers format them as an em dash. */
+export function archiveValue(value: number, decimals = 0, suffix = ""): string {
+  return Number.isFinite(value) ? `${value.toFixed(decimals)}${suffix}` : "—";
+}
+
+export function archiveStride(hours: number): number {
+  return hours > 336 ? 6 : hours > 120 ? 3 : hours > 48 ? 2 : 1;
+}
+
+/** Count actual five-minute slots, not the span between two isolated readings. */
+export function archiveCoverage(records: ArchiveRecord[], from: number, to: number) {
+  const stride = archiveStride((to - from) / 3_600_000);
+  const firstHour = Math.floor(from / 3_600_000) * 3_600_000;
+  const wanted = new Set<number>();
+  for (let hour = firstHour; hour <= to; hour += stride * 3_600_000) {
+    for (let i = 0; i < 12; i++) {
+      const t = hour + i * 300_000;
+      if (t >= from && t + 300_000 <= to) wanted.add(t);
+    }
+  }
+  const captured = new Set(records.filter(r => wanted.has(r.t)).map(r => r.t)).size;
+  return { expected: wanted.size, captured, fraction: wanted.size ? captured / wanted.size : 0, sampled: stride > 1 };
+}
+
 export interface ArchiveEvent {
   t: string;
   type: string;
@@ -63,6 +90,8 @@ export function parseCoarse(buf: ArrayBuffer): ArchiveRecord[] {
   if (buf.byteLength < COARSE_HEAD) return [];
   const magic = String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]);
   if (magic !== COARSE_MAGIC) return [];
+  const version = dv.getUint16(4, true);
+  if (version !== 1 && version !== 2) return [];
   const hourEpoch = dv.getUint32(6, true); // unix seconds at the hour start
   const districtCount = dv.getUint8(10);
   const recordCount = dv.getUint16(11, true);
@@ -72,19 +101,21 @@ export function parseCoarse(buf: ArrayBuffer): ArchiveRecord[] {
     let p = COARSE_HEAD + i * recSize;
     if (p + recSize > buf.byteLength) break;
     const slot = dv.getUint8(p); p += 1;
-    const temp = dv.getInt16(p, true) / 10; p += 2;
-    const rain = dv.getUint16(p, true) / 100; p += 2;
-    const waterCm = dv.getInt16(p, true); p += 2;
-    const incidents = dv.getUint8(p); p += 1;
-    const bridges = dv.getUint8(p); p += 1;
-    const transit = dv.getUint16(p, true); p += 2;
-    const no2 = dv.getUint8(p); p += 1;
-    const pm25 = dv.getUint8(p); p += 1;
+    if (slot > 59 || (version === 2 && slot % 5)) continue;
+    const metric = (value: number, sentinel: number, scale = 1) => version === 2 && value === sentinel ? NaN : value / scale;
+    const temp = metric(dv.getInt16(p, true), -32768, 10); p += 2;
+    const rain = metric(dv.getUint16(p, true), 65535, 100); p += 2;
+    const waterCm = metric(dv.getInt16(p, true), -32768); p += 2;
+    const incidents = metric(dv.getUint8(p), 255); p += 1;
+    const bridges = metric(dv.getUint8(p), 255); p += 1;
+    const transit = metric(dv.getUint16(p, true), 65535); p += 2;
+    const no2 = metric(dv.getUint8(p), 255); p += 1;
+    const pm25 = metric(dv.getUint8(p), 255); p += 1;
     const districts: DistrictSample[] = [];
     for (let d = 0; d < districtCount; d++) {
-      const flow = dv.getUint16(p, true); p += 2;
-      const speed = dv.getUint8(p); p += 1;
-      const congestion = dv.getUint8(p) / 255; p += 1;
+      const flow = metric(dv.getUint16(p, true), 65535); p += 2;
+      const speed = metric(dv.getUint8(p), 255); p += 1;
+      const congestion = metric(dv.getUint8(p), 255, version === 2 ? 254 : 255); p += 1;
       districts.push({ flow, speed, congestion });
     }
     out.push({
@@ -191,7 +222,7 @@ export class ArchiveReader {
     // One file per hour means a month is 720 requests, which is not a timeline
     // — it is a stampede. Wide windows sample hours instead: a 30-day scrub
     // reads every sixth hour, which is still far finer than its pixel width.
-    const stride = spanHours > 336 ? 6 : spanHours > 120 ? 3 : spanHours > 48 ? 2 : 1;
+    const stride = archiveStride(spanHours);
     const hours: Date[] = [];
     const cursor = new Date(Date.UTC(
       from.getUTCFullYear(), from.getUTCMonth(), from.getUTCDate(), from.getUTCHours()

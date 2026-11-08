@@ -1,11 +1,12 @@
 // Live city state produced by scripts/fetch-live.mjs: NDW traffic flows, open
 // bascule bridges, real transit positions and departure boards, Maas water
 // level, weather and air quality. The snapshot is refreshed on a 60-second
-// cadence by the cached Vercel endpoint. The scheduled GitHub publisher and a
+// cadence by the cached Vercel endpoint. The independent collector and a
 // bundled snapshot remain fallbacks when the endpoint is unavailable.
 
 /** [x, y, kind, line, tripId, stopSeq, berthed, vehicleId, fixAgeSec] */
 import { observationFresh } from "./freshness";
+import collection from "../../collection.config.json";
 
 export type LiveVehicle = [number, number, number, string, string, number, number, string, number];
 
@@ -45,13 +46,12 @@ export interface LiveSnapshot {
   air?: { t: string; s: [number, number, number | null, number | null, string][] }; // [x, y, NO2, PM2.5, name]
 }
 
-const LIVE_BRANCH_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/live/live.json";
+const COLLECTOR_URL = `${collection.origin}/api/live`;
 const OBSERVATION_URL = import.meta.env.VITE_OBSERVATION_API_URL?.trim() ||
   (typeof location !== "undefined" && location.hostname.endsWith(".vercel.app")
     ? "/api/live" : "https://rotterdam-digital-twin.vercel.app/api/live");
-// The GitHub raw fallback has cache-control max-age=300 and its cache-busting
-// query string does not help. A configured observation service can deliver
-// faster, so poll that path once a minute; the GitHub-only path needs less.
+// The website cache and independent collector share source timestamps.
+// Poll once a minute; the collector saves providers every two minutes.
 const POLL_MS = OBSERVATION_URL ? 60_000 : 120_000;
 const MAX_SNAPSHOT_CHARS = 2_000_000;
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -285,11 +285,11 @@ export class LiveFeed {
   }
 
   private async poll() {
-      // Prefer a configured observation service; retain GitHub and the bundled
+      // Prefer a configured observation service; retain the collector and bundled
       // copy as fallbacks when it is unavailable or older than a known snapshot.
       const sources: ["service" | "branch" | "local", string][] = [
         ...(OBSERVATION_URL ? [["service", OBSERVATION_URL] as ["service", string]] : []),
-        ["branch", LIVE_BRANCH_URL], ["local", this.localUrl],
+        ["branch", COLLECTOR_URL], ["local", this.localUrl],
       ];
       for (const [source, url] of sources) {
         if (this.disposed) return;
