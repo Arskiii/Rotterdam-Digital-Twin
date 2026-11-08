@@ -1,11 +1,12 @@
 import { siteUrl } from "../ui/siteUrl";
+import collection from "../../collection.config.json";
 
 const PUBLIC_DATA_URL = "https://raw.githubusercontent.com/Arskiii/Rotterdam-Digital-Twin/corridor-data/";
-export const PUBLIC_SNAPSHOT_URL = `${PUBLIC_DATA_URL}rotterdam-snapshot.json`;
+export const PUBLIC_SNAPSHOT_URL = `${collection.origin}/data/rotterdam-snapshot.json`;
 
 /** The collector's public layers are published independently of both frontends. */
 export async function loadPublishedData<T>(path: string, valid: (value: T) => boolean): Promise<T> {
-  for (const url of [`${PUBLIC_DATA_URL}${path}`, siteUrl(`data/${path}`)]) {
+  for (const url of [`${collection.origin}/data/${path}`, `${PUBLIC_DATA_URL}${path}`, siteUrl(`data/${path}`)]) {
     try {
       const response = await fetch(url, { cache: "no-store", signal: AbortSignal.timeout(8000) });
       if (!response.ok) continue;

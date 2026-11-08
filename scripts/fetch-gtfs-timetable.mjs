@@ -31,7 +31,7 @@ import { zipIndex, entryLines, splitCsv, header } from "./lib/gtfs-zip.mjs";
 import { BBOX, ORIGIN, M_PER_LAT, M_PER_LON } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "data", "ret-timetable.bin");
+const OUT = join(process.env.TRANSIT_DATA_DIR || join(ROOT, "data"), "ret-timetable.bin");
 
 /**
  * The nth comma-separated field, without allocating an array for the rest.
@@ -62,7 +62,7 @@ function gtfsSeconds(hms) {
 // ---------------- main ----------------
 
 async function main() {
-  const routes = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-routes.json"), "utf8"));
+  const routes = JSON.parse(readFileSync(join(process.env.TRANSIT_DATA_DIR || join(ROOT, "data"), "gtfs-routes.json"), "utf8"));
   // Which routes can matter, by geography rather than by operator.
   //
   // Filtering on a list of operator names left 43 of the 172 buses on screen
@@ -91,7 +91,7 @@ async function main() {
   const bx1 = (DRAWN.e - ORIGIN.lon) * M_PER_LON + MARGIN;
   const by0 = (DRAWN.s - ORIGIN.lat) * M_PER_LAT - MARGIN;
   const by1 = (DRAWN.n - ORIGIN.lat) * M_PER_LAT + MARGIN;
-  const stopTable = JSON.parse(readFileSync(join(ROOT, "data", "gtfs-stops.json"), "utf8"));
+  const stopTable = JSON.parse(readFileSync(join(process.env.TRANSIT_DATA_DIR || join(ROOT, "data"), "gtfs-stops.json"), "utf8"));
   const local = new Set();
   for (const [id, s] of Object.entries(stopTable)) {
     if (s.x >= bx0 && s.x <= bx1 && s.y >= by0 && s.y <= by1) local.add(id);

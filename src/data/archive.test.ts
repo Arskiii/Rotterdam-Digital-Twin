@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { ArchiveReader, parseCoarse, type DistrictSample } from "./archive";
+import { archiveCoverage, archiveValue, ArchiveReader, parseCoarse, type DistrictSample } from "./archive";
+import { congestionPatterns } from "../ui/patterns";
+import { collectionSummary } from "./collection-health";
 
 // A second implementation of the wire format, written from
 // scripts/archive-live.mjs rather than from the parser. The point of writing it
@@ -94,6 +96,28 @@ describe("ArchiveReader freshness", () => {
 });
 
 describe("parseCoarse", () => {
+  it("reads v2 absence without treating it as zero and excludes it from patterns", () => {
+    const buf = new W().raw("RTAC").u16(2).u32(HOUR).u8(2).u16(1)
+      .u8(0).i16(-32768).u16(0).i16(-32768).u8(255).u8(0).u16(65535).u8(255).u8(255)
+      .u16(65535).u8(255).u8(255).u16(0).u8(25).u8(127).done();
+    const [r] = parseCoarse(buf);
+    expect(r.temp).toBeNaN(); expect(r.rain).toBe(0); expect(r.bridges).toBe(0);
+    expect(r.districts[0].flow).toBeNaN(); expect(r.districts[1].congestion).toBe(0.5);
+    expect(archiveValue(r.temp, 1, "°C")).toBe("—");
+    expect(congestionPatterns([r]).samples).toBe(1);
+  });
+  it("counts gaps between sparse records and never calls the entire span covered", () => {
+    const from = HOUR * 1000;
+    const records = parseCoarse(writeCoarse(HOUR, [0, 55].map(slot => ({ slot, city, districts: [] }))));
+    expect(archiveCoverage(records, from, from + 3600_000)).toMatchObject({ expected: 12, captured: 2, fraction: 1 / 6, sampled: false });
+    expect(archiveCoverage([...records, records[0]], from, from + 3600_000).captured).toBe(2);
+  });
+  it("does not call a cached heartbeat healthy after collection stops", () => {
+    const status = { v: 1, healthy: true, startedAt: HOUR * 1000, lastSuccessAt: HOUR * 1000, coverage: { from: HOUR * 1000, to: HOUR * 1000, expected: 12, recorded: 10, missing: 2 }, maintenance: {} };
+    expect(collectionSummary(status, HOUR * 1000 + 60_000).healthy).toBe(true);
+    expect(collectionSummary(status, HOUR * 1000 + 600_000)).toMatchObject({ healthy: false });
+    expect(collectionSummary(status, HOUR * 1000 + 600_000).text).toContain("2 missing");
+  });
   it("round-trips a record the writer would produce", () => {
     const districts: DistrictSample[] = [
       { flow: 4200, speed: 48, congestion: 40 / 255 },

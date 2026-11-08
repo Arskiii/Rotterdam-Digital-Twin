@@ -82,7 +82,7 @@ export function congestionPatterns(recs: ArchiveRecord[]): PatternSummary {
     for (let d = 0; d < n; d++) {
       const s = r.districts[d];
       // speed 0 means no station in this district reported — not a jam
-      if (!s || s.speed <= 0) continue;
+      if (!s || !(s.speed > 0) || !Number.isFinite(s.congestion)) continue;
       const c = s.congestion;
       const dist = districts[d];
       sums[d] += c;
@@ -183,7 +183,7 @@ export function eventImpacts(
   for (const r of recs) {
     for (let d = 0; d < seeds.length; d++) {
       const s = r.districts[d];
-      if (!s || s.speed <= 0) continue;
+      if (!s || !(s.speed > 0) || !Number.isFinite(s.congestion)) continue;
       const busy = windows.some((w) => w.district === d && r.t >= w.from && r.t <= w.to);
       if (busy) continue;
       quiet[d].sum += s.congestion;
@@ -198,7 +198,7 @@ export function eventImpacts(
     for (const r of recs) {
       if (r.t < w.from || r.t > w.to) continue;
       const s = r.districts[w.district];
-      if (!s || s.speed <= 0) continue;
+      if (!s || !(s.speed > 0) || !Number.isFinite(s.congestion)) continue;
       sum += s.congestion;
       n++;
     }

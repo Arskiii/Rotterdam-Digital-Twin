@@ -11,12 +11,15 @@ import { beyondNoise, compareWhatIf, type Change, type WhatIfResult } from "./wh
 import type { StudySelection } from "../study/context";
 import { mountCorridorEvidence } from "../study/evidence";
 import { corridorHistory } from "../study/history";
+import { collectionSummary, loadCollectionHealth, type CollectionHealth } from "../data/collection-health";
+import collection from "../../collection.config.json";
 
 export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: string, selection?: StudySelection) {
   mountIntelligenceChrome(root);
   const evidence = selection ? mountCorridorEvidence(root, selection) : null;
 
   const $ = <T extends HTMLElement>(selector: string) => root.querySelector<T>(selector)!;
+  $("#cbs-data-link").setAttribute("href", `${collection.origin}/data/cbs-neighborhoods.json`);
   const format = (value: number | null | undefined, suffix = "") => value === null || value === undefined ? "—" : `${value.toLocaleString("en-GB")}${suffix}`;
   const when = (value: string | null | undefined) => {
     if (!value) return "Not available";
@@ -37,6 +40,23 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
     return graphPromise;
   }
   let latest: LiveSnapshot | null = null;
+  let collectionHealth: CollectionHealth | null = null;
+  let healthPending = false, healthCheckedAt = 0, healthFailed = false;
+  const healthLine = document.createElement("p");
+  healthLine.id = "collection-health"; healthLine.className = "source-note"; healthLine.setAttribute("role", "status");
+  $("#source-cards").before(healthLine);
+  const renderCollection = () => {
+    healthLine.textContent = collectionHealth ? collectionSummary(collectionHealth).text : "Checking archive collection…";
+    if (healthFailed) healthLine.textContent = "Collection status unavailable. Archive coverage could not be verified.";
+  };
+  const refreshCollection = async () => {
+    renderCollection();
+    if (healthPending || Date.now() - healthCheckedAt < 60_000) return;
+    healthPending = true; healthCheckedAt = Date.now();
+    try { collectionHealth = await loadCollectionHealth(); healthFailed = false; }
+    catch { healthFailed = true; }
+    finally { healthPending = false; renderCollection(); }
+  };
   let active = !root.hidden;
   let meta: Meta | null = null;
   let exposure: Exposure | null = null;
@@ -45,13 +65,13 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
   let validation: ValidationReport | null = null;
   let lastTrial: { runAt: string; seed: number; clockMin: number; observedAt: string | null; results: ExperimentResultMsg[] } | null = null;
   const refreshLive = () => {
-    if (active && !document.hidden) { renderSources(); renderConditions(); renderBridgeOptions(); }
+    if (active && !document.hidden) { renderSources(); renderConditions(); renderBridgeOptions(); void refreshCollection(); }
   };
   feed.subscribe((snapshot) => { latest = snapshot; refreshLive(); });
   const refresh = document.createElement("button"); refresh.type = "button"; refresh.id = "intelligence-refresh";
   refresh.textContent = "Refresh observations";
   $("#snapshot-status").after(refresh);
-  refresh.onclick = () => { void feed.refresh(); void corridorHistory.refresh(true); };
+  refresh.onclick = () => { void feed.refresh(); void corridorHistory.refresh(true); healthCheckedAt = 0; void refreshCollection(); };
   const refreshStatus = () => {
     refresh.disabled = feed.refreshing || corridorHistory.refreshing;
     refresh.textContent = refresh.disabled ? "Refreshing…" : "Refresh observations"; refreshLive();
@@ -61,7 +81,7 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
 
   function renderSources() {
     const status = $("#snapshot-status");
-    status.textContent = latest ? `Snapshot ${when(latest.t)} · delivery: ${feed.source === "service" ? "observation service" : feed.source === "branch" ? "GitHub live mirror" : "packaged fallback"}` : "No observation snapshot yet";
+    status.textContent = latest ? `Snapshot ${when(latest.t)} · delivery: ${feed.source === "service" ? "observation service" : feed.source === "branch" ? "independent collector" : "packaged fallback"}` : "No observation snapshot yet";
     const cards = $("#source-cards");
     cards.replaceChildren();
     for (const row of qualityRows(latest)) {
@@ -352,7 +372,7 @@ export function mountIntelligence(root: HTMLElement, feed: LiveFeed, dataBase: s
   $("#trial-run").addEventListener("click", () => void trial());
   $("#whatif-run").addEventListener("click", () => void whatIf());
   $("#trial-export").addEventListener("click", exportTrial);
-  renderSources(); renderConditions();
+  renderSources(); renderConditions(); if (active) void refreshCollection();
   void Promise.allSettled([load<Meta>("meta.json"), load<Exposure>("exposure.json"), loadPublishedData<Cbs>("cbs-neighborhoods.json", (value) => typeof value?.source === "string" && Array.isArray(value.neighborhoods) && value.neighborhoods.length > 0), load<Ndw>("ndw.json"), load<ValidationReport>("model-validation.json")]).then((results) => {
     if (results[0].status === "fulfilled") meta = results[0].value;
     if (results[1].status === "fulfilled") exposure = results[1].value;

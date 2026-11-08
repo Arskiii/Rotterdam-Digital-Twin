@@ -1,5 +1,6 @@
 """Keep a bounded history of real NDW observations across static site builds."""
 
+import os
 import json
 import math
 import tempfile
@@ -7,9 +8,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SNAPSHOT = ROOT / "public/data/rotterdam-snapshot.json"
-OUTPUT = ROOT / "public/data/traffic-history.json"
+SNAPSHOT = Path(os.environ.get("PUBLIC_DATA_DIR", ROOT / "public/data")) / "rotterdam-snapshot.json"
+OUTPUT = Path(os.environ.get("PUBLIC_DATA_DIR", ROOT / "public/data")) / "traffic-history.json"
 RETENTION_DAYS = 7
+MAX_READINGS = 10_000  # A continuous five-minute feed needs >4,000 rows/week for two detectors.
 
 
 def parse_time(value):
@@ -51,14 +53,14 @@ def merge_history(previous, current, now):
             "speedKmh": speed if valid_number(speed) and 0 <= speed <= 200 else None,
             "vehiclesPerHour": flow if valid_number(flow) and 0 <= flow <= 100_000 else None,
         }
-    return sorted(merged.values(), key=lambda item: (parse_time(item["observedAt"]), item["id"]))[-2000:]
+    return sorted(merged.values(), key=lambda item: (parse_time(item["observedAt"]), item["id"]))[-MAX_READINGS:]
 
 
 def load_previous(path):
     if not path.exists():
         return []
-    if path.stat().st_size > 2_000_000:
-        raise ValueError("Retained history exceeds 2 MB; refusing to overwrite it")
+    if path.stat().st_size > 4_000_000:
+        raise ValueError("Retained history exceeds 4 MB; refusing to overwrite it")
     data = json.loads(path.read_text())
     if not isinstance(data, dict) or data.get("schemaVersion") != 1 or not isinstance(data.get("readings"), list):
         raise ValueError("Invalid retained history; refusing to overwrite it")

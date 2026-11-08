@@ -12,6 +12,10 @@ const clock = () => { vi.useFakeTimers(); vi.setSystemTime(new Date(NOW)); };
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe("published corridor history", () => {
+  it("accepts a complete week of two five-minute detector feeds", () => {
+    const readings = Array.from({ length: 4032 }, (_, i) => ({ ...row(new Date(Date.parse(NOW) - Math.floor(i / 2) * 300_000).toISOString()), id: `detector-${i % 2}` }));
+    expect(parseHistory({ ...history(), readings }, "published", Date.parse(NOW)).readings).toHaveLength(4032);
+  });
   it("uses measurement dates rather than the collector timestamp and preserves measured zeros", () => {
     const parsed = parseHistory(history(OLD), "published", Date.parse(NOW));
     expect(parsed.latestObservedAt).toBe("2026-09-27T09:50:00.000Z");
@@ -22,7 +26,7 @@ describe("published corridor history", () => {
   it("rejects invalid schema, partial corruption, oversized arrays and future observations", () => {
     for (const invalid of [null, {}, { ...history(), schemaVersion: 2 }, { ...history(), generatedAt: "bad" },
       { ...history(), readings: [row(), { ...row(), lat: 0 }] },
-      { ...history(), readings: Array(3001).fill(row()) }, history("2026-11-08T14:25:00Z")]) {
+      { ...history(), readings: Array(10001).fill(row()) }, history("2026-11-08T14:25:00Z")]) {
       expect(() => parseHistory(invalid, "published", Date.parse(NOW))).toThrow();
     }
   });

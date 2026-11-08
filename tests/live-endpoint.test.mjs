@@ -4,6 +4,7 @@ import { gzipSync } from 'node:zlib';
 import { collectLiveSnapshot } from '../scripts/fetch-live.mjs';
 import { createLiveHandler } from '../server/live-endpoint.mjs';
 import { createTransitCatalog } from '../server/transit-catalog.mjs';
+import { archiveLiveSource } from '../server/archive-live-source.mjs';
 
 const quiet = { log() {}, warn() {} };
 const at = Date.parse('2026-10-23T18:00:00Z');
@@ -12,6 +13,16 @@ const deferred = () => { let resolve; const promise = new Promise(r => { resolve
 const response = () => ({ headers: {}, statusCode: 0, setHeader(k, v) { this.headers[k] = v; }, end(body) { this.body = body; } });
 const call = async (handler, method = 'GET') => { const res = response(); await handler({ method }, res); return res; };
 const catalog = async () => ({});
+
+test('cached durable snapshots do not download an unused timetable', async () => {
+  let references = 0;
+  const handler = createLiveHandler({ now: () => at,
+    catalog: async () => { references++; return {}; },
+    collect: archiveLiveSource({ now: () => at, fetcher: async () => new Response(JSON.stringify(fresh())) }),
+  });
+  assert.equal((await call(handler)).statusCode, 200);
+  assert.equal(references, 0);
+});
 
 test('collector starts independent sources together and rebases paths after vehicle identity arrives', async () => {
   const started = [], gate = deferred();
@@ -87,7 +98,7 @@ function timetableFixture() {
 test('published transit bundle is atomic, parsed once, and refreshes independently of deployments', async () => {
   const bytes = gzipSync(JSON.stringify({ v: 1, routes: { route: ['RET', '4', 0] }, stops: { stop: { n: 'Center', x: 1, y: 2 } }, timetable: timetableFixture().toString('base64') }));
   let calls = 0, clock = at;
-  const load = createTransitCatalog({ now: () => clock, fetcher: async () => { calls++; return new Response(bytes); } });
+  const load = createTransitCatalog({ urls: ["https://test/catalog"], now: () => clock, fetcher: async () => { calls++; return new Response(bytes); } });
   const [a, b] = await Promise.all([load(), load()]);
   assert.equal(a, b); assert.equal(calls, 1); assert.equal(a.timetable.trips[0].id, 'trip');
   assert.equal(a.routes.route[1], '4');
@@ -97,7 +108,7 @@ test('published transit bundle is atomic, parsed once, and refreshes independent
 
 test('a malformed transit catalog fails closed and may be retried', async () => {
   let calls = 0;
-  const load = createTransitCatalog({ fetcher: async () => { calls++; return new Response(gzipSync('{}')); } });
+  const load = createTransitCatalog({ urls: ["https://test/catalog"], fetcher: async () => { calls++; return new Response(gzipSync('{}')); } });
   await assert.rejects(load(), /Invalid transit catalog/);
   await assert.rejects(load(), /Invalid transit catalog/); assert.equal(calls, 2);
 });
@@ -105,7 +116,7 @@ test('a malformed transit catalog fails closed and may be retried', async () => 
 test('transit identities survive a mirror outage only while their service calendar is valid', async () => {
   const bytes = gzipSync(JSON.stringify({ v: 1, routes: {}, stops: {}, timetable: timetableFixture().toString('base64') }));
   let clock = at, fail = false, calls = 0;
-  const load = createTransitCatalog({ now: () => clock, fetcher: async () => {
+  const load = createTransitCatalog({ urls: ["https://test/catalog"], now: () => clock, fetcher: async () => {
     calls++; if (fail) throw new Error('offline'); return new Response(bytes);
   } });
   const first = await load(); fail = true; clock += 16 * 60000;

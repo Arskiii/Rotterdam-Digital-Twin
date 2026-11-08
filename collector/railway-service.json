@@ -1,0 +1,24 @@
+{
+  "builder": "RAILPACK",
+  "dockerfilePath": "collector/Dockerfile",
+  "watchPatterns": [
+    "collector/**",
+    "scripts/**",
+    "server/transit-catalog.mjs",
+    "city.config.json",
+    "collection.config.json",
+    "data/**",
+    "public/data/ndw.json",
+    "public/data/graph.bin",
+    "public/data/meta.json"
+  ],
+  "healthcheckPath": "/ready",
+  "healthcheckTimeout": 60,
+  "restartPolicyType": "ALWAYS",
+  "numReplicas": 1,
+  "overlapSeconds": 0,
+  "drainingSeconds": 30,
+  "sleepApplication": false,
+  "cronSchedule": null,
+  "region": "us-west2"
+}

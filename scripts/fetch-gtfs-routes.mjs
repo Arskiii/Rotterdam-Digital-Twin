@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { zipIndex, findEntry, readEntry, splitCsv, header } from "./lib/gtfs-zip.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "data", "gtfs-routes.json");
+const OUT = join(process.env.TRANSIT_DATA_DIR || join(ROOT, "data"), "gtfs-routes.json");
 
 function rows(text) {
   const lines = text.split("\n");

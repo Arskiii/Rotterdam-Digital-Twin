@@ -140,9 +140,10 @@ test("snapshot fetch times out and leaves base map layers available", async (t) 
   }));
   const scene = new Scene();
   const pending = installCityLayers(scene, summary);
-  controllers[0].abort();
-  await new Promise((resolve) => setImmediate(resolve));
-  controllers[1].abort();
+  for (let i = 0; i < 3; i++) {
+    controllers[i].abort();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   await pending;
   assert.ok(controllers.every((controller) => controller.signal.aborted));
   assert.ok(ui.card("Public data unavailable"));
@@ -156,11 +157,11 @@ test("published city layers and CBS figures fall back without changing their obs
   const fallback = { schemaVersion: 1, retrievedAt: iso(-86400_000), neighborhoods: [{ code: "BU05990101" }] };
   t.mock.method(globalThis, "fetch", async (url) => {
     urls.push(String(url));
-    return { ok: true, json: async () => String(url).startsWith("https://raw.") ? { schemaVersion: 99 } : fallback };
+    return { ok: true, json: async () => String(url).startsWith("https://example.org/") ? fallback : { schemaVersion: 99 } };
   });
   assert.equal(await loadPublicSnapshot(), fallback);
-  assert.equal(urls[1], "https://example.org/Rotterdam-Digital-Twin/data/rotterdam-snapshot.json");
+  assert.equal(urls[2], "https://example.org/Rotterdam-Digital-Twin/data/rotterdam-snapshot.json");
   assert.equal(await loadPublishedData("cbs-neighborhoods.json", (value) => Array.isArray(value.neighborhoods)), fallback);
-  assert.equal(urls[3], "https://example.org/Rotterdam-Digital-Twin/data/cbs-neighborhoods.json");
+  assert.equal(urls[5], "https://example.org/Rotterdam-Digital-Twin/data/cbs-neighborhoods.json");
   assert.equal(fallback.retrievedAt, iso(-86400_000));
 });

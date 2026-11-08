@@ -7,6 +7,7 @@ section so a deployment still builds; the browser marks old observations stale.
 import argparse
 import gzip
 import io
+import os
 import json
 import math
 import re
@@ -20,7 +21,7 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "public/data/rotterdam-snapshot.json"
+OUTPUT = Path(os.environ.get("PUBLIC_DATA_DIR", ROOT / "public/data")) / "rotterdam-snapshot.json"
 BOUNDS = (51.914256, 4.480512, 51.919576, 4.492979)
 ROA = "http://datex2.eu/schema/3/roadTrafficData"
 COM = "http://datex2.eu/schema/3/common"
@@ -394,6 +395,8 @@ def main():
     parser.add_argument("--cooling-file")
     parser.add_argument("--flood-file")
     parser.add_argument("--noise-file")
+    parser.add_argument("--traffic-only", action="store_true")
+    parser.add_argument("--dynamic-only", action="store_true")
     args = parser.parse_args()
     now = utc_now()
     result = json.loads(OUTPUT.read_text()) if OUTPUT.exists() else {"schemaVersion": 1}
@@ -477,15 +480,19 @@ def main():
         return {"source": RESILIENCE_URL, "retrievedAt": iso(now), **result}
 
     update("traffic", traffic)
-    update("disruptions", disruptions)
-    update("trees", trees)
-    update("water", water)
-    update("air", air)
-    update("energy", energy)
-    update("buildings", buildings)
-    update("resilience", resilience)
+    if not args.traffic_only:
+        update("disruptions", disruptions)
+        update("water", water)
+        update("air", air)
+    if not args.traffic_only and not args.dynamic_only:
+        update("trees", trees)
+        update("energy", energy)
+        update("buildings", buildings)
+        update("resilience", resilience)
     OUTPUT.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
+    temporary = OUTPUT.with_suffix(".tmp")
+    temporary.write_text(json.dumps(result, ensure_ascii=False, separators=(",", ":")) + "\n")
+    temporary.replace(OUTPUT)
 
 
 if __name__ == "__main__":

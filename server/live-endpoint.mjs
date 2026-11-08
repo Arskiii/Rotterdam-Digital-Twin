@@ -14,10 +14,14 @@ export function createLiveHandler({ collect = collectLiveSnapshot, catalog = loa
     inflight = (async () => {
       try {
         const signal = AbortSignal.timeout(6_500);
-        const transit = catalog(signal);
-        // A provider may fail before another feed starts awaiting the catalog.
-        transit.catch(() => {});
-        const snap = await collect({ signal, transit });
+        let transit;
+        // The durable snapshot needs no timetable download. Load references
+        // only if the on-demand provider fallback actually reads this option.
+        const snap = await collect({ signal, get transit() {
+          transit ??= catalog(signal);
+          transit.catch(() => {});
+          return transit;
+        } });
         // A new envelope around old environmental readings is not a live map.
         const current = [snap.vehicles, snap.traffic].some((section) => {
           const age = now() - Date.parse(section?.observedAt ?? section?.t);

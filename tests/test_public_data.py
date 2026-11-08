@@ -24,6 +24,16 @@ from scripts.check_public_data import check
 
 
 class PublicDataTests(unittest.TestCase):
+    def test_continuous_five_minute_history_retains_a_full_week(self):
+        now = datetime(2026, 11, 7, 16, 0, tzinfo=timezone.utc)
+        rows = [{"id": f"detector-{detector}", "lat": 51.915, "lon": 4.482,
+                 "observedAt": (now - timedelta(minutes=5 * slot)).isoformat(),
+                 "speedKmh": 30, "vehiclesPerHour": 100}
+                for slot in range(7 * 24 * 12) for detector in range(2)]
+        merged = merge_history([], rows, now)
+        self.assertEqual(len(merged), 4032)
+        self.assertEqual(merged[0]["observedAt"], (now - timedelta(minutes=5 * (7 * 24 * 12 - 1))).isoformat().replace("+00:00", "Z"))
+
     def test_river_series_requires_actual_recent_measurements(self):
         now = datetime(2026, 11, 7, 16, 0, tzinfo=timezone.utc)
         def series(kind, minutes, value):

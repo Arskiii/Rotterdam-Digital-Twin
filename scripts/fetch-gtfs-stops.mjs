@@ -21,7 +21,7 @@ import { zipIndex, findEntry, readEntry, splitCsv, header as headerOf } from "./
 import { CITY, ORIGIN, M_PER_LAT, M_PER_LON } from "./lib/city.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "data", "gtfs-stops.json");
+const OUT = join(process.env.TRANSIT_DATA_DIR || join(ROOT, "data"), "gtfs-stops.json");
 
 // Wider than the sim bbox on purpose: a departure board names a trip's final
 // stop, and RET metro runs well past the modelled area — line B to Hoek van

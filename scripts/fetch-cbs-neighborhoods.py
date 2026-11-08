@@ -4,6 +4,7 @@
 Requires openpyxl. The original workbook is downloaded from CBS and is not
 redistributed; the small output carries only neighborhood totals.
 """
+import os
 import json
 import math
 import re
@@ -15,7 +16,7 @@ from openpyxl import load_workbook
 
 ROOT = Path(__file__).resolve().parents[1]
 URL = 'https://download.cbs.nl/regionale-kaarten/kwb2025.xlsx'
-TARGET = ROOT / 'public' / 'data' / 'cbs-neighborhoods.json'
+TARGET = Path(os.environ.get("PUBLIC_DATA_DIR", ROOT / "public/data")) / "cbs-neighborhoods.json"
 WORKBOOK = Path(sys.argv[1]) if len(sys.argv) > 1 else Path('/tmp/kwb2025.xlsx')
 if len(sys.argv) == 1:
     request = urllib.request.Request(URL, headers={'User-Agent': 'Rotterdam-Digital-Twin/1.0 (public CBS statistics)'})
@@ -65,11 +66,13 @@ for sheet in wb:
 if len(rows) < 50:
     raise SystemExit(f'CBS parse failed: expected at least 50 Rotterdam neighbourhoods, found {len(rows)}')
 rows.sort(key=lambda row: row['code'])
-TARGET.write_text(json.dumps({
+temporary = TARGET.with_suffix(".tmp")
+temporary.write_text(json.dumps({
     'schemaVersion': 1, 'publisher': 'CBS', 'dataset': 'Kerncijfers wijken en buurten 2025',
     'datasetId': '86165NED', 'source': URL, 'retrievedAt': datetime.now(timezone.utc).isoformat(),
     'license': 'CC BY 4.0', 'geography': 'CBS BU0599 neighbourhoods, municipality Rotterdam',
     'caveat': 'Aggregated released statistics; suppressed or missing values are null; geography is not the simulation district boundary.',
     'neighborhoods': rows,
 }, ensure_ascii=False, separators=(',', ':')) + '\n')
+temporary.replace(TARGET)
 print(f'Wrote {len(rows)} Rotterdam neighbourhoods to {TARGET}')
